@@ -135,7 +135,7 @@ npm run build
 
 ### 第三步验收记录（2026-09-12）
 
-- `uv run --project server pytest -c server/pyproject.toml`：42 项通过。
+- `uv run --project server pytest -c server/pyproject.toml`：43 项通过。
 - `uv run --project server ruff check --config server/pyproject.toml server tests`：通过。
 - 真实 SQLite 已通过：确认记录与结果落盘、新进程读取一致、并发重复确认只有一份执行记录且
   发送调用为 1 次、编辑与确认竞争只出现合法结果、提交前失败整体回滚、

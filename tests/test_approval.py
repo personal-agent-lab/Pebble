@@ -8,11 +8,13 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event
 
 import pytest
+from fastapi.testclient import TestClient
 
 from server import db
 from server.approval import repository as approval_repo
 from server.approval.service import ConfirmationService, recover_interrupted_executions
 from server.db import SCHEMA_VERSION, init_db, session, write
+from server.main import app
 from server.sessions.errors import NotEditableError, NotFoundError, VersionConflictError
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import ReplyDraftStore
@@ -398,6 +400,25 @@ ConfirmationService(sender).confirm_reply(sys.argv[1], sys.argv[2], int(sys.argv
     assert recovered["result"]["status"] == "unknown"
     assert recovered["confirmation"] == interrupted["confirmation"]
     assert service.confirm_reply(task["task_id"], operation["operation_id"], 1) == recovered
+    assert sender.calls == []
+
+
+def test_startup_lifespan_recovers_interrupted_execution(stores):
+    task, operation = prepare(stores)
+    with session() as conn, write(conn):
+        conn.execute(
+            "INSERT INTO approval_executions (operation_id, task_id, version, confirmed_at) "
+            "VALUES (?, ?, 1, '2026-09-12T00:00:00+00:00')",
+            (operation["operation_id"], task["task_id"]),
+        )
+        conn.execute("UPDATE operations SET status = 'sending'")
+    sender = Sender()
+
+    with TestClient(app) as client:
+        assert client.get("/api/health").status_code == 200
+
+    execution = ConfirmationService(sender).get_execution(operation["operation_id"])
+    assert execution["status"] == "unknown"
     assert sender.calls == []
 
 
