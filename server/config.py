@@ -24,9 +24,20 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
 
+    gmail_credentials_path: Path | None = None
+    gmail_token_path: Path | None = None
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "pebble.db"
+
+    @property
+    def gmail_credentials_file(self) -> Path:
+        return self.gmail_credentials_path or (self.data_dir / "credentials.json")
+
+    @property
+    def gmail_token_file(self) -> Path:
+        return self.gmail_token_path or (self.data_dir / "gmail_token.json")
 
 
 @lru_cache
