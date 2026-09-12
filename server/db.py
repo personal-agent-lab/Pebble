@@ -1,8 +1,4 @@
-"""SQLite 连接与 schema 版本。
-
-业务表（任务、草稿、确认记录）待接口与状态含义确定后在此追加，并同步提升
-SCHEMA_VERSION；当前只提供连接纪律与版本记录。
-"""
+"""SQLite 连接、事务及 schema 初始化。"""
 
 from __future__ import annotations
 
@@ -13,7 +9,28 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 0
+SCHEMA_VERSION = 1
+
+SCHEMA_V1 = (
+    "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
+    "sdk_session_id TEXT, created_at TEXT NOT NULL)",
+    "CREATE TABLE operations (operation_id TEXT PRIMARY KEY, type TEXT NOT NULL, "
+    "created_task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "version INTEGER NOT NULL CHECK(version >= 1), "
+    "status TEXT NOT NULL CHECK(status IN ('pending','sending','sent','failed','unknown')), "
+    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    "CREATE TABLE task_operations (task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "operation_id TEXT NOT NULL REFERENCES operations(operation_id), "
+    "PRIMARY KEY(task_id, operation_id))",
+    "CREATE TABLE mail_reply_drafts (operation_id TEXT PRIMARY KEY "
+    "REFERENCES operations(operation_id), "
+    "source_message_id TEXT NOT NULL UNIQUE, thread_id TEXT NOT NULL)",
+    "CREATE TABLE mail_reply_versions (operation_id TEXT NOT NULL "
+    "REFERENCES mail_reply_drafts(operation_id), version INTEGER NOT NULL CHECK(version >= 1), "
+    "recipients TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL, "
+    "created_at TEXT NOT NULL, "
+    "PRIMARY KEY(operation_id, version))",
+)
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 
@@ -68,5 +85,12 @@ def init_db(path: Path | None = None) -> int:
         with write(conn):
             conn.execute("CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL)")
             if conn.execute("SELECT COUNT(*) AS n FROM schema_meta").fetchone()["n"] == 0:
-                conn.execute("INSERT INTO schema_meta (version) VALUES (?)", (SCHEMA_VERSION,))
+                conn.execute("INSERT INTO schema_meta (version) VALUES (0)")
+            current = schema_version(conn)
+            if current == 0:
+                for statement in SCHEMA_V1:
+                    conn.execute(statement)
+                conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
+            elif current != SCHEMA_VERSION:
+                raise RuntimeError(f"Unsupported schema version: {current}")
         return schema_version(conn)
