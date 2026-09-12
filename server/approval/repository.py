@@ -2,12 +2,12 @@
 
 import sqlite3
 
-from server.sessions.errors import NotFoundError
+from server.errors import NotFoundError
 
 VIEW_SQL = (
     "SELECT o.operation_id, o.version, o.status, e.task_id AS execution_task_id, "
     "e.version AS confirmed_version, e.confirmed_at, e.message_id, e.reason, e.completed_at, "
-    "t.sdk_session_id FROM operations o "
+    "e.started_at, t.sdk_session_id FROM operations o "
     "LEFT JOIN approval_executions e ON e.operation_id = o.operation_id "
     "LEFT JOIN tasks t ON t.task_id = e.task_id WHERE o.operation_id = ?"
 )
@@ -29,6 +29,16 @@ def insert(
         "VALUES (?, ?, ?, ?)",
         (operation_id, task_id, version, confirmed_at),
     )
+
+
+def start(conn: sqlite3.Connection, operation_id: str, started_at: str) -> bool:
+    """标记发送已开始；已开始或已结束的操作不再取得执行权。"""
+    cursor = conn.execute(
+        "UPDATE approval_executions SET started_at = ? "
+        "WHERE operation_id = ? AND started_at IS NULL AND completed_at IS NULL",
+        (started_at, operation_id),
+    )
+    return cursor.rowcount == 1
 
 
 def complete(

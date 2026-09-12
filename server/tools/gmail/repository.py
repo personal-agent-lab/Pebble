@@ -3,7 +3,7 @@
 import json
 import sqlite3
 
-from server.sessions.errors import NotFoundError
+from server.errors import NotFoundError
 
 
 def find_reply(conn: sqlite3.Connection, source_message_id: str) -> str | None:
@@ -12,6 +12,19 @@ def find_reply(conn: sqlite3.Connection, source_message_id: str) -> str | None:
         (source_message_id,),
     ).fetchone()
     return row["operation_id"] if row else None
+
+
+def find_task_link(conn: sqlite3.Connection, source_message_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT task_id FROM mail_task_links WHERE source_message_id = ?", (source_message_id,)
+    ).fetchone()
+    return row["task_id"] if row else None
+
+
+def insert_task_link(
+    conn: sqlite3.Connection, source_message_id: str, task_id: str, now: str
+) -> None:
+    conn.execute("INSERT INTO mail_task_links VALUES (?, ?, ?)", (source_message_id, task_id, now))
 
 
 def insert_draft(conn: sqlite3.Connection, operation_id: str, source: str, thread: str) -> None:

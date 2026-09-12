@@ -35,7 +35,7 @@ flowchart TD
 | 组件 | 职责 | 位置 |
 | --- | --- | --- |
 | Web Chat | PC 与手机共用响应式界面，提供对话、进度、来源查看、草稿编辑、明确确认，以及规则和 Skill 审阅 | `web/`（TypeScript + React + Vite） |
-| Gateway | HTTP、SSE、认证；接收用户与后台输入，定位会话，启动 Agent 并返回结果 | `server/api/`（FastAPI） |
+| Gateway | HTTP、SSE、认证；接收用户与后台输入，定位会话，启动 Agent 并返回结果 | `server/api/`（HTTP/SSE）、`server/gateway/`（后台运行） |
 | Agent Loop | 通过 Qoder Agent SDK 调用模型和工具，加载 Memory 与已生效 Skills，按目标决定下一步 | `server/agent/` |
 | Memory | 保存用户偏好、纠正及持久规则，供后续会话使用 | `server/memory/` |
 | Skills | 保存可复用流程，管理草稿、审核、生效版本及 Git 历史 | `server/skills/` |
@@ -58,10 +58,13 @@ Pebble/
 │   ├── db.py                 # SQLite 连接、约束与迁移
 │   ├── background.py         # 定时检查与后台调度，不处理邮件协议
 │   ├── pyproject.toml
-│   ├── api/                  # Gateway
-│   │   ├── chat.py           # 对话提交与 SSE 进度
-│   │   ├── sessions.py       # 会话与任务状态查询
-│   │   └── approvals.py      # 预览编辑、确认与结果查询
+│   ├── api/                  # HTTP/SSE 传输层
+│   │   ├── routes.py         # 请求结构、服务依赖与路由：健康检查、任务、对话、确认
+│   │   └── errors.py         # 业务异常到 HTTP 响应的映射
+│   ├── gateway/              # 应用后台运行，不依赖 HTTP 请求生命周期
+│   │   ├── runtime.py        # 输入登记、调用调度、事件订阅、恢复与结果交回
+│   │   └── agent_contract.py # A/B 调用接口与事件类型
+│   ├── errors.py             # 跨模块共享的业务异常
 │   ├── agent/                # 不实现自有循环，只装配 SDK
 │   │   ├── sdk_client.py     # QoderSDKClient 装配、按 ID 恢复会话、消息流转
 │   │   ├── context.py        # 每轮加载 Memory 规则与已生效 Skills
@@ -79,7 +82,8 @@ Pebble/
 │   │       └── service.py    # 索引与文件存储
 │   ├── sessions/             # Session Store
 │   │   ├── service.py        # 会话关联、运行状态、预览与逐项结果
-│   │   └── repository.py     # SQLite 存取与唯一约束
+│   │   ├── repository.py     # 任务与操作 SQL
+│   │   └── runs.py           # 后台调用记录 SQL
 │   ├── approval/             # Confirmation
 │   │   ├── service.py        # 确认执行：版本校验、取得执行权、发送与结果保存
 │   │   └── repository.py     # 确认记录与执行结果 SQL
@@ -91,13 +95,17 @@ Pebble/
 │   └── models/
 │       ├── session.py        # 任务与 SDK 会话 ID 关联、目标与运行状态
 │       └── approval.py       # 待确认内容、版本、确认记录与执行结果
-├── tests/                    # 按功能放测试，覆盖 PC 与手机端端到端验证
+├── tests/                    # 共享 fixture 位于根目录
+│   ├── api/                  # 健康检查、真实 HTTP/SSE 与进程重启
+│   ├── gateway/              # 后台调用、事件与结果回传
+│   ├── storage/              # SQLite、任务草稿与确认执行
+│   └── support/              # Agent 替身和可启动测试后端
 └── docs/
     ├── v1-spec.md
     └── v1-design.md
 ```
 
-这是起始结构，按实际代码规模合并或拆分文件。Idempotency 不设独立子系统，由 `approval/`、`sessions/` 和具体工具的唯一约束与状态检查共同实现；Git 版本操作由 `memory/`、`skills/` 内的小函数承担。
+这是起始结构，按实际代码规模合并或拆分文件。每个源码目录控制在 4–5 个文件以内（含 `__init__.py`），按职责组织，不为凑数增加转发层。当前 HTTP 路由集中在 `api/routes.py`；后台调用与事件订阅归属 `gateway/`，使后台入口无需依赖 HTTP 模块。Idempotency 不设独立子系统，由 `approval/`、`sessions/` 和具体工具的唯一约束与状态检查共同实现；Git 版本操作由 `memory/`、`skills/` 内的小函数承担。
 
 直接接入 Qoder Agent SDK 带来的取舍：
 
@@ -152,11 +160,11 @@ Gmail、Calendar、Personal KB 都通过相同入口注册，没有专属于某�
 
 程序通过数据库原子状态更新取得执行权，随后在事务外调用工具。重复确认返回已有状态，不能重复调用。确认和执行不依赖浏览器连接保持打开。SDK 工具权限不代替业务确认；等待用户时返回已保存的待确认状态，不让权限回调一直等待浏览器端响应。执行结果保存后作为输入交回对应 Agent 会话。
 
-邮件回复的确认执行在 `approval/` 中实现，记录保存在 `approval_executions`（schema 2）：操作标识为主键，记录首次成功确认的任务（结果回传目标）、确认版本、确认时间及结果字段；操作状态仍用 `operations.status`，不复制一套状态。一次确认按以下顺序处理：
+邮件回复的确认执行在 `approval/` 中实现，记录保存在 `approval_executions`（schema 2 建立，schema 3 增加发送开始时间）：操作标识为主键，记录首次成功确认的任务（结果回传目标）、确认版本、确认时间及结果字段；操作状态仍用 `operations.status`，不复制一套状态。一次确认按以下顺序处理：
 
 1. 写事务内检查任务与操作存在、确认版本等于当前版本；已有执行记录时直接返回已有状态，不再次发送。
-2. 首次确认要求操作处于 `pending`：同一事务写入确认记录并将状态置为 `sending`，读取确认版本内容后提交。
-3. 在事务外调用发送函数，参数取自确认版本；确认输入不含正文，不重新生成或修改内容。
+2. 首次确认要求操作处于 `pending`：同一事务写入确认记录并将状态置为 `sending`，随后返回已接受状态。
+3. 后台在写事务内标记发送开始并读取确认版本；提交后调用发送函数。重复调度不能再次取得执行权，确认输入不含正文。
 4. 新事务保存实际结果并更新状态：明确成功记 `sent` 与邮件 ID；明确失败记 `failed` 与原因；超时、异常或返回不符契约记 `unknown`，不推断未发送，不自动重试。
 5. 结果保存失败时向调用方报错，已有执行记录仍阻止重发；进程中断遗留的 `sending` 在服务启动时由 `recover_interrupted_executions()` 置为 `unknown`，该恢复不放进 `init_db`，避免普通初始化影响正在执行的调用。
 
@@ -202,7 +210,7 @@ SQLite、会话和资料文件使用实例持久目录。日志关联会话和�
 
 ## 7. 交付阶段
 
-按 `v1-spec.md` 第 5 节的验收场景逐步交付完整链路。本节状态随实施更新；阶段 2 进行中：草稿版本、确认执行与结果保存已实现，Web、Gateway、SDK 与 Gmail 接入未完成。
+按 `v1-spec.md` 第 5 节的验收场景逐步交付完整链路。本节状态随实施更新；阶段 2 进行中：草稿版本、确认执行与结果保存已实现，Gateway 已接通，Web、SDK 与 Gmail 接入未完成。
 
 | 阶段 | 交付物 | 通过条件 |
 | --- | --- | --- |
@@ -278,7 +286,7 @@ git 提交遵循 `AGENTS.md` 的约定：当前分支、英文 `[Module] Descrip
 | --- | --- | --- |
 | A1 | 适配 PC 与手机的最小聊天页面：提交消息，SSE 展示进度 | A |
 | A2 | 草稿编辑与确认界面：展示完整关键内容，提供编辑字段与明确确认 | A |
-| A3 | Gateway 基础：对话提交、SSE、认证（`api/chat.py`） | A |
+| A3 | Gateway 基础：对话提交、SSE、认证（`api/routes.py`） | A |
 | A4 | 会话与操作状态持久化：任务、预览版本、确认记录及唯一约束 | A |
 | A5 | Confirmation：版本校验、原子状态更新取得执行权、调用执行并保存结果 | A |
 | A6 | PC 与手机端进度与逐项结果读取：页面刷新后恢复待确认内容 | A |
@@ -343,3 +351,24 @@ B 线（资料与能力成长）：
 ### 10.6 分工调整
 
 邮件协议、日历接入、资料解析与 SDK 边界的实际难度待阶段 1 验证后评估；调整时优先移动完整功能块（页面、接口、验证一起移交），不分走零散文件，避免责任重新变得模糊。
+
+### Gateway 当前实现
+
+新邮件由 B 的检测程序交给 `gateway/runtime.py` 的内部入口，邮件去重关联保存在
+`mail_task_links`，由邮件 repository 读写。创建任务、邮件关联及首轮调用在同一写事务完成。
+新邮件输入只携带邮件标识，摘要、建议及后续工具选择由 B 决定，不固化为邮件处理流水线。
+
+`gateway/runtime.py` 使用 FastAPI lifespan 所在事件循环管理异步任务，保留任务引用；每个任务
+按 `agent_runs` 的插入顺序启动就绪输入，不同任务独立执行。尚无会话的结果回传等待会话建立。
+HTTP/SSE 断开不取消工作。同步发送通过 `asyncio.to_thread`，正常关闭等待发送落盘，
+取消仍在运行的 Agent 调用；下次启动将运行中调用记为 interrupted，不自动重放。
+待处理输入继续运行；已有确认但进程遗留未完成的发送仍按既有规则记 unknown，不自动发送。
+
+schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`。
+接受确认与后台开始发送分别原子处理，发送开始标记防止重复调用；保存发送结果和登记一次
+回传共用事务。Confirmation 依赖 sessions 的调用记录存取，不依赖 SDK 或 api 实现。
+Agent 历史由 B 的 read_history 返回；A 不保存另一份模型对话历史。
+
+未接入 Agent、校验或发送依赖时，相关新工作在写入前拒绝。只读任务、草稿及执行查询仍可用。
+生产默认装配不使用替身；测试替身和可启动验收应用均位于 tests。认证部署不属于本地后端
+验收的交付范围；当前服务仅按本机测试使用，正式 Web 接入仍须完成既定身份和来源检查。

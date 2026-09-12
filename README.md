@@ -3,10 +3,10 @@
 持续运行的个人 Agent。一个常驻 Python 服务，由单个 Agent 按用户目标组合工具（Gmail、iCloud Calendar、个人资料库）完成真实事务，
 程序负责保证确认、持久化与去重。单用户单实例部署，PC 和手机浏览器都能发起任务、编辑草稿和确认操作；任务不依赖浏览器页面保持开启。
 
-当前状态：任务、会话关联、共享操作、邮件草稿版本及确认执行结果已持久化，SQLite schema 为 2。
-确认发送的完整后端流程（版本校验、取得执行权、调用发送函数、保存结果、启动恢复）已实现，
-发送函数由 B 提供并以参数注入，生产代码尚无真实实现。后端仍只开放健康检查 HTTP 接口，
-草稿与确认通过 Python 服务接口操作；SDK 与 Gmail 真实发送尚未接入。
+当前状态：任务、草稿版本、确认执行与 Gateway 后端已实现，SQLite schema 为 3。
+支持新邮件内部入口、任务及历史查询、消息提交、SSE、草稿编辑、确认与结果查询。
+Agent、邮件校验和发送通过显式参数接入；真实 SDK/Gmail 尚未接入，相关写请求返回 503，
+不会默认装配测试替身。网页仍为健康检查页面，尚无聊天和确认界面。
 
 ## 文档
 
@@ -15,7 +15,8 @@
 - `docs/v1-mail-flow-contract.md`：第一条邮件链的接口约定，未定稿。
 
 设计文档第 2 节的组件表是目标结构，`server/sessions/`、`server/tools/gmail/` 与 `server/approval/`
-已实现本地存储；`server/agent/`、`server/memory/` 等目录尚未创建。
+已实现本地存储；HTTP 接口位于 `server/api/`，A 的调用管理位于 `server/gateway/`，调用记录位于 `server/sessions/`，
+`server/agent/` 保留给 B 的 SDK 装配，当前不含实现文件。
 
 ## 前置依赖
 
@@ -128,7 +129,7 @@ npm run build
 - `uv run --project server ruff check --config server/pyproject.toml server tests`：通过。
 - 真实 SQLite：跨进程恢复、并发编辑与准备、历史版本、跨任务关联、失败回滚、
   不可编辑状态、schema 0 到 1 原子升级和重复初始化均已验证。
-- `tests/test_store.py::test_cross_process`：写入进程退出后，新进程打开同一数据库，
+- `tests/storage/test_store.py::test_cross_process`：写入进程退出后，新进程打开同一数据库，
   比较完整任务、会话关联、草稿及操作列表；测试只写临时目录。
 - B 校验接口：仅测试替身验证通过，包括拒绝保存及防止校验器改写收件人。
   真实邮件规则、SDK 会话恢复、网页和确认发送不属于此次通过范围。
@@ -148,3 +149,68 @@ npm run build
   以及 `recover_interrupted_executions` 在服务启动流程中先于请求执行。
 - 待联合验证：真实 Gmail 发送（B 的发送函数）与 Agent 结果回传（SDK 会话接入后读取
   `get_agent_result`），网页确认入口不在本次范围。
+
+## Gateway 后端验收（2026-09-12）
+
+A 的 `server/gateway/runtime.py` 管理应用生命周期内的异步任务和事件订阅，API 将事件编码为 SSE，
+同目录的 `agent_contract.py` 定义 B 的调用接口；`server/sessions/runs.py` 保存调用记录。
+没有独立工作线程、额外事件循环或自建 Agent 循环。同步发送使用线程池。
+`tests/support/agent_double.py` 和 `tests/support/backend_fixture.py` 仅用于测试，不进入默认应用装配。
+
+本次检查：67 项 pytest 通过，Ruff 检查通过；保留一条上游 Starlette 弃用提示。
+
+运行完整后端链路验收：
+
+```bash
+uv run --project server pytest -c server/pyproject.toml tests/api/test_http_flow.py -v
+uv run --project server pytest -c server/pyproject.toml
+uv run --project server ruff check --config server/pyproject.toml server tests
+```
+
+`tests/api/test_http_flow.py` 启动独立 Uvicorn 进程并访问真实 HTTP/SSE：自动新邮件摘要、用户要求
+准备草稿、多轮修改、旧版本拒绝、最终确认、参数逐字段比较、重复确认、结果回传及进程重启。
+SSE 收到事件后主动断开，后端仍完成工作。数据库与发送参数日志均保存在独立临时目录。
+其他测试覆盖并发、回滚、三类发送结果、异常格式、中断恢复和回传失败。
+
+真实 SQLite、HTTP/SSE 与后端业务服务属于真实验收；摘要、草稿生成、校验及 Gmail 发送
+使用替身。历史对话由 B 接口读取，当前替身仅存内存，不能据此宣称真实 SDK 历史跨进程恢复通过。
+网页操作、真实邮箱投递与真实 Agent 判断仍待接入。
+
+供 B 装配的入口为 `create_app(gateway=..., validate_reply_draft=..., send_reply=...)`。
+后台邮件检测在应用事件循环中调用 `app.state.agent.accept_new_mail(source_message_id, thread_id)`；
+每封新邮件一个任务，同一邮件重复检测不重复启动，同线程不同邮件创建不同任务。
+
+可手动启动测试后端（仅绑定本机；不会真实发送邮件）：
+
+```bash
+export PEBBLE_DATA_DIR="$(mktemp -d)"
+uv run --project server uvicorn tests.support.backend_fixture:app --host 127.0.0.1 --port 8001
+```
+
+访问 `http://127.0.0.1:8001/docs`，先读取 `/api/tasks` 得到自动生成的任务；提交消息、读取操作、
+编辑草稿并确认后，查看执行结果及 history。发送替身实际收到的参数保存在上述临时目录的
+`sent.jsonl`，重复确认不增加行数。此入口仅用于人工验收，不是生产启动方式。
+
+## 带终端日志的七步邮件演示
+
+从仓库根运行：
+
+```bash
+uv run --project server python -m tests.mail_acceptance
+```
+
+按业务流程自动跑一遍：收到新邮件 → Agent 摘要和建议 → 用户要求准备回信 →
+生成并保存草稿 → 自动补齐修改意见和直接编辑 → 模拟点击确认发送 → 展示执行结果及 Agent 后续回复。
+所有输入自动补齐，无需终端交互；B 使用固定邮件、建议、草稿及发送替身，不调用真实 Gmail。
+A 使用真实 HTTP、SQLite、任务会话、版本和确认执行服务，终端代替网页展示输出。
+
+脚本不调用 pytest，不包含断言，不输出 PASS，也不额外跑异常或重启场景。
+终端按七步输出时间、输入、任务/操作 ID、完整草稿及版本、确认响应、发送参数和最终会话。
+开头打印资料目录，其中保留 `pebble.db`、`sent.jsonl` 和 `backend.log`。
+脚本自动启动并关闭本机测试后端；网络或执行错误会打印中断原因并返回非零退出码。
+
+原有自动化断言仍保留在测试套件中，独立运行：
+
+```bash
+uv run --project server pytest -c server/pyproject.toml
+```

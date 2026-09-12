@@ -1,4 +1,8 @@
-"""内部服务错误；HTTP 映射由 Gateway 负责。"""
+"""跨模块共享的业务异常；HTTP 映射留在 api。"""
+
+
+class DependencyUnavailableError(Exception):
+    """所需外部能力尚未接入，工作未被接受。"""
 
 
 class NotFoundError(Exception):

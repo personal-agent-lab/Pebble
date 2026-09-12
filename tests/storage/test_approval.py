@@ -14,8 +14,8 @@ from server import db
 from server.approval import repository as approval_repo
 from server.approval.service import ConfirmationService, recover_interrupted_executions
 from server.db import SCHEMA_VERSION, init_db, session, write
+from server.errors import NotEditableError, NotFoundError, VersionConflictError
 from server.main import app
-from server.sessions.errors import NotEditableError, NotFoundError, VersionConflictError
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import ReplyDraftStore
 

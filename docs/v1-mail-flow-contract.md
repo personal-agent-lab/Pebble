@@ -59,6 +59,15 @@
 
 ## 3. 用户消息与 Agent 事件
 
+### 新邮件输入
+
+输入：`task_id: string`、`sdk_session_id: string | null`、`source_message_id: string`、
+`thread_id: string`。邮件标识用于定位待分析的新邮件；输出为下述 Agent 事件。
+每封新邮件对应一个任务，同一邮件的重复通知对应原任务；同线程的不同邮件对应不同任务。
+用户选择准备回复属于普通消息，不代表确认发送。
+
+### 用户消息输入
+
 消息输入：
 
 | 字段 | 类型 | 含义 |
@@ -255,3 +264,29 @@ Agent 的 `done` / `error` 描述后续会话结果，不改写 `result` 中的�
 | `DraftValidationError` | `errors: object[]` | 邮件校验失败，元素为第 5 节的字段与原因 |
 
 未返回成功结果不表示草稿已保存或邮件未发送；邮件实际结果以第 6 节结果字段为准。
+
+## 9. 后台调用与历史字段
+
+用户消息被接受后的输出为调用记录；任务详情增加 `latest_run`，尚无调用时为 null。
+调用状态与回复操作状态分别表达，不相互替代。
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `run_id` | string | 一轮 Agent 输入的调用标识 |
+| `task_id` | string | 所属任务 |
+| `kind` | string | `new_mail`、`message` 或 `execution_result` |
+| `status` | string | `pending`、`running`、`done`、`error` 或 `interrupted` |
+| `error` | string 或 null | 调用失败或中断原因 |
+| `created_at` | string | 接受时间 |
+| `started_at` | string 或 null | 开始时间 |
+| `finished_at` | string 或 null | 结束或识别为中断的时间 |
+
+`pending` 表示尚未开始，`running` 表示正在调用，`interrupted` 表示调用中断且无法确认完整结束。
+发给网页的 Agent 事件增加 `run_id`，表示事件所属调用。重复确认不产生新的发送或结果回传。
+
+历史读取输入：`task_id`、`sdk_session_id`（可空）；输出为按顺序排列的消息数组。
+每条消息含 `role: string`（`user` 或 `assistant`）、`text: string`。
+网页历史响应含 `task_id`、`sdk_session_id`、`messages`；尚无会话时 `messages` 为空数组。
+
+依赖未接入错误为 `unavailable`，附 `message: string`，表示相关工作未被接受，
+不属于邮件的 failed 或 unknown 结果。

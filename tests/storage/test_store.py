@@ -10,7 +10,7 @@ from threading import Barrier
 import pytest
 
 from server.db import SCHEMA_VERSION, init_db, session, write
-from server.sessions.errors import (
+from server.errors import (
     NotEditableError,
     NotFoundError,
     SessionConflictError,

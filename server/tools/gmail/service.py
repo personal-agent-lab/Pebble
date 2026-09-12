@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Protocol, TypedDict
 
 from server.db import session, write
+from server.errors import DependencyUnavailableError
 from server.sessions import repository as operations
 from server.sessions.service import check_editable, create_operation, next_version, timestamp
 from server.tools.gmail import repository as repo
@@ -36,12 +37,14 @@ def summary(operation: dict) -> dict:
 
 
 class ReplyDraftStore:
-    def __init__(self, validate_reply_draft: ReplyValidator, path: Path | None = None):
+    def __init__(self, validate_reply_draft: ReplyValidator | None, path: Path | None = None):
         self.validate = validate_reply_draft
         self.path = path
 
     def _validate(self, source: str, thread: str, to: list[str], subject: str, body: str) -> None:
         # 独立列表避免业务校验意外修改待保存的收件人。
+        if self.validate is None:
+            raise DependencyUnavailableError("邮件校验尚未接入")
         result = self.validate(
             source_message_id=source, thread_id=thread, to=list(to), subject=subject, body=body
         )

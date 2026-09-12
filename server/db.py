@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -42,7 +42,26 @@ SCHEMA_V2 = (
     "CHECK ((completed_at IS NULL) = (message_id IS NULL AND reason IS NULL)))",
 )
 
-SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {1: SCHEMA_V1, 2: SCHEMA_V2}
+# 后台调用记录：每次 Agent 输入（新邮件、用户消息、执行结果回传）一条，保存类别、
+# 必要输入与运行状态，供查询和重启识别。执行结果回传按操作标识唯一，重复确认不新增回传。
+SCHEMA_V3 = (
+    "CREATE TABLE agent_runs (run_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "kind TEXT NOT NULL CHECK(kind IN ('new_mail','message','execution_result')), "
+    "reference_id TEXT, input TEXT NOT NULL, "
+    "status TEXT NOT NULL CHECK(status IN ('pending','running','done','error','interrupted')), "
+    "error TEXT, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, "
+    "CHECK ((finished_at IS NULL) = (status IN ('pending','running'))), "
+    "CHECK (error IS NULL OR status IN ('error','interrupted')))",
+    "CREATE UNIQUE INDEX agent_runs_delivery ON agent_runs(reference_id) "
+    "WHERE kind = 'execution_result'",
+    "CREATE TABLE mail_task_links (source_message_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), created_at TEXT NOT NULL)",
+    # 已接受确认的发送由后台执行；started_at 标记执行已开始，重复调度不再发送。
+    "ALTER TABLE approval_executions ADD COLUMN started_at TEXT",
+)
+
+SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {1: SCHEMA_V1, 2: SCHEMA_V2, 3: SCHEMA_V3}
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 

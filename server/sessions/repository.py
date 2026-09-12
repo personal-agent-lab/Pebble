@@ -2,7 +2,7 @@
 
 import sqlite3
 
-from server.sessions.errors import NotFoundError
+from server.errors import NotFoundError
 
 
 def task(conn: sqlite3.Connection, task_id: str) -> dict:
