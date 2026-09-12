@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -31,6 +31,18 @@ SCHEMA_V1 = (
     "created_at TEXT NOT NULL, "
     "PRIMARY KEY(operation_id, version))",
 )
+
+# 确认执行记录：主键即操作标识，同一操作至多一份。结果字段只在执行结束时一起写入，
+# 执行中 completed_at 为空；操作状态仍保存在 operations.status。
+SCHEMA_V2 = (
+    "CREATE TABLE approval_executions (operation_id TEXT PRIMARY KEY "
+    "REFERENCES operations(operation_id), task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "version INTEGER NOT NULL CHECK(version >= 1), confirmed_at TEXT NOT NULL, "
+    "message_id TEXT, reason TEXT, completed_at TEXT, "
+    "CHECK ((completed_at IS NULL) = (message_id IS NULL AND reason IS NULL)))",
+)
+
+SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {1: SCHEMA_V1, 2: SCHEMA_V2}
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 
@@ -78,7 +90,11 @@ def schema_version(conn: sqlite3.Connection) -> int:
 
 
 def init_db(path: Path | None = None) -> int:
-    """建立实例持久目录、启用 WAL 并记录 schema 版本，返回当前版本。"""
+    """建立实例持久目录、启用 WAL，按版本补建缺失的表并记录 schema 版本，返回当前版本。
+
+    升级语句与版本号在同一写事务内提交：中途失败时现有数据与版本号都不变。
+    已经是当前版本时不执行任何语句，业务记录不受重复初始化影响。
+    """
     target = path or get_settings().db_path
     target.parent.mkdir(parents=True, exist_ok=True)
     with session(target) as conn:
@@ -87,10 +103,11 @@ def init_db(path: Path | None = None) -> int:
             if conn.execute("SELECT COUNT(*) AS n FROM schema_meta").fetchone()["n"] == 0:
                 conn.execute("INSERT INTO schema_meta (version) VALUES (0)")
             current = schema_version(conn)
-            if current == 0:
-                for statement in SCHEMA_V1:
-                    conn.execute(statement)
-                conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
-            elif current != SCHEMA_VERSION:
+            if current > SCHEMA_VERSION:
                 raise RuntimeError(f"Unsupported schema version: {current}")
+            for version in range(current + 1, SCHEMA_VERSION + 1):
+                for statement in SCHEMA_MIGRATIONS[version]:
+                    conn.execute(statement)
+            if current != SCHEMA_VERSION:
+                conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
         return schema_version(conn)

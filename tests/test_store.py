@@ -9,7 +9,7 @@ from threading import Barrier
 
 import pytest
 
-from server.db import init_db, session, write
+from server.db import SCHEMA_VERSION, init_db, session, write
 from server.sessions.errors import (
     NotEditableError,
     NotFoundError,
@@ -209,7 +209,7 @@ def test_recheck_status_after_validation(stores):
 def test_initialization_and_constraints(stores):
     task, op = prepare(stores)
     for _ in range(2):
-        assert init_db() == 1
+        assert init_db() == SCHEMA_VERSION
     assert stores[1].get_reply_draft(op["operation_id"])["body"] == CONTENT["body"]
     with session() as conn:
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -273,7 +273,7 @@ def test_upgrade_zero_atomic(settings, monkeypatch):
         conn.execute("CREATE TABLE schema_meta (version INTEGER NOT NULL)")
         conn.execute("INSERT INTO schema_meta VALUES (0)")
     statements = db.SCHEMA_V1
-    monkeypatch.setattr(db, "SCHEMA_V1", (*statements, "INVALID SQL"))
+    monkeypatch.setitem(db.SCHEMA_MIGRATIONS, 1, (*statements, "INVALID SQL"))
     with pytest.raises(sqlite3.OperationalError):
         init_db()
     with session() as conn:
@@ -281,8 +281,8 @@ def test_upgrade_zero_atomic(settings, monkeypatch):
         assert (
             conn.execute("SELECT name FROM sqlite_master WHERE name = 'tasks'").fetchone() is None
         )
-    monkeypatch.setattr(db, "SCHEMA_V1", statements)
-    assert init_db() == 1
+    monkeypatch.setitem(db.SCHEMA_MIGRATIONS, 1, statements)
+    assert init_db() == SCHEMA_VERSION
 
 
 def test_validator_cannot_rewrite_recipients(stores):

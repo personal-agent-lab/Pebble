@@ -3,9 +3,10 @@
 持续运行的个人 Agent。一个常驻 Python 服务，由单个 Agent 按用户目标组合工具（Gmail、iCloud Calendar、个人资料库）完成真实事务，
 程序负责保证确认、持久化与去重。单用户单实例部署，PC 和手机浏览器都能发起任务、编辑草稿和确认操作；任务不依赖浏览器页面保持开启。
 
-当前状态：任务、会话关联、共享操作及邮件草稿版本持久化已实现，SQLite schema 为 1。
-后端仍只开放健康检查 HTTP 接口，前端显示连通状态；草稿目前通过 Python 服务接口操作。
-确认发送、SDK 和 Gmail 真实业务校验尚未接入。
+当前状态：任务、会话关联、共享操作、邮件草稿版本及确认执行结果已持久化，SQLite schema 为 2。
+确认发送的完整后端流程（版本校验、取得执行权、调用发送函数、保存结果、启动恢复）已实现，
+发送函数由 B 提供并以参数注入，生产代码尚无真实实现。后端仍只开放健康检查 HTTP 接口，
+草稿与确认通过 Python 服务接口操作；SDK 与 Gmail 真实发送尚未接入。
 
 ## 文档
 
@@ -13,8 +14,8 @@
 - `docs/v1-design.md`：组件划分、交付阶段、验证要求、协作分工。
 - `docs/v1-mail-flow-contract.md`：第一条邮件链的接口约定，未定稿。
 
-设计文档第 2 节的组件表是目标结构，`server/sessions/` 和 `server/tools/gmail/` 已实现本地存储；
-`server/agent/`、`server/approval/`、`server/memory/` 等目录尚未创建。
+设计文档第 2 节的组件表是目标结构，`server/sessions/`、`server/tools/gmail/` 与 `server/approval/`
+已实现本地存储；`server/agent/`、`server/memory/` 等目录尚未创建。
 
 ## 前置依赖
 
@@ -96,17 +97,30 @@ npm run typecheck
 npm run build
 ```
 
-## 本地任务与草稿服务
+## 本地任务、草稿与确认发送服务
 
-初始化数据库后使用 `server.sessions.service.SessionStore` 和
-`server.tools.gmail.service.ReplyDraftStore`。两者默认使用实例数据库，也可显式传入
-`path=Path(...)`。`ReplyDraftStore` 必须传入 B 的同步 `validate_reply_draft` 函数；
-生产代码没有默认放行校验器。输入输出字段及错误含义见
+初始化数据库后使用 `server.sessions.service.SessionStore`、
+`server.tools.gmail.service.ReplyDraftStore` 和 `server.approval.service.ConfirmationService`。
+三者默认使用实例数据库，也可显式传入 `path=Path(...)`。`ReplyDraftStore` 必须传入 B 的同步
+`validate_reply_draft` 函数，`ConfirmationService` 必须传入 B 的同步发送函数；生产代码没有
+默认放行校验器或默认成功的发送函数。输入输出字段及错误含义见
 [邮件接口字段契约](docs/v1-mail-flow-contract.md)。
 
 任务保存用户目标与 SDK 会话关联；操作管理版本与状态；邮件字段和原邮件去重留在邮件能力内。
 跨任务复用同一操作后，各任务看到相同的最新草稿与状态，SDK 会话仍独立。
-本阶段没有发送入口，也不提供任意改状态的方法。
+
+### 确认发送
+
+- `confirm_reply(task_id, operation_id, version)`：检查版本、取得执行权、调用发送函数并保存结果；
+  重复确认返回已有状态，不再次发送。
+- `get_execution(operation_id)`：操作当前状态、确认信息及已保存结果。
+- `get_agent_result(operation_id)`：契约第 7 节的回传数据；尚无结果或回传任务未关联会话时返回 `None`。
+- `recover_interrupted_executions()`：把上次进程遗留的 `sending` 置为 `unknown`；`server/main.py`
+  在 `init_db()` 之后、接受请求之前调用，数据库初始化本身不执行该恢复。
+
+发送函数输入输出见契约第 6 节；异常、中断及不符契约的返回都记 `unknown`，不自动重试，
+`unknown` 结果不会阻止后续核实，但重复确认不会重新发送。结果核实由 B 后续接入，
+本步骤不提供重发入口，也不提供任意修改操作状态的接口。
 
 ### 第二步验收记录（2026-09-10）
 
@@ -118,3 +132,19 @@ npm run build
   比较完整任务、会话关联、草稿及操作列表；测试只写临时目录。
 - B 校验接口：仅测试替身验证通过，包括拒绝保存及防止校验器改写收件人。
   真实邮件规则、SDK 会话恢复、网页和确认发送不属于此次通过范围。
+
+### 第三步验收记录（2026-09-12）
+
+- `uv run --project server pytest -c server/pyproject.toml`：42 项通过。
+- `uv run --project server ruff check --config server/pyproject.toml server tests`：通过。
+- 真实 SQLite 已通过：确认记录与结果落盘、新进程读取一致、并发重复确认只有一份执行记录且
+  发送调用为 1 次、编辑与确认竞争只出现合法结果、提交前失败整体回滚、
+  schema 1 到 2 升级与重复初始化保留任务、草稿和历史版本、执行记录唯一约束有效。
+- 发送替身已通过：多轮修改后只发送最终确认版本且中文、空白、换行与收件人顺序逐字段一致；
+  确认旧版本返回版本冲突且零调用；`sent`、`failed`、`unknown` 三类结果正确保存并阻止重复确认；
+  调用异常与不符契约返回记待核实；发送后结果保存失败向调用方报错并阻止重发；
+  执行中进程退出后重启置为待核实且不再次调用发送函数；共享操作的回传任务取首次确认任务。
+- 真实 SQLite 与发送替身共同验证了 `get_agent_result` 在会话未关联时返回 `None`、关联后可读取，
+  以及 `recover_interrupted_executions` 在服务启动流程中先于请求执行。
+- 待联合验证：真实 Gmail 发送（B 的发送函数）与 Agent 结果回传（SDK 会话接入后读取
+  `get_agent_result`），网页确认入口不在本次范围。

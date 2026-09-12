@@ -58,6 +58,13 @@ def advance_version(conn: sqlite3.Connection, operation_id: str, version: int, n
     )
 
 
+def update_status(conn: sqlite3.Connection, operation_id: str, status: str, now: str) -> None:
+    conn.execute(
+        "UPDATE operations SET status = ?, updated_at = ? WHERE operation_id = ?",
+        (status, now, operation_id),
+    )
+
+
 def task_operations(conn: sqlite3.Connection, task_id: str) -> list[dict]:
     return [
         dict(row)
