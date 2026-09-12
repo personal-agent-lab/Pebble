@@ -1,15 +1,20 @@
 """Gmail 协议客户端与认证封装。
 
 提供真实 Google API 客户端实现与用于无凭证/测试环境的模拟桩客户端实现。
+支持多层嵌套 MIME 报文解析、RFC 2047 Header 自动解码、HTML 降级清洗与线程按时间排序。
 """
 
 from __future__ import annotations
 
 import base64
+import html
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
+from email.header import decode_header, make_header
 from email.message import EmailMessage
+from email.utils import getaddresses
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -30,6 +35,8 @@ GMAIL_SCOPES: list[str] = [
 
 @dataclass(frozen=True)
 class GmailMessage:
+    """结构化的 Gmail 邮件对象，保持对未来字段（如抄送、HTML正文、标签、时间戳）的可扩展性。"""
+
     id: str
     thread_id: str
     rfc_message_id: str
@@ -39,6 +46,10 @@ class GmailMessage:
     snippet: str
     body_text: str
     date: str
+    cc_addrs: list[str] = field(default_factory=list)
+    body_html: str = ""
+    internal_date_ms: int = 0
+    labels: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -55,7 +66,7 @@ class BaseGmailClient(Protocol):
         ...
 
     def get_thread(self, thread_id: str) -> list[GmailMessage]:
-        """获取指定线程内的全部往来邮件，按时间排序。"""
+        """获取指定线程内的全部往来邮件，按时间正序排序。"""
         ...
 
     def search_messages(self, query: str, max_results: int = 10) -> list[dict[str, str]]:
@@ -76,6 +87,102 @@ class BaseGmailClient(Protocol):
     def verify_message_sent(self, thread_id: str, subject_keyword: str) -> bool:
         """检查特定线程中是否已存在已发送的匹配邮件，用于超时状态核实。"""
         ...
+
+
+class MimeParser:
+    """可复用的 MIME 邮件解析与清洗工具类。"""
+
+    @staticmethod
+    def safe_b64decode(data: str | None) -> str:
+        """安全解码 Gmail 的 base64url 数据，自动补齐缺失的 '=' padding。"""
+        if not data:
+            return ""
+        padded = data + "=" * (-len(data) % 4)
+        try:
+            raw_bytes = base64.urlsafe_b64decode(padded.encode("ascii"))
+            return raw_bytes.decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    @staticmethod
+    def decode_header_value(value: str) -> str:
+        """将 RFC 2047 格式的编码字符串（如 =?utf-8?b?...?=）还原为 unicode。"""
+        if not value:
+            return ""
+        try:
+            return str(make_header(decode_header(value)))
+        except Exception:
+            return value
+
+    @classmethod
+    def parse_headers(cls, headers_list: list[dict[str, str]]) -> dict[str, str]:
+        """提取所有邮件头，键转小写，值自动完成编码还原。"""
+        headers: dict[str, str] = {}
+        for h in headers_list:
+            key = h.get("name", "").lower()
+            val = cls.decode_header_value(h.get("value", ""))
+            headers[key] = val
+        return headers
+
+    @staticmethod
+    def parse_address_list(address_header: str) -> list[str]:
+        """安全解析收件人/抄送列表，兼容 'Name <email>' 与纯逗号分隔格式。"""
+        if not address_header:
+            return []
+        parsed = getaddresses([address_header])
+        clean_addresses: list[str] = []
+        for _realname, addr in parsed:
+            addr_str = addr.strip()
+            if addr_str:
+                clean_addresses.append(addr_str)
+        if not clean_addresses:
+            clean_addresses = [a.strip() for a in address_header.split(",") if a.strip()]
+        return clean_addresses
+
+    @staticmethod
+    def strip_html_tags(html_content: str) -> str:
+        """清洗 HTML 内容为供 Agent 阅读的纯文本。"""
+        if not html_content:
+            return ""
+        text = re.sub(r"<(br|p|div|tr|h\d)[^>]*>", "\n", html_content, flags=re.IGNORECASE)
+        text = re.sub(r"<[^>]+>", "", text)
+        text = html.unescape(text).replace("\xa0", " ")
+        return re.sub(r"\n\s*\n", "\n\n", text).strip()
+
+    @classmethod
+    def extract_body_parts(cls, payload: dict[str, Any]) -> tuple[str, str]:
+        """递归遍历 MIME 树，提取 (plain_text, html_text)。
+
+        排除附件与非文本 parts，优先提供真实 text/plain；若缺失则降级从 HTML 清洗生成。
+        """
+        plain_parts: list[str] = []
+        html_parts: list[str] = []
+
+        def _walk(part: dict[str, Any]) -> None:
+            mime_type = part.get("mimeType", "").lower()
+            data = part.get("body", {}).get("data")
+
+            if mime_type == "text/plain" and data:
+                text = cls.safe_b64decode(data)
+                if text:
+                    plain_parts.append(text)
+            elif mime_type == "text/html" and data:
+                html_text = cls.safe_b64decode(data)
+                if html_text:
+                    html_parts.append(html_text)
+
+            for sub_part in part.get("parts", []):
+                _walk(sub_part)
+
+        _walk(payload)
+
+        plain_body = "\n\n".join(plain_parts).strip()
+        html_body = "\n\n".join(html_parts).strip()
+
+        if not plain_body and html_body:
+            plain_body = cls.strip_html_tags(html_body)
+
+        return plain_body, html_body
 
 
 class GoogleApiGmailClient(BaseGmailClient):
@@ -119,65 +226,26 @@ class GoogleApiGmailClient(BaseGmailClient):
         self._service = build("gmail", "v1", credentials=creds, cache_discovery=False)
         return self._service
 
-    @staticmethod
-    def _extract_body_text(payload: dict[str, Any]) -> str:
-        """递归解析 MIME payload，优先提取 text/plain 正文。"""
-
-        def _decode_body(data: str | None) -> str:
-            if not data:
-                return ""
-            try:
-                return base64.urlsafe_b64decode(data.encode("ascii")).decode(
-                    "utf-8", errors="replace"
-                )
-            except Exception:
-                return ""
-
-        mime_type = payload.get("mimeType", "")
-        body_data = payload.get("body", {}).get("data")
-
-        if mime_type == "text/plain" and body_data:
-            text = _decode_body(body_data)
-            if text:
-                return text
-
-        parts = payload.get("parts", [])
-        # 第一遍优先查找 text/plain
-        for part in parts:
-            if part.get("mimeType") == "text/plain":
-                text = _decode_body(part.get("body", {}).get("data"))
-                if text:
-                    return text
-
-        # 第二遍递归查找子 parts
-        for part in parts:
-            nested_text = GoogleApiGmailClient._extract_body_text(part)
-            if nested_text:
-                return nested_text
-
-        # 如果只有顶层直接数据
-        if body_data:
-            return _decode_body(body_data)
-
-        return ""
-
     @classmethod
     def _parse_message_dict(cls, raw: dict[str, Any]) -> GmailMessage:
         msg_id = raw.get("id", "")
         thread_id = raw.get("threadId", "")
         snippet = raw.get("snippet", "")
+        internal_date_raw = raw.get("internalDate", "0")
+        internal_date_ms = int(internal_date_raw) if str(internal_date_raw).isdigit() else 0
+        labels = raw.get("labelIds", [])
+
         payload = raw.get("payload", {})
-        headers_list = payload.get("headers", [])
-        headers = {h.get("name", "").lower(): h.get("value", "") for h in headers_list}
+        headers = MimeParser.parse_headers(payload.get("headers", []))
 
         rfc_message_id = headers.get("message-id", "")
         from_addr = headers.get("from", "")
-        to_header = headers.get("to", "")
-        to_addrs = [addr.strip() for addr in to_header.split(",") if addr.strip()]
+        to_addrs = MimeParser.parse_address_list(headers.get("to", ""))
+        cc_addrs = MimeParser.parse_address_list(headers.get("cc", ""))
         subject = headers.get("subject", "")
         date = headers.get("date", "")
 
-        body_text = cls._extract_body_text(payload)
+        body_text, body_html = MimeParser.extract_body_parts(payload)
         if not body_text:
             body_text = snippet
 
@@ -191,6 +259,10 @@ class GoogleApiGmailClient(BaseGmailClient):
             snippet=snippet,
             body_text=body_text,
             date=date,
+            cc_addrs=cc_addrs,
+            body_html=body_html,
+            internal_date_ms=internal_date_ms,
+            labels=labels,
         )
 
     def get_message(self, message_id: str) -> GmailMessage:
@@ -204,6 +276,13 @@ class GoogleApiGmailClient(BaseGmailClient):
             service.users().threads().get(userId="me", id=thread_id, format="full").execute()
         )
         messages_raw = thread_raw.get("messages", [])
+
+        # 按毫秒时间戳正序排列，确保上下文往来顺序准确
+        messages_raw.sort(
+            key=lambda m: (
+                int(m.get("internalDate", 0)) if str(m.get("internalDate", "")).isdigit() else 0
+            )
+        )
         return [self._parse_message_dict(m) for m in messages_raw]
 
     def search_messages(self, query: str, max_results: int = 10) -> list[dict[str, str]]:
@@ -285,6 +364,13 @@ class MockGmailClient(BaseGmailClient):
                 "地点在第二会议室，讨论 Pebble 邮件链路设计，请确认是否能够出席。"
             ),
             date="2026-09-12 10:00:00",
+            cc_addrs=[],
+            body_html=(
+                "<p>你好，诚邀你参加下周二下午 2 点的项目进展评审会议，"
+                "地点在第二会议室，讨论 Pebble 邮件链路设计，请确认是否能够出席。</p>"
+            ),
+            internal_date_ms=1789200000000,
+            labels=["INBOX", "UNREAD"],
         )
         self.messages[default_msg.id] = default_msg
         self.threads[default_msg.thread_id] = [default_msg.id]
@@ -328,6 +414,10 @@ class MockGmailClient(BaseGmailClient):
             snippet=body[:50],
             body_text=body,
             date="2026-09-12 10:05:00",
+            cc_addrs=[],
+            body_html=f"<p>{html.escape(body)}</p>",
+            internal_date_ms=1789200300000,
+            labels=["SENT"],
         )
         self.messages[sent_id] = new_msg
         if thread_id in self.threads:
