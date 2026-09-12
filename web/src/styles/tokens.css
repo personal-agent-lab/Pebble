@@ -1,0 +1,98 @@
+/*
+ * 设计系统 token，移植自 qwenwork/canvas/mtxu3w4zliqu37cn/design-system.css。
+ * 三层结构：primitive 定义原始值，semantic 定义产品角色，component 定义实现契约。
+ * 组件只消费 semantic 或 component token，不写裸色值。
+ */
+:root {
+  /* Seed */
+  --seed-bg: oklch(99% 0.002 240);
+  --seed-surface: oklch(100% 0 0);
+  --seed-fg: oklch(18% 0.012 250);
+  --seed-muted: oklch(54% 0.012 250);
+  --seed-border: oklch(92% 0.005 250);
+  --seed-primary: oklch(58% 0.18 255);
+  --seed-on-primary: oklch(100% 0 0);
+  --seed-radius: 8px;
+  --seed-space: 16px;
+
+  /* Primitive */
+  --primitive-color-bg: var(--seed-bg);
+  --primitive-color-surface: var(--seed-surface);
+  --primitive-color-fg: var(--seed-fg);
+  --primitive-color-muted: var(--seed-muted);
+  --primitive-color-border: var(--seed-border);
+  --primitive-color-accent: var(--seed-primary);
+  --primitive-color-accent-foreground: var(--seed-on-primary);
+  --primitive-color-danger: #dc2626;
+  --primitive-color-danger-foreground: #ffffff;
+  --primitive-color-success: #15803d;
+  --primitive-color-ring: var(--seed-primary);
+
+  --primitive-space-1: calc(var(--seed-space) * 0.25);
+  --primitive-space-2: calc(var(--seed-space) * 0.5);
+  --primitive-space-3: calc(var(--seed-space) * 0.75);
+  --primitive-space-4: var(--seed-space);
+  --primitive-space-6: calc(var(--seed-space) * 1.5);
+  --primitive-space-10: calc(var(--seed-space) * 2.5);
+  --primitive-space-16: calc(var(--seed-space) * 4);
+
+  --primitive-radius-sm: calc(var(--seed-radius) * 0.5);
+  --primitive-radius-md: var(--seed-radius);
+  --primitive-radius-lg: calc(var(--seed-radius) * 1.5);
+  --primitive-duration-fast: 150ms;
+  --primitive-duration-normal: 220ms;
+
+  /* Semantic */
+  --color-bg: var(--primitive-color-bg);
+  --color-surface: var(--primitive-color-surface);
+  --color-fg: var(--primitive-color-fg);
+  --color-muted: var(--primitive-color-muted);
+  --color-border: var(--primitive-color-border);
+  --color-accent: var(--primitive-color-accent);
+  --color-accent-contrast: var(--primitive-color-accent-foreground);
+  --color-danger: var(--primitive-color-danger);
+  --color-danger-contrast: var(--primitive-color-danger-foreground);
+  --color-ring: var(--primitive-color-ring);
+  --status-success: var(--primitive-color-success);
+
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, monospace;
+
+  --spacing-xs: var(--primitive-space-1);
+  --spacing-sm: var(--primitive-space-2);
+  --spacing-md: var(--primitive-space-4);
+  --spacing-lg: var(--primitive-space-6);
+  --spacing-xl: var(--primitive-space-10);
+  --spacing-2xl: var(--primitive-space-16);
+
+  --radius-sm: var(--primitive-radius-sm);
+  --radius-md: var(--primitive-radius-md);
+  --radius-lg: var(--primitive-radius-lg);
+  --duration-fast: var(--primitive-duration-fast);
+  --duration-normal: var(--primitive-duration-normal);
+
+  --shadow-sm: 0 1px 2px color-mix(in oklch, var(--color-fg) 12%, transparent);
+  --shadow-md: 0 12px 32px color-mix(in oklch, var(--color-fg) 10%, transparent);
+
+  /* Component */
+  --button-bg: var(--color-accent);
+  --button-fg: var(--color-accent-contrast);
+  --button-border: var(--color-accent);
+  --button-bg-hover: color-mix(in oklch, var(--color-accent) 88%, var(--color-fg));
+  --button-radius: var(--radius-md);
+  --button-padding-x: var(--spacing-md);
+  --button-padding-y: var(--spacing-sm);
+
+  --card-bg: var(--color-surface);
+  --card-fg: var(--color-fg);
+  --card-border: var(--color-border);
+  --card-padding: var(--spacing-lg);
+  --card-radius: var(--radius-lg);
+  --card-shadow: var(--shadow-sm);
+
+  --input-bg: var(--color-surface);
+  --input-fg: var(--color-fg);
+  --input-border: var(--color-border);
+  --input-focus-ring: var(--color-ring);
+}
