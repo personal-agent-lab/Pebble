@@ -290,6 +290,8 @@ print(json.dumps({{"execution": service.get_execution({operation["operation_id"]
         {"status": "failed"},
         {"status": "finished", "message_id": "x"},
         {"status": "sent", "message_id": 42},
+        {"status": []},
+        {"status": {}},
     ],
 )
 def test_unclear_send_result_saved_as_unknown(stores, returned):
@@ -302,8 +304,9 @@ def test_unclear_send_result_saved_as_unknown(stores, returned):
     assert response["result"]["status"] == "unknown"
     assert response["result"]["reason"]
 
-    assert service.confirm_reply(task["task_id"], operation["operation_id"], 1) == response
-    assert service.get_execution(operation["operation_id"]) == response
+    reopened = ConfirmationService(sender)
+    assert reopened.get_execution(operation["operation_id"]) == response
+    assert reopened.confirm_reply(task["task_id"], operation["operation_id"], 1) == response
     assert len(sender.calls) == 1
 
 

@@ -34,7 +34,7 @@ class ReplySender(Protocol):
 
 def checked_result(returned: object) -> dict:
     """收敛发送函数返回值为契约结构；不符契约时按待核实处理。"""
-    if isinstance(returned, dict):
+    if isinstance(returned, dict) and isinstance(returned.get("status"), str):
         status = returned.get("status")
         if status == "sent" and isinstance(returned.get("message_id"), str):
             return {"status": "sent", "message_id": returned["message_id"]}
