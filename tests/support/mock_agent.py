@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 
+from server.tools.gmail.client import GmailMessage
 from tests.support.agent_double import FakeAgentGateway
 from tests.support.mailbox import MockMailbox
 
@@ -38,20 +39,20 @@ def session_of(task_id: str) -> str:
     return f"mock-session-{task_id[:8]}"
 
 
-def summary(mail: dict) -> str:
+def summary(mail: GmailMessage, hints: dict) -> str:
     """邮件文件写了摘要就用它；现写的邮件没写，就退回正文里第一句实际内容。"""
-    if mail.get("summary"):
-        return mail["summary"]
-    lines = [line.strip() for line in mail["body"].splitlines() if line.strip()]
+    if hints.get("summary"):
+        return hints["summary"]
+    lines = [line.strip() for line in mail.body_text.splitlines() if line.strip()]
     # 跳过「你好，」这类称呼，摘要才有信息量。
     content = [line for line in lines if not (len(line) <= 8 and line.endswith(GREETING_ENDINGS))]
     first = (content or lines or [""])[0]
     return first if len(first) <= 80 else first[:80] + "…"
 
 
-def suggestion(mail: dict) -> str:
-    if mail.get("suggestion"):
-        return mail["suggestion"]
+def suggestion(hints: dict) -> str:
+    if hints.get("suggestion"):
+        return hints["suggestion"]
     return "需要我起草回信就说一声。"
 
 
@@ -106,14 +107,24 @@ class MockAgent(FakeAgentGateway):
         if path is not None:
             path.write_text(json.dumps(self._mails, ensure_ascii=False), encoding="utf-8")
 
-    def _mail_of(self, task_id: str) -> dict | None:
-        """任务对应的邮件；重启后从替身自己的记录恢复，页面上的对话不至于断片。"""
+    def _mail_of(self, task_id: str) -> tuple[GmailMessage, dict] | None:
+        """任务对应的邮件内容与脚本素材；重启后从替身自己的记录恢复，对话不至于断片。
+
+        邮件内容走与真实工具相同的 `BaseGmailClient` 接口；摘要、建议等脚本素材不是
+        邮件内容，单独从邮件文件取。
+        """
         if task_id not in self._mails:
             path = self._file("mock_agent_mails.json")
             if path is not None and path.exists():
                 self._mails.update(json.loads(path.read_text(encoding="utf-8")))
         message_id = self._mails.get(task_id)
-        return self.mailbox.read(message_id) if message_id is not None else None
+        if message_id is None:
+            return None
+        try:
+            message = self.mailbox.client.get_message(message_id)
+        except KeyError:
+            return None
+        return message, self.mailbox.hints(message_id)
 
     def _remember(self, session_id: str | None, messages: list[dict]) -> None:
         super()._remember(session_id, messages)
@@ -152,32 +163,34 @@ class MockAgent(FakeAgentGateway):
     async def _on_new_mail(self, *, task_id, sdk_session_id, source_message_id, thread_id):
         yield {"type": "session", "sdk_session_id": sdk_session_id or session_of(task_id)}
         self._remember_mail(task_id, source_message_id)
-        mail = self.mailbox.read(source_message_id)
-        if mail is None:
+        found = self._mail_of(task_id)
+        if found is None:
             yield await self._say("收到一封新邮件，但读不到内容。")
             yield {"type": "done"}
             return
+        mail, hints = found
         # 分两段发：页面上能看到事件流逐段到达，历史里也是两条干净的消息。
         yield await self._say(
-            f"新邮件来自 {mail['from']}，主题《{mail['subject']}》。\n\n摘要：{summary(mail)}"
+            f"新邮件来自 {mail.from_addr}，主题《{mail.subject}》。\n\n摘要：{summary(mail, hints)}"
         )
-        yield await self._say(suggestion(mail))
+        yield await self._say(suggestion(hints))
         yield {"type": "done"}
 
     async def _on_message(self, *, task_id, sdk_session_id, message):
         yield {"type": "session", "sdk_session_id": sdk_session_id or session_of(task_id)}
-        mail = self._mail_of(task_id)
-        if mail is None:
+        found = self._mail_of(task_id)
+        if found is None:
             yield await self._say("这个任务还没有关联邮件，替身只能闲聊，起草回信要从新邮件开始。")
             yield {"type": "done"}
             return
+        mail, hints = found
 
         operation = self._reply_operation(task_id)
         wants_draft = matches(message, DRAFT_WORDS) or matches(message, REVISE_WORDS)
         if operation is None and not wants_draft:
             yield await self._say(
-                f"这封邮件来自 {mail['from']}，主题《{mail['subject']}》。{summary(mail)}"
-                f"\n\n{suggestion(mail)}"
+                f"这封邮件来自 {mail.from_addr}，主题《{mail.subject}》。{summary(mail, hints)}"
+                f"\n\n{suggestion(hints)}"
             )
             yield {"type": "done"}
             return
@@ -193,12 +206,12 @@ class MockAgent(FakeAgentGateway):
             yield await self._say("好的，我按邮件内容拟一版回信。")
             saved = self.app.state.drafts.save_reply_draft(
                 task_id,
-                mail["message_id"],
-                mail["thread_id"],
-                [mail["from"]],
-                "回复：" + mail["subject"],
-                mail.get("reply_body")
-                or f"您好，\n\n已收到您关于{mail['subject']}的邮件。\n\n谢谢！",
+                mail.id,
+                mail.thread_id,
+                [mail.from_addr],
+                "回复：" + mail.subject,
+                hints.get("reply_body")
+                or f"您好，\n\n已收到您关于{mail.subject}的邮件。\n\n谢谢！",
             )
             note = "草稿已存好，在待确认里可以看全文；确认发送由你来点。"
         else:
