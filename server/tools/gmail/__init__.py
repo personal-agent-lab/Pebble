@@ -1,4 +1,4 @@
-"""Gmail 工具包：认证、协议客户端、查询与发送。"""
+"""Gmail 工具包：认证、协议客户端、查询、校验与草稿准备。"""
 
 from server.tools.gmail.client import (
     BaseGmailClient,
@@ -8,10 +8,18 @@ from server.tools.gmail.client import (
     SendReplyResult,
     get_gmail_client,
 )
+from server.tools.gmail.protocol import (
+    DraftSaveResult,
+    DraftStorageProtocol,
+    InMemoryDraftStorage,
+    get_draft_storage,
+    set_draft_storage,
+)
 from server.tools.gmail.tools import (
     format_thread_transcript,
     get_email_detail,
     get_email_thread,
+    prepare_reply,
     query_emails,
 )
 from server.tools.gmail.validator import (
@@ -22,16 +30,22 @@ from server.tools.gmail.validator import (
 
 __all__ = [
     "BaseGmailClient",
+    "DraftSaveResult",
+    "DraftStorageProtocol",
     "GmailMessage",
     "GoogleApiGmailClient",
+    "InMemoryDraftStorage",
     "MockGmailClient",
     "SendReplyResult",
     "ValidationError",
     "ValidationResult",
     "format_thread_transcript",
+    "get_draft_storage",
     "get_email_detail",
     "get_email_thread",
     "get_gmail_client",
+    "prepare_reply",
     "query_emails",
+    "set_draft_storage",
     "validate_reply_draft",
 ]

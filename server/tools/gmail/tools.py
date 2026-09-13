@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import Any
 
 from server.tools.gmail.client import BaseGmailClient, get_gmail_client
+from server.tools.gmail.protocol import DraftStorageProtocol, get_draft_storage
+from server.tools.gmail.validator import validate_reply_draft
 from server.tools.registry import SideEffect, tool
 
 
@@ -145,4 +147,73 @@ def get_email_detail(
         "snippet": msg.snippet,
         "body": msg.body_text,
         "date": msg.date,
+    }
+
+
+@tool(
+    name="gmail_prepare_reply",
+    description=(
+        "拟定邮件回复草稿并保存为待审阅预览。"
+        "注意：此工具仅在本地生成待确认草稿，绝对不会真实发送邮件；"
+        "真实发送必须在用户通过界面明确确认后，由系统执行。"
+    ),
+    side_effect=SideEffect.LOCAL_WRITE,
+)
+def prepare_reply(
+    task_id: str,
+    source_message_id: str,
+    thread_id: str,
+    to: list[str],
+    subject: str,
+    body: str,
+    storage: DraftStorageProtocol | None = None,
+) -> dict[str, Any]:
+    """拟定邮件回复草稿，经过业务规则校验后持久化，返回操作标识与审阅状态。"""
+    # 1. 核心复用：调用纯函数业务规则校验
+    val_res = validate_reply_draft(
+        source_message_id=source_message_id,
+        thread_id=thread_id,
+        to=to,
+        subject=subject,
+        body=body,
+    )
+    if not val_res["valid"]:
+        return {
+            "success": False,
+            "error": "回复草稿校验失败，请检查并修正字段后重试",
+            "validation_errors": val_res["errors"],
+        }
+
+    # 2. 校验通过，调用持久化协议保存草稿（由 A 提供，自带去重机制）
+    active_storage = storage or get_draft_storage()
+    saved = active_storage.save_reply_draft(
+        task_id=task_id,
+        source_message_id=source_message_id,
+        thread_id=thread_id,
+        to=to,
+        subject=subject,
+        body=body,
+    )
+
+    op_id = saved["operation_id"]
+    version = saved["version"]
+    status = saved["status"]
+
+    if status == "pending":
+        msg = (
+            f"回复草稿已成功保存为待审阅状态（操作ID: {op_id}, 版本: {version}）。"
+            "已向用户展示预览，等待用户在界面审阅并明确确认后才会发送。"
+        )
+    else:
+        msg = (
+            f"原邮件已有回复记录（操作ID: {op_id}, 状态: {status}），"
+            "已复用已有操作记录，未生成重复草稿。"
+        )
+
+    return {
+        "success": True,
+        "operation_id": op_id,
+        "version": version,
+        "status": status,
+        "message": msg,
     }
