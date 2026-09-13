@@ -56,11 +56,12 @@ def complete(
     )
 
 
-def interrupted(conn: sqlite3.Connection) -> list[str]:
+def interrupted(conn: sqlite3.Connection) -> list[dict]:
+    """未完成的执行记录；`started_at` 区分是否已经调用过发送函数。"""
     return [
-        row["operation_id"]
+        dict(row)
         for row in conn.execute(
-            "SELECT operation_id FROM approval_executions WHERE completed_at IS NULL "
-            "ORDER BY confirmed_at, operation_id"
+            "SELECT operation_id, task_id, started_at FROM approval_executions "
+            "WHERE completed_at IS NULL ORDER BY confirmed_at, operation_id"
         )
     ]

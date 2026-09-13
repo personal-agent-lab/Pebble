@@ -187,6 +187,10 @@ export const confirmOperation = (taskId: string, operationId: string, version: n
 export const getExecution = (operationId: string) =>
   request<Execution>(`/operations/${operationId}/execution`);
 
+/** 核实待核实的发送结果：只读查询实际结果，不重发；查不到时状态与原因保持不变。 */
+export const verifyExecution = (operationId: string) =>
+  request<Execution>(`/operations/${operationId}/verification`, { method: "POST" });
+
 const EVENT_TYPES = ["session", "text", "draft_saved", "done", "error"] as const;
 
 /**

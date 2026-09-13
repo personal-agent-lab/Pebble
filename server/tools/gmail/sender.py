@@ -2,6 +2,9 @@
 
 A 必须持久化 sending/sent/failed/unknown，同一版本不可再次投递。
 本模块不注册 MCP，不自动重试；未知结果只读核实。
+
+两个入口都由 Confirmation 注入 Gmail 客户端后调用，模型不可见：`send_reply` 执行已确认版本，
+`verify_reply` 只读核实同一版本是否真的发出，可在发送超时后或进程重启后重复调用。
 """
 
 from __future__ import annotations
@@ -25,14 +28,24 @@ def _message_id(source_message_id: str) -> str:
     return f"<pebble-reply-{digest}@pebble.local>"
 
 
-def verify_reply_status(
-    thread_id: str,
-    source_message_id: str,
+UNVERIFIED_REASON = "未查到匹配的已发送邮件，结果仍待核实"
+
+
+def verify_reply(
     *,
+    source_message_id: str,
+    thread_id: str,
+    to: list[str],
+    subject: str,
+    body: str,
     client: BaseGmailClient,
-    expected: dict[str, Any] | None = None,
+    reason: str = UNVERIFIED_REASON,
 ) -> dict[str, Any]:
-    """匹配系统生成的 Message-ID、SENT 标签和原邮件关联，绝不以主题猜测成功。"""
+    """只读核实已确认版本是否真的发出；匹配系统生成的 Message-ID、SENT 标签和原邮件关联。
+
+    绝不以主题猜测成功。查不到一次不等于未发送，所以永远不返回 failed：结果只能从
+    unknown 升级到 sent，证否要靠用户或后续证据，不由本函数下结论。
+    """
     try:
         source = client.get_message(source_message_id)
         for message in reversed(client.get_thread(thread_id)):
@@ -41,20 +54,17 @@ def verify_reply_status(
                 or "SENT" not in message.labels
                 or message.rfc_message_id != _message_id(source_message_id)
                 or message.in_reply_to != source.rfc_message_id
-            ):
-                continue
-            if expected and (
-                message.subject != expected["subject"]
-                or message.to_addrs != expected["to"]
+                or message.subject != subject
+                or message.to_addrs != to
                 or message.body_text.replace("\r\n", "\n").rstrip("\n")
-                != expected["body"].replace("\r\n", "\n").rstrip("\n")
+                != body.replace("\r\n", "\n").rstrip("\n")
             ):
                 continue
             if message.id:
                 return {"status": "sent", "message_id": message.id}
     except Exception:
         pass  # 核实失败不能证明未发送，也不能泄露认证或服务端异常内容。
-    return {"status": "unknown", "reason": "发送超时，待核实"}
+    return {"status": "unknown", "reason": reason}
 
 
 def send_reply(
@@ -103,9 +113,12 @@ def send_reply(
             return {"status": "failed", "reason": f"Gmail 拒绝发送（HTTP {exc.resp.status}）"}
     except Exception:
         pass  # 超时、断连、5xx 或无法分类的投递异常均不能安全重试。
-    return verify_reply_status(
-        thread_id,
-        source_message_id,
+    return verify_reply(
+        source_message_id=source_message_id,
+        thread_id=thread_id,
+        to=to,
+        subject=subject,
+        body=body,
         client=client,
-        expected={"to": to, "subject": subject, "body": body},
+        reason="发送调用未给出结果，待核实",
     )

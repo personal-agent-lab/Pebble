@@ -4,7 +4,7 @@ import pytest
 from googleapiclient.errors import HttpError
 from httplib2 import Response
 
-from server.tools.gmail.sender import send_reply, verify_reply_status
+from server.tools.gmail.sender import send_reply, verify_reply
 from tests.support.gmail_double import MockGmailClient
 
 FIELDS = dict(
@@ -17,6 +17,9 @@ FIELDS = dict(
     body="确认内容\n保留空格  ",
 )
 
+# 核实的输入是已确认版本的内容证据，不含操作标识与版本。
+EVIDENCE = {key: FIELDS[key] for key in ("source_message_id", "thread_id", "to", "subject", "body")}
+
 
 def test_mime_and_exact_confirmed_content():
     client = MockGmailClient()
@@ -26,12 +29,7 @@ def test_mime_and_exact_confirmed_content():
         key: FIELDS[key] for key in ("to", "subject", "body")
     }
     assert sent["in_reply_to"] == "<invite-001@example.com>"
-    assert (
-        verify_reply_status(FIELDS["thread_id"], FIELDS["source_message_id"], client=client)[
-            "status"
-        ]
-        == "sent"
-    )
+    assert verify_reply(**EVIDENCE, client=client)["status"] == "sent"
 
 
 @pytest.mark.parametrize("delivered", [True, False])
@@ -56,12 +54,7 @@ def test_timeout_only_verifies_no_retry(delivered):
 def test_old_subject_match_is_not_proof():
     client = MockGmailClient()
     client.raw_send_reply(FIELDS["to"], FIELDS["subject"], FIELDS["body"], FIELDS["thread_id"])
-    assert (
-        verify_reply_status(FIELDS["thread_id"], FIELDS["source_message_id"], client=client)[
-            "status"
-        ]
-        == "unknown"
-    )
+    assert verify_reply(**EVIDENCE, client=client)["status"] == "unknown"
 
 
 def test_wrong_thread_and_header_injection_never_send():

@@ -64,7 +64,7 @@ function ResultRow({ view, execution }: { view: OperationView; execution: Execut
           {result?.status === "unknown" && (
             <>
               <b>结果待核实：</b>
-              {result.reason}。<b>未核实前不能再次发送</b>——查不到一次不等于未发送；重复确认只返回已有状态，不触发发送。
+              {result.reason}。<b>未核实前不能再次发送</b>——查不到一次不等于未发送；重复确认只返回已有状态，不触发发送。可在确认页核实实际结果。
             </>
           )}
         </div>

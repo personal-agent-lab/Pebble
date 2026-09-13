@@ -1,10 +1,13 @@
 """确认执行：版本校验、取得执行权、调用发送函数并保存实际结果。
 
-发送函数由调用方注入（B 提供真实实现，测试使用替身），生产代码不提供默认值。
+发送与核实函数由调用方注入（B 提供真实实现，测试使用替身），生产代码不提供默认值。
 HTTP 入口只接受确认（accept_confirmation：写事务内检查版本、保存确认、取得执行权），
 后台执行（execute_accepted）读取确认版本并调用发送函数；一次确认只调用一次，
 已有执行记录或已开始的重复确认只返回已保存状态。
 执行结果保存与待回传调用记录在同一事务内登记，重复确认不新增回传。
+
+结果为 unknown 时由 verify_pending 只读核实实际结果（契约 §6）：核实不重发，
+只能把 unknown 升级为 sent，升级后按核实专用标识另登记一次回传。
 """
 
 import sqlite3
@@ -22,6 +25,11 @@ from server.tools.gmail import service as mail
 
 RECOVERED_REASON = "发送调用未完成即中断，结果待核实"
 
+# 取得执行权后进程即退出：发送函数从未被调用，按契约 §6 不属于 unknown。
+NOT_STARTED_REASON = "确认后尚未开始发送即中断，未进入执行阶段"
+
+VERIFIED_DELIVERY_SUFFIX = ":verified"
+
 
 class ReplySender(Protocol):
     def __call__(
@@ -29,6 +37,20 @@ class ReplySender(Protocol):
         *,
         operation_id: str,
         version: int,
+        source_message_id: str,
+        thread_id: str,
+        to: list[str],
+        subject: str,
+        body: str,
+    ) -> dict: ...
+
+
+class ReplyVerifier(Protocol):
+    """只读核实已确认版本的实际结果；内容字段是比对证据，不是重新发送的参数。"""
+
+    def __call__(
+        self,
+        *,
         source_message_id: str,
         thread_id: str,
         to: list[str],
@@ -76,9 +98,18 @@ def execution_response(row: dict) -> dict:
 
 
 def register_delivery(
-    conn: sqlite3.Connection, operation_id: str, task_id: str | None, now: str
+    conn: sqlite3.Connection,
+    operation_id: str,
+    task_id: str | None,
+    now: str,
+    *,
+    reference: str | None = None,
 ) -> None:
-    """为已保存的结果登记一次回传；同一操作只登记一次，跨进程恢复重复调用不会新增。"""
+    """为已保存的结果登记一次回传；同一标识只登记一次，跨进程恢复重复调用不会新增。
+
+    `reference` 只作去重键：发送结果用操作标识，核实升级后的结果用核实专用标识，
+    两者各登记一次。回传时读的是调用输入里的操作标识，与去重键无关。
+    """
     if task_id is None:
         return
     agent_runs.insert(
@@ -87,37 +118,46 @@ def register_delivery(
         task_id,
         agent_runs.KIND_EXECUTION_RESULT,
         {"operation_id": operation_id},
-        operation_id,
+        reference or operation_id,
         now,
     )
 
 
 def recover_interrupted_executions(path: Path | None = None) -> list[str]:
-    """把上次进程遗留的执行中记录标记为待核实，返回被处理的执行。
+    """把上次进程遗留的未完成执行按是否进入执行阶段归位，返回被处理的执行。
 
     由服务启动流程在接受请求前调用；不放进数据库初始化，避免普通初始化影响正在执行的调用。
-    恢复保存的结果与正常执行一样登记回传，待兑现的发送结果不会遗漏。
+    已取得执行权但 started_at 仍为空的记录从未调用发送函数，按契约 §6 是明确未发送，
+    记 failed 而不是 unknown；已开始的记 unknown，实际结果由后续核实兑现。
+    两种结果都与正常执行一样登记回传，待兑现的发送结果不会遗漏。
     """
     with session(path) as conn, write(conn):
         now = timestamp()
-        operation_ids = repo.interrupted(conn)
-        for operation_id in operation_ids:
-            row = repo.view(conn, operation_id)
+        rows = repo.interrupted(conn)
+        for row in rows:
+            started = row["started_at"] is not None
             repo.complete(
                 conn,
-                operation_id,
+                row["operation_id"],
                 message_id=None,
-                reason=RECOVERED_REASON,
+                reason=RECOVERED_REASON if started else NOT_STARTED_REASON,
                 completed_at=now,
             )
-            operations.update_status(conn, operation_id, "unknown", now)
-            register_delivery(conn, operation_id, row["execution_task_id"], now)
-        return operation_ids
+            status = "unknown" if started else "failed"
+            operations.update_status(conn, row["operation_id"], status, now)
+            register_delivery(conn, row["operation_id"], row["task_id"], now)
+        return [row["operation_id"] for row in rows]
 
 
 class ConfirmationService:
-    def __init__(self, send_reply: ReplySender | None, path: Path | None = None):
+    def __init__(
+        self,
+        send_reply: ReplySender | None,
+        verify_reply: ReplyVerifier | None = None,
+        path: Path | None = None,
+    ):
         self.send_reply = send_reply
+        self.verify_reply = verify_reply
         self.path = path
 
     def accept_confirmation(self, task_id: str, operation_id: str, version: int) -> dict:
@@ -145,6 +185,61 @@ class ConfirmationService:
         version, draft = claimed
         self._complete(operation_id, self._send(operation_id, version, draft))
         return self.get_execution(operation_id)
+
+    def verify_pending(self, operation_id: str) -> dict:
+        """只读核实待核实的发送结果，返回操作当前状态。
+
+        只对 unknown 生效：查到确认版本确实发出才升级为 sent，查不到保持原状态和原因，
+        不改写为失败，也不重发。升级后另登记一次回传，让原会话拿到最终结果。
+        """
+        with session(self.path) as conn:
+            row = repo.view(conn, operation_id)
+            if row["status"] != "unknown":
+                return execution_response(row)
+            version = row["confirmed_version"]
+            draft = mail.draft(conn, operation_id, version)
+        if self.verify_reply is None:
+            raise DependencyUnavailableError("邮件结果核实尚未接入")
+        result = self._verify(draft)
+        if result["status"] == "sent":
+            self._upgrade(operation_id, result)
+        return self.get_execution(operation_id)
+
+    def _verify(self, draft: dict) -> dict:
+        try:
+            returned = self.verify_reply(
+                source_message_id=draft["source_message_id"],
+                thread_id=draft["thread_id"],
+                to=list(draft["to"]),
+                subject=draft["subject"],
+                body=draft["body"],
+            )
+        except Exception as error:  # 核实失败不能证明未发送，保持待核实
+            return {"status": "unknown", "reason": f"核实调用异常：{error!r}"}
+        checked = checked_result(returned)
+        # 核实查不到不等于未发送：只接受 sent，其余一律按仍不确定处理。
+        return checked if checked["status"] == "sent" else {"status": "unknown", "reason": ""}
+
+    def _upgrade(self, operation_id: str, result: dict) -> None:
+        """写事务内确认仍是待核实再落盘；并发核实只有第一个写入，也只登记一次回传。"""
+        now = timestamp()
+        with session(self.path) as conn, write(conn):
+            row = repo.view(conn, operation_id)
+            if row["status"] != "unknown":
+                return
+            repo.complete(
+                conn, operation_id, message_id=result["message_id"], reason=None, completed_at=now
+            )
+            operations.update_status(conn, operation_id, "sent", now)
+            # 原结果的回传还没跑完时，它读到的已经是升级后的结果，不必再登记一次。
+            if not agent_runs.delivery_unfinished(conn, operation_id):
+                register_delivery(
+                    conn,
+                    operation_id,
+                    row["execution_task_id"],
+                    now,
+                    reference=operation_id + VERIFIED_DELIVERY_SUFFIX,
+                )
 
     def get_execution(self, operation_id: str) -> dict:
         with session(self.path) as conn:

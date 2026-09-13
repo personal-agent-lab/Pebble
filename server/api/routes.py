@@ -53,9 +53,11 @@ def health(request: Request) -> dict[str, object]:
     with session() as conn:
         version = schema_version(conn)
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()["journal_mode"]
+    mail_source = request.app.state.mail_source
+    mail_source_error = mail_source.error if mail_source is not None else None
     return {
-        "status": "degraded" if getattr(request.app.state.mail_source, "error", None) else "ok",
-        "mail_source_error": getattr(request.app.state.mail_source, "error", None),
+        "status": "degraded" if mail_source_error else "ok",
+        "mail_source_error": mail_source_error,
         "data_dir": str(settings.data_dir),
         "schema_version": version,
         "journal_mode": journal_mode,
@@ -179,3 +181,15 @@ async def confirm(
 @router.get("/operations/{operation_id}/execution", tags=["approvals"])
 def execution(operation_id: str, confirmations: Confirmations) -> dict:
     return confirmations.get_execution(operation_id)
+
+
+@router.post("/operations/{operation_id}/verification", tags=["approvals"])
+def verify(operation_id: str, confirmations: Confirmations, agent: Agent) -> dict:
+    """核实待核实的发送结果：只读查询实际结果，不重发（契约 §6）。
+
+    读接口不做外部调用，核实要用户或恢复流程显式发起。升级为 sent 时会登记结果回传，
+    这里接着推进，让原会话拿到最终结果。
+    """
+    view = confirmations.verify_pending(operation_id)
+    agent.kick()
+    return view

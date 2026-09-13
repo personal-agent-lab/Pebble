@@ -12,9 +12,18 @@ from fastapi.testclient import TestClient
 
 from server import db
 from server.approval import repository as approval_repo
-from server.approval.service import ConfirmationService, recover_interrupted_executions
+from server.approval.service import (
+    NOT_STARTED_REASON,
+    ConfirmationService,
+    recover_interrupted_executions,
+)
 from server.db import SCHEMA_VERSION, init_db, session, write
-from server.errors import NotEditableError, NotFoundError, VersionConflictError
+from server.errors import (
+    DependencyUnavailableError,
+    NotEditableError,
+    NotFoundError,
+    VersionConflictError,
+)
 from server.main import create_app
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import ReplyDraftStore
@@ -406,8 +415,9 @@ def test_startup_lifespan_recovers_interrupted_execution(stores):
     task, operation = prepare(stores)
     with session() as conn, write(conn):
         conn.execute(
-            "INSERT INTO approval_executions (operation_id, task_id, version, confirmed_at) "
-            "VALUES (?, ?, 1, '2026-09-12T00:00:00+00:00')",
+            "INSERT INTO approval_executions "
+            "(operation_id, task_id, version, confirmed_at, started_at) "
+            "VALUES (?, ?, 1, '2026-09-12T00:00:00+00:00', '2026-09-12T00:00:01+00:00')",
             (operation["operation_id"], task["task_id"]),
         )
         conn.execute("UPDATE operations SET status = 'sending'")
@@ -418,6 +428,25 @@ def test_startup_lifespan_recovers_interrupted_execution(stores):
 
     execution = ConfirmationService(sender).get_execution(operation["operation_id"])
     assert execution["status"] == "unknown"
+    assert sender.calls == []
+
+
+def test_confirmed_but_never_started_recovers_as_failed(stores):
+    """取得执行权后立即中断：发送函数从未被调用，是明确未发送，不是待核实。"""
+    task, operation = prepare(stores)
+    with session() as conn, write(conn):
+        conn.execute(
+            "INSERT INTO approval_executions (operation_id, task_id, version, confirmed_at) "
+            "VALUES (?, ?, 1, '2026-09-12T00:00:00+00:00')",
+            (operation["operation_id"], task["task_id"]),
+        )
+        conn.execute("UPDATE operations SET status = 'sending'")
+
+    assert recover_interrupted_executions() == [operation["operation_id"]]
+    sender = Sender()
+    recovered = ConfirmationService(sender).get_execution(operation["operation_id"])
+    assert recovered["status"] == "failed"
+    assert recovered["result"] == {"status": "failed", "reason": NOT_STARTED_REASON}
     assert sender.calls == []
 
 
@@ -549,3 +578,132 @@ def test_execution_record_constraints(stores):
         for statement, params in statements:
             with pytest.raises(sqlite3.IntegrityError), write(conn):
                 conn.execute(statement, params)
+
+
+class Verifier:
+    """核实替身：记录每次调用的证据字段，可注入返回值或异常。"""
+
+    def __init__(self, result=None):
+        self.result = result or {"status": "unknown", "reason": "查不到"}
+        self.calls: list[dict] = []
+
+    def __call__(self, **fields):
+        self.calls.append(fields)
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def unknown_execution(stores, **kwargs):
+    """确认后得到待核实结果，返回任务与操作。"""
+    task, operation = prepare(stores)
+    stores[0].bind_sdk_session(task["task_id"], "sdk-1")
+    service = ConfirmationService(Sender({"status": "unknown", "reason": "网关超时"}), **kwargs)
+    service.confirm_reply(task["task_id"], operation["operation_id"], 1)
+    assert service.get_execution(operation["operation_id"])["status"] == "unknown"
+    return task, operation
+
+
+def test_verify_upgrades_unknown_to_sent_with_confirmed_content(stores):
+    task, operation = unknown_execution(stores)
+    verifier = Verifier({"status": "sent", "message_id": "gmail-9"})
+    service = ConfirmationService(Sender(), verifier)
+
+    verified = service.verify_pending(operation["operation_id"])
+
+    assert verified["status"] == "sent"
+    assert verified["result"] == {"status": "sent", "message_id": "gmail-9"}
+    # 核实只拿已确认版本的内容做证据，不带操作标识与版本，也不触发发送。
+    assert verifier.calls == [{"source_message_id": "m1", "thread_id": "thread-1", **FINAL}]
+    assert verified["confirmation"]["task_id"] == task["task_id"]
+
+
+@pytest.mark.parametrize(
+    "returned",
+    [
+        {"status": "unknown", "reason": "查不到"},
+        {"status": "failed", "reason": "核实认为没发出"},
+        {"nonsense": True},
+        RuntimeError("Gmail 认证异常"),
+    ],
+)
+def test_verify_never_downgrades_or_resends(stores, returned):
+    """查不到一次不等于未发送：核实只接受 sent，其余一律保持原状态与原因。"""
+    _, operation = unknown_execution(stores)
+    sender = Sender()
+    service = ConfirmationService(sender, Verifier(returned))
+
+    view = service.verify_pending(operation["operation_id"])
+
+    assert view["status"] == "unknown"
+    assert view["result"] == {"status": "unknown", "reason": "网关超时"}
+    assert sender.calls == []
+
+
+def test_verify_only_applies_to_unknown(stores):
+    task, operation = prepare(stores)
+    verifier = Verifier({"status": "sent", "message_id": "gmail-9"})
+    service = ConfirmationService(Sender(), verifier)
+    sent = service.confirm_reply(task["task_id"], operation["operation_id"], 1)
+
+    assert service.verify_pending(operation["operation_id"]) == sent
+    assert verifier.calls == []
+
+
+def test_verify_requires_verifier(stores):
+    _, operation = unknown_execution(stores)
+    with pytest.raises(DependencyUnavailableError):
+        ConfirmationService(Sender()).verify_pending(operation["operation_id"])
+
+
+def test_verified_result_is_delivered_once(stores):
+    """升级后的结果回到确认任务；原结果回传已跑完，核实另登记一次，重复核实不再新增。"""
+    task, operation = unknown_execution(stores)
+    with session() as conn, write(conn):
+        conn.execute("UPDATE agent_runs SET status = 'done', finished_at = '2026-09-13T00:00:00Z'")
+    service = ConfirmationService(Sender(), Verifier({"status": "sent", "message_id": "gmail-9"}))
+
+    service.verify_pending(operation["operation_id"])
+    assert service.get_agent_result(operation["operation_id"]) == {
+        "task_id": task["task_id"],
+        "sdk_session_id": "sdk-1",
+        "operation_id": operation["operation_id"],
+        "version": 1,
+        "result": {"status": "sent", "message_id": "gmail-9"},
+    }
+
+    service.verify_pending(operation["operation_id"])
+    with session() as conn:
+        deliveries = conn.execute(
+            "SELECT reference_id, input FROM agent_runs WHERE kind = 'execution_result' "
+            "ORDER BY rowid"
+        ).fetchall()
+    assert [row["reference_id"] for row in deliveries] == [
+        operation["operation_id"],
+        operation["operation_id"] + ":verified",
+    ]
+    # 回传读的是输入里的操作标识，核实回传的去重键不影响结果定位。
+    assert {json.loads(row["input"])["operation_id"] for row in deliveries} == {
+        operation["operation_id"]
+    }
+
+
+def test_verified_result_reuses_unfinished_delivery(stores):
+    """原结果的回传还没跑：它读到的已是升级后的结果，不必再登记一次。"""
+    _, operation = unknown_execution(stores)
+    service = ConfirmationService(Sender(), Verifier({"status": "sent", "message_id": "gmail-9"}))
+
+    service.verify_pending(operation["operation_id"])
+
+    with session() as conn:
+        references = [
+            row["reference_id"]
+            for row in conn.execute(
+                "SELECT reference_id FROM agent_runs WHERE kind = 'execution_result'"
+            )
+        ]
+    assert references == [operation["operation_id"]]
+    assert service.get_agent_result(operation["operation_id"])["result"] == {
+        "status": "sent",
+        "message_id": "gmail-9",
+    }

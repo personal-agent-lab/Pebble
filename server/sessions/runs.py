@@ -72,6 +72,16 @@ def latest(conn: sqlite3.Connection, task_id: str) -> dict | None:
     return dict(row) if row is not None else None
 
 
+def delivery_unfinished(conn: sqlite3.Connection, reference_id: str) -> bool:
+    """该操作已有尚未结束的结果回传；核实升级时据此避免登记重复的回传。"""
+    row = conn.execute(
+        "SELECT 1 FROM agent_runs WHERE reference_id = ? AND kind = ? "
+        "AND status IN ('pending', 'running') LIMIT 1",
+        (reference_id, KIND_EXECUTION_RESULT),
+    ).fetchone()
+    return row is not None
+
+
 def pending(conn: sqlite3.Connection) -> list[dict]:
     return [
         dict(row)

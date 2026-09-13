@@ -218,9 +218,11 @@ class GatewayRuntime:
         """执行结果回传要等结果已保存且任务已关联会话；其余输入接受即可执行。"""
         if row["kind"] != repo.KIND_EXECUTION_RESULT:
             return True
-        if self.confirmations is None or row["reference_id"] is None:
+        if self.confirmations is None:
             return False
-        return self.confirmations.get_agent_result(row["reference_id"]) is not None
+        # 操作标识取自调用输入：reference_id 只是回传的去重键，核实结果另有一个键。
+        operation_id = json.loads(row["input"])["operation_id"]
+        return self.confirmations.get_agent_result(operation_id) is not None
 
     async def _execute(self, run_id: str) -> None:
         row = self._row(run_id)
@@ -254,7 +256,7 @@ class GatewayRuntime:
                 task_id=task_id, sdk_session_id=sdk_session_id, message=payload["message"]
             )
         delivery = (
-            self.confirmations.get_agent_result(row["reference_id"])
+            self.confirmations.get_agent_result(payload["operation_id"])
             if self.confirmations is not None
             else None
         )
@@ -309,6 +311,9 @@ class MailSource(Protocol):
     检测到未处理邮件后调用 `accept_new_mail`，去重与任务创建仍由本模块保证。
     默认装配没有邮件来源，不伪造邮件。
     """
+
+    # 检测中断的原因，健康检查据此报 degraded；正常运行为 None。
+    error: str | None
 
     async def start(self, agent: GatewayRuntime) -> None:
         """在应用事件循环中开始检测；实现自行持有后台任务。"""

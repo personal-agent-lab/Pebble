@@ -253,3 +253,55 @@ def test_missing_dependencies_reject_before_mutation(settings):
             assert conn.execute("SELECT COUNT(*) FROM agent_runs").fetchone()[0] == 0
             assert conn.execute("SELECT COUNT(*) FROM approval_executions").fetchone()[0] == 0
         assert len(SessionStore().list_tasks()) == 1
+
+
+def test_verification_route_upgrades_and_delivers(settings):
+    """待核实结果由用户显式发起核实：读接口不做外部调用，核实不重发。"""
+    calls = []
+
+    def send(**fields):
+        calls.append(fields)
+        return {"status": "unknown", "reason": "网关超时"}
+
+    def verify(**fields):
+        calls.append(fields)
+        return {"status": "sent", "message_id": "gmail-9"}
+
+    app = create_app(send_reply=send, verify_reply=verify)
+    with TestClient(app) as client:
+        tid = client.post("/api/tasks", json={"goal": "测试"}).json()["task_id"]
+        drafts = app.state.drafts
+        op = drafts.save_reply_draft(tid, "m", "t", ["a@example.com"], "主题", "正文")
+        oid = op["operation_id"]
+        client.post(f"/api/tasks/{tid}/confirmations", json={"operation_id": oid, "version": 1})
+        def saved_unknown():
+            view = client.get(f"/api/operations/{oid}/execution").json()
+            return view if view["status"] == "unknown" else None
+
+        unknown = wait_for(saved_unknown)
+        assert unknown["result"] == {"status": "unknown", "reason": "网关超时"}
+        assert len(calls) == 1
+
+        verified = client.post(f"/api/operations/{oid}/verification").json()
+        assert verified["status"] == "sent"
+        assert verified["result"] == {"status": "sent", "message_id": "gmail-9"}
+        assert verified["confirmation"] == unknown["confirmation"]
+        # 第二次调用是核实，不是重发：证据字段不含操作标识与版本。
+        assert set(calls[1]) == {"source_message_id", "thread_id", "to", "subject", "body"}
+
+        assert client.post(f"/api/operations/{oid}/verification").json() == verified
+        assert len(calls) == 2
+
+
+def test_verification_of_unconfirmed_operation_calls_nothing(settings):
+    """只有待核实结果才需要核实：其余状态原样返回，不调用外部接口，也不需要核实依赖。"""
+    with TestClient(create_app()) as client:
+        tid = client.post("/api/tasks", json={"goal": "测试"}).json()["task_id"]
+        op = ReplyDraftStore().save_reply_draft(tid, "m", "t", ["a@example.com"], "主题", "正文")
+        oid = op["operation_id"]
+
+        response = client.post(f"/api/operations/{oid}/verification")
+
+        assert response.status_code == 200
+        assert response.json() == client.get(f"/api/operations/{oid}/execution").json()
+        assert response.json()["status"] == "pending"

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { ApiError, confirmOperation, editDraft, type FieldError } from "../api";
+import { ApiError, confirmOperation, editDraft, verifyExecution, type FieldError } from "../api";
 import AppShell from "../components/AppShell";
 import Notice from "../components/Notice";
 import StatusBadge from "../components/StatusBadge";
@@ -49,7 +49,7 @@ function OperationEditor({ taskId, view, onChanged }: CardProps) {
 
   const [form, setForm] = useState<Form>(() => formOf(view));
   const [dirtyVersion, setDirtyVersion] = useState(version);
-  const [busy, setBusy] = useState<"save" | "confirm" | null>(null);
+  const [busy, setBusy] = useState<"save" | "confirm" | "verify" | null>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
 
   // 内容变化（Agent 重写或自己保存）时以服务端内容为准，丢弃未保存的本地编辑。
@@ -91,6 +91,19 @@ function OperationEditor({ taskId, view, onChanged }: CardProps) {
     } catch (error) {
       setFailure(error instanceof ApiError ? error : new ApiError("offline", String(error), 0));
       await onChanged();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const verify = async () => {
+    setBusy("verify");
+    setFailure(null);
+    try {
+      await verifyExecution(view.summary.operation_id);
+      await onChanged();
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error : new ApiError("offline", String(error), 0));
     } finally {
       setBusy(null);
     }
@@ -216,12 +229,22 @@ function OperationEditor({ taskId, view, onChanged }: CardProps) {
         >
           {busy === "save" ? "保存中…" : "保存修改"}
         </button>
+        {status === "unknown" && (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => void verify()}
+            disabled={busy !== null}
+          >
+            {busy === "verify" ? "核实中…" : "核实实际结果"}
+          </button>
+        )}
         <span className="note">
           {status === "pending" && "确认前仍可编辑；保存修改后，之前的确认不再生效。"}
           {status === "sending" && "正在发送，内容已锁定。"}
           {status === "sent" && "已发送。重复确认返回已有状态，不会再次发送。"}
           {status === "failed" && "明确失败。不自动重试，也不沿用旧确认自动重发。"}
-          {status === "unknown" && "结果待核实。未核实前不提供重发入口。"}
+          {status === "unknown" && "结果待核实。核实只查询实际结果，不会再次发送；查不到时保持待核实。"}
         </span>
       </div>
     </section>
