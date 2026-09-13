@@ -62,12 +62,19 @@ def validate_reply_draft(
     """
     errors: list[ValidationError] = []
 
-    # 1. 校验原邮件与线程标识
+    # 1. 校验 source_message_id 和 thread_id 必须存在且合法
     if not isinstance(source_message_id, str) or not source_message_id.strip():
         errors.append(
             {
                 "field": "source_message_id",
-                "message": "原邮件标识 (source_message_id) 不能为空",
+                "message": "原邮件标识 (source_message_id) 必须存在且不能为空",
+            }
+        )
+    elif re.search(r"\s", source_message_id):
+        errors.append(
+            {
+                "field": "source_message_id",
+                "message": "原邮件标识 (source_message_id) 不合法，不能包含空白字符",
             }
         )
 
@@ -75,24 +82,29 @@ def validate_reply_draft(
         errors.append(
             {
                 "field": "thread_id",
-                "message": "邮件线程标识 (thread_id) 不能为空",
+                "message": "邮件线程标识 (thread_id) 必须存在且不能为空",
+            }
+        )
+    elif re.search(r"\s", thread_id):
+        errors.append(
+            {
+                "field": "thread_id",
+                "message": "邮件线程标识 (thread_id) 不合法，不能包含空白字符",
             }
         )
 
-    # 2. 校验收件人列表
+    # 2. 校验 to 必须为非空且符合 RFC 5322 格式的有效邮箱地址列表
     recipient_list: list[str] = []
-    if isinstance(to, str):
-        recipient_list = [addr.strip() for addr in to.split(",") if addr.strip()]
-    elif isinstance(to, list):
+    if isinstance(to, list):
         recipient_list = [str(addr).strip() for addr in to if str(addr).strip()]
-    else:
-        recipient_list = []
+    elif isinstance(to, str):
+        recipient_list = [addr.strip() for addr in to.split(",") if addr.strip()]
 
     if not recipient_list:
         errors.append(
             {
                 "field": "to",
-                "message": "收件人列表 (to) 不能为空，至少需要一个有效收件人",
+                "message": "收件人 (to) 必须为非空且符合 RFC 5322 格式的有效邮箱地址列表",
             }
         )
     else:
@@ -101,25 +113,24 @@ def validate_reply_draft(
                 errors.append(
                     {
                         "field": "to",
-                        "message": f"收件人地址格式不正确: {addr}",
+                        "message": f"收件人地址不符合 RFC 5322 格式规范: {addr}",
                     }
                 )
 
-    # 3. 校验主题
+    # 3. 校验 subject 与 body 不能为空或全空白字符
     if not isinstance(subject, str) or not subject.strip():
         errors.append(
             {
                 "field": "subject",
-                "message": "邮件主题 (subject) 不能为空",
+                "message": "邮件主题 (subject) 不能为空或全空白字符",
             }
         )
 
-    # 4. 校验正文
     if not isinstance(body, str) or not body.strip():
         errors.append(
             {
                 "field": "body",
-                "message": "邮件正文 (body) 不能为空",
+                "message": "邮件正文 (body) 不能为空或全空白字符",
             }
         )
 

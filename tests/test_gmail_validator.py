@@ -43,6 +43,7 @@ def test_validate_reply_draft_valid_comma_separated_string() -> None:
 
 
 def test_validate_reply_draft_missing_source_or_thread_id() -> None:
+    # 缺失测试
     res = validate_reply_draft(
         source_message_id="   ",
         thread_id="",
@@ -55,6 +56,18 @@ def test_validate_reply_draft_missing_source_or_thread_id() -> None:
     fields = [e["field"] for e in res["errors"]]
     assert "source_message_id" in fields
     assert "thread_id" in fields
+
+    # 包含空白非法字符测试
+    res_invalid_chars = validate_reply_draft(
+        source_message_id="msg id with spaces",
+        thread_id="thread\tid",
+        to=["recipient@example.com"],
+        subject="Re: 测试",
+        body="正文",
+    )
+    assert res_invalid_chars["valid"] is False
+    err_msgs = [e["message"] for e in res_invalid_chars["errors"]]
+    assert any("不合法" in m for m in err_msgs)
 
 
 def test_validate_reply_draft_empty_or_invalid_recipient() -> None:
