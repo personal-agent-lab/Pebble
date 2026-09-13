@@ -7,17 +7,69 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from server.db import session
 from server.main import create_app
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import ReplyDraftStore
+from tests.support.agent_double import FakeAgentGateway
+from tests.support.gmail_double import send
+
+
+def build_fixture_app() -> FastAPI:
+    """子进程后端的装配工厂：脚本化 Agent 替身 + 发送替身，不连接真实服务。
+
+    模拟邮件检测：启动时同一邮件重复投递，验证服务端持久去重。
+    """
+    gateway = FakeAgentGateway()
+    app = create_app(gateway=gateway, send_reply=send)
+
+    async def reply(*, task_id, sdk_session_id, message):
+        yield {"type": "session", "sdk_session_id": sdk_session_id or "test-session"}
+        operations = app.state.tasks.list_task_operations(task_id)
+        fields = {
+            "to": ["a@example.com", "b@example.com"],
+            "subject": " 回复：邀请 ",
+            "body": message,
+        }
+        if operations:
+            operation = operations[0]
+            saved = app.state.drafts.update_reply_draft(
+                operation["operation_id"], operation["version"], **fields
+            )
+        else:
+            saved = app.state.drafts.save_reply_draft(
+                task_id, "fixture-mail", "fixture-thread", **fields
+            )
+        yield {
+            "type": "draft_saved",
+            "operation_id": saved["operation_id"],
+            "version": saved["version"],
+        }
+        yield {"type": "text", "text": "草稿已保存，请审核。"}
+        yield {"type": "done"}
+
+    gateway.handle("message", reply)
+
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(application):
+        async with original_lifespan(application):
+            application.state.agent.accept_new_mail("fixture-mail", "fixture-thread")
+            application.state.agent.accept_new_mail("fixture-mail", "fixture-thread")
+            yield
+
+    app.router.lifespan_context = lifespan
+    return app
 
 
 def wait_for(predicate):
@@ -72,7 +124,8 @@ def test_http_sse_flow_and_process_restart(settings, outcome, monkeypatch):
                     sys.executable,
                     "-m",
                     "uvicorn",
-                    "tests.support.backend_fixture:app",
+                    "tests.api.test_http_flow:build_fixture_app",
+                    "--factory",
                     "--port",
                     str(port),
                 ],

@@ -169,8 +169,9 @@ npm run build
 
 ## 网页界面验收（2026-09-12）
 
-`npm run typecheck` 与 `npm run build` 通过。以下用 `tests/support/backend_fixture:app` 替身后端
-（真实 HTTP、SQLite、确认执行，发送为替身，不会真实发信），在浏览器 1280×860 与 375×812
+`npm run typecheck` 与 `npm run build` 通过。以下用脚本化替身后端
+（真实 HTTP、SQLite、确认执行，发送为替身，不会真实发信；现由
+`tests/api/test_http_flow.py:build_fixture_app` 装配），在浏览器 1280×860 与 375×812
 两个视口手动走完，两端行为一致：
 
 - 替身启动时自动投递的新邮件任务出现在列表；提交消息后 SSE 出回复文本，
@@ -194,7 +195,7 @@ npm run build
 A 的 `server/gateway/runtime.py` 管理应用生命周期内的异步任务和事件订阅，API 将事件编码为 SSE，
 同目录的 `agent_contract.py` 定义 B 的调用接口；`server/sessions/runs.py` 保存调用记录。
 没有独立工作线程、额外事件循环或自建 Agent 循环。同步发送使用线程池。
-`tests/support/agent_double.py` 和 `tests/support/backend_fixture.py` 仅用于测试，不进入默认应用装配。
+`tests/support/agent_double.py` 等测试替身仅用于测试，不进入默认应用装配。
 
 本次检查：67 项 pytest 通过，Ruff 检查通过；保留一条上游 Starlette 弃用提示。
 
@@ -219,18 +220,7 @@ SSE 收到事件后主动断开，后端仍完成工作。数据库与发送参�
 后台邮件检测在应用事件循环中调用 `app.state.agent.accept_new_mail(source_message_id, thread_id)`；
 每封新邮件一个任务，同一邮件重复检测不重复启动，同线程不同邮件创建不同任务。
 
-可手动启动测试后端（仅绑定本机；不会真实发送邮件）：
-
-```bash
-export PEBBLE_DATA_DIR="$(mktemp -d)"
-uv run --project server uvicorn tests.support.backend_fixture:app --host 127.0.0.1 --port 8001
-```
-
-访问 `http://127.0.0.1:8001/docs`，先读取 `/api/tasks` 得到自动生成的任务；提交消息、读取操作、
-编辑草稿并确认后，查看执行结果及 history。发送替身实际收到的参数保存在上述临时目录的
-`sent.jsonl`，重复确认不增加行数。此入口仅用于人工验收，不是生产启动方式。
-这个后端的邮件与对话是固定脚本，只够接口验证；在网页上按业务顺序手动走完整流程见
-「手动跑通完整邮件流程」。
+手动启动替身后端走完整流程见下一节「手动跑通完整邮件流程」。
 
 ## 手动跑通完整邮件流程
 
@@ -301,30 +291,6 @@ v1 草稿与待确认卡；「再问一下会议链接」改出 v2；确认页�
 
 自动化覆盖同一套装配的是 `tests/api/test_manual_flow.py`：七步、两封邮件各自独立、重启后
 历史不串、现写邮件无摘要字段。
-
-## 带终端日志的七步邮件演示
-
-从仓库根运行：
-
-```bash
-uv run --project server python -m tests.mail_acceptance
-```
-
-按业务流程自动跑一遍：收到新邮件 → Agent 摘要和建议 → 用户要求准备回信 →
-生成并保存草稿 → 自动补齐修改意见和直接编辑 → 模拟点击确认发送 → 展示执行结果及 Agent 后续回复。
-所有输入自动补齐，无需终端交互；B 使用固定邮件、建议、草稿及发送替身，不调用真实 Gmail。
-A 使用真实 HTTP、SQLite、任务会话、版本和确认执行服务，终端代替网页展示输出。
-
-脚本不调用 pytest，不包含断言，不输出 PASS，也不额外跑异常或重启场景。
-终端按七步输出时间、输入、任务/操作 ID、完整草稿及版本、确认响应、发送参数和最终会话。
-开头打印资料目录，其中保留 `pebble.db`、`sent.jsonl` 和 `backend.log`。
-脚本自动启动并关闭本机测试后端；网络或执行错误会打印中断原因并返回非零退出码。
-
-原有自动化断言仍保留在测试套件中，独立运行：
-
-```bash
-uv run --project server pytest -c server/pyproject.toml
-```
 
 ## A/B 生产集成（2026-09-13）
 
