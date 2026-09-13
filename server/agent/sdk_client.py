@@ -73,8 +73,6 @@ def build_options(
     sdk_tools = []
     for definition in definitions:
         schema = deepcopy(definition.parameters_schema)
-        schema["properties"].pop("task_id", None)
-        schema["required"] = [key for key in schema["required"] if key != "task_id"]
 
         def wrap(definition, schema):
             async def handler(arguments):
@@ -82,7 +80,7 @@ def build_options(
                     if set(arguments) - set(schema["properties"]):
                         raise ValueError("unexpected arguments")
                     values = dict(arguments)
-                    if "task_id" in definition.parameters_schema["properties"]:
+                    if definition.needs_task_id:
                         values["task_id"] = task_id
                     result = await asyncio.to_thread(definition, **values)
                     if (

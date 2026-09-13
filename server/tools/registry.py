@@ -35,6 +35,8 @@ class ToolDefinition:
     func: Callable[..., Any]
     side_effect: SideEffect
     parameters_schema: dict[str, Any] = field(default_factory=dict)
+    # 声明了仅关键字 task_id 参数的工具由网关在每轮调用时注入任务身份，不进入模型 schema。
+    needs_task_id: bool = False
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.func(*args, **kwargs)
@@ -60,6 +62,11 @@ class ToolRegistry:
             tool_name = name or fn.__name__
             tool_desc = description or inspect.getdoc(fn) or ""
             schema = self._generate_parameters_schema(fn)
+            parameters = inspect.signature(fn).parameters
+            needs_task_id = (
+                "task_id" in parameters
+                and parameters["task_id"].kind is inspect.Parameter.KEYWORD_ONLY
+            )
 
             tool_def = ToolDefinition(
                 name=tool_name,
@@ -67,6 +74,7 @@ class ToolRegistry:
                 func=fn,
                 side_effect=side_effect,
                 parameters_schema=schema,
+                needs_task_id=needs_task_id,
             )
 
             # 附加元数据到原函数
@@ -93,8 +101,9 @@ class ToolRegistry:
     def _generate_parameters_schema(fn: Callable[..., Any]) -> dict[str, Any]:
         """根据函数类型注解与默认值，自动生成轻量 JSON Schema 描述。
 
-        仅关键字参数是装配注入的依赖（客户端、存储），由 `agent/toolset.py` 在装配时绑定，
-        不进入模型可见的 schema。模型可见参数一律声明为位置或关键字参数。
+        仅关键字参数不进入模型可见的 schema：客户端、存储等装配依赖由 `agent/toolset.py`
+        在装配时绑定；`task_id` 是每轮调用时由网关注入的任务身份。模型可见参数一律声明为
+        位置或关键字参数。
         """
         sig = inspect.signature(fn)
         type_hints = get_type_hints(fn) if hasattr(fn, "__annotations__") else {}

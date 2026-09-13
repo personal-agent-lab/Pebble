@@ -164,13 +164,13 @@ def get_email_detail(
     side_effect=SideEffect.LOCAL_WRITE,
 )
 def prepare_reply(
-    task_id: str,
     source_message_id: str,
     thread_id: str,
     to: list[str],
     subject: str,
     body: str,
     *,
+    task_id: str,
     drafts: ReplyDraftStore,
 ) -> dict[str, Any]:
     """拟定邮件回复草稿并持久化，返回操作标识与审阅状态。
@@ -212,9 +212,9 @@ def prepare_reply(
 
 @tool(name="gmail_read_reply_draft", side_effect=SideEffect.READONLY)
 def read_reply_draft(
-    task_id: str,
     operation_id: str,
     *,
+    task_id: str,
     drafts: ReplyDraftStore,
     tasks: SessionStore,
 ) -> dict:
@@ -227,16 +227,16 @@ def read_reply_draft(
 
 @tool(name="gmail_update_reply_draft", side_effect=SideEffect.LOCAL_WRITE)
 def update_reply_draft(
-    task_id: str,
     operation_id: str,
     expected_version: int,
     to: list[str],
     subject: str,
     body: str,
     *,
+    task_id: str,
     drafts: ReplyDraftStore,
     tasks: SessionStore,
 ) -> dict:
     """按用户修改意见保存完整新版本，不发送；必须使用刚读取的当前版本。"""
-    read_reply_draft(task_id, operation_id, drafts=drafts, tasks=tasks)
+    read_reply_draft(operation_id, task_id=task_id, drafts=drafts, tasks=tasks)
     return drafts.update_reply_draft(operation_id, expected_version, to, subject, body)

@@ -57,10 +57,11 @@ def build_tools(
     }
     bound = []
     for definition in default_registry.list_tools():
+        # task_id 是每轮调用时由网关注入的任务身份，不是装配期依赖。
         names = [
             name
             for name, parameter in signature(definition.func).parameters.items()
-            if parameter.kind is Parameter.KEYWORD_ONLY
+            if parameter.kind is Parameter.KEYWORD_ONLY and name != "task_id"
         ]
         missing = [name for name in names if name not in available]
         if missing:
