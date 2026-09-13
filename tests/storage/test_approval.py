@@ -12,11 +12,7 @@ from fastapi.testclient import TestClient
 
 from server import db
 from server.approval import repository as approval_repo
-from server.approval.service import (
-    NOT_STARTED_REASON,
-    ConfirmationService,
-    recover_interrupted_executions,
-)
+from server.approval.service import NOT_STARTED_REASON, ConfirmationService
 from server.db import SCHEMA_VERSION, init_db, session, write
 from server.errors import (
     DependencyUnavailableError,
@@ -411,7 +407,7 @@ service.execute_accepted(sys.argv[2])
     assert interrupted["result"] is None
     assert service.get_agent_result(operation["operation_id"]) is None
 
-    assert recover_interrupted_executions() == [operation["operation_id"]]
+    assert service.recover_interrupted_executions() == [operation["operation_id"]]
     recovered = service.get_execution(operation["operation_id"])
     assert recovered["status"] == "unknown"
     assert recovered["result"]["status"] == "unknown"
@@ -451,9 +447,10 @@ def test_confirmed_but_never_started_recovers_as_failed(stores):
         )
         conn.execute("UPDATE operations SET status = 'sending'")
 
-    assert recover_interrupted_executions() == [operation["operation_id"]]
     sender = Sender()
-    recovered = ConfirmationService(sender).get_execution(operation["operation_id"])
+    service = ConfirmationService(sender)
+    assert service.recover_interrupted_executions() == [operation["operation_id"]]
+    recovered = service.get_execution(operation["operation_id"])
     assert recovered["status"] == "failed"
     assert recovered["result"] == {"status": "failed", "reason": NOT_STARTED_REASON}
     assert sender.calls == []

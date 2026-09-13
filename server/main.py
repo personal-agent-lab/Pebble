@@ -11,7 +11,7 @@ from fastapi import FastAPI
 
 from server.api.errors import install_error_handlers
 from server.api.routes import router
-from server.approval.service import ConfirmationService, recover_interrupted_executions
+from server.approval.service import ConfirmationService
 from server.db import init_db
 from server.gateway.runtime import GatewayRuntime, MailSource
 from server.sessions.service import SessionStore
@@ -40,7 +40,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         init_db()
-        recover_interrupted_executions()
+        confirmations.recover_interrupted_executions()
         agent.resume()
         # 邮件检测在恢复之后开始：重启遗留的调用先各自归位，再接受新的邮件输入。
         if mail_source is not None:

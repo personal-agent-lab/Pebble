@@ -123,32 +123,6 @@ def register_delivery(
     )
 
 
-def recover_interrupted_executions(path: Path | None = None) -> list[str]:
-    """把上次进程遗留的未完成执行按是否进入执行阶段归位，返回被处理的执行。
-
-    由服务启动流程在接受请求前调用；不放进数据库初始化，避免普通初始化影响正在执行的调用。
-    已取得执行权但 started_at 仍为空的记录从未调用发送函数，按契约 §6 是明确未发送，
-    记 failed 而不是 unknown；已开始的记 unknown，实际结果由后续核实兑现。
-    两种结果都与正常执行一样登记回传，待兑现的发送结果不会遗漏。
-    """
-    with session(path) as conn, write(conn):
-        now = timestamp()
-        rows = repo.interrupted(conn)
-        for row in rows:
-            started = row["started_at"] is not None
-            repo.complete(
-                conn,
-                row["operation_id"],
-                message_id=None,
-                reason=RECOVERED_REASON if started else NOT_STARTED_REASON,
-                completed_at=now,
-            )
-            status = "unknown" if started else "failed"
-            operations.update_status(conn, row["operation_id"], status, now)
-            register_delivery(conn, row["operation_id"], row["task_id"], now)
-        return [row["operation_id"] for row in rows]
-
-
 class ConfirmationService:
     def __init__(
         self,
@@ -211,8 +185,10 @@ class ConfirmationService:
         except Exception as error:  # 核实失败不能证明未发送，保持待核实
             return {"status": "unknown", "reason": f"核实调用异常：{error!r}"}
         checked = checked_result(returned)
-        # 核实查不到不等于未发送：只接受 sent，其余一律按仍不确定处理。
-        return checked if checked["status"] == "sent" else {"status": "unknown", "reason": ""}
+        # 核实查不到不等于未发送：只接受 sent，其余一律按仍不确定处理，保留核实方给出的原因。
+        if checked["status"] == "sent":
+            return checked
+        return {"status": "unknown", "reason": checked["reason"]}
 
     def _upgrade(self, operation_id: str, result: dict) -> None:
         """写事务内确认仍是待核实再落盘；并发核实只有第一个写入，也只登记一次回传。"""
@@ -253,7 +229,29 @@ class ConfirmationService:
         }
 
     def recover_interrupted_executions(self) -> list[str]:
-        return recover_interrupted_executions(self.path)
+        """把上次进程遗留的未完成执行按是否进入执行阶段归位，返回被处理的执行。
+
+        由服务启动流程在接受请求前调用；不放进数据库初始化，避免普通初始化影响正在执行的调用。
+        已取得执行权但 started_at 仍为空的记录从未调用发送函数，按契约 §6 是明确未发送，
+        记 failed 而不是 unknown；已开始的记 unknown，实际结果由后续核实兑现。
+        两种结果都与正常执行一样登记回传，待兑现的发送结果不会遗漏。
+        """
+        with session(self.path) as conn, write(conn):
+            now = timestamp()
+            rows = repo.interrupted(conn)
+            for row in rows:
+                started = row["started_at"] is not None
+                repo.complete(
+                    conn,
+                    row["operation_id"],
+                    message_id=None,
+                    reason=RECOVERED_REASON if started else NOT_STARTED_REASON,
+                    completed_at=now,
+                )
+                status = "unknown" if started else "failed"
+                operations.update_status(conn, row["operation_id"], status, now)
+                register_delivery(conn, row["operation_id"], row["task_id"], now)
+            return [row["operation_id"] for row in rows]
 
     def _claim(self, task_id: str, operation_id: str, version: int) -> bool:
         """写事务内取得执行权；已有执行记录时返回 False，由调用方读取已有状态。"""
