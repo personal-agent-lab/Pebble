@@ -23,6 +23,7 @@ from server.errors import (
 from server.main import create_app
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import ReplyDraftStore
+from tests.support import confirm
 
 FINAL = {
     "to": ["alice@example.com", "b@example.com", "c@example.com"],
@@ -61,13 +62,6 @@ def prepare(stores, source="m1"):
     task = tasks.create_task("处理活动邀请")
     operation = drafts.save_reply_draft(task["task_id"], source, "thread-1", **FINAL)
     return task, operation
-
-
-def confirm(service, task_id, operation_id, version):
-    """接受确认后立即执行：生产走 HTTP 接受 + 后台执行，测试在同一线程内串起来。"""
-    service.accept_confirmation(task_id, operation_id, version)
-    service.execute_accepted(operation_id)
-    return service.get_execution(operation_id)
 
 
 def run_python(code: str, *args: str) -> subprocess.CompletedProcess:
@@ -174,8 +168,8 @@ def test_concurrent_confirmation_single_execution(stores):
     with ThreadPoolExecutor(2) as pool:
         winner = pool.submit(confirm, service, task["task_id"], operation["operation_id"], 1)
         assert started.wait(5)
-        duplicate = confirm(ConfirmationService(other), 
-            task["task_id"], operation["operation_id"], 1
+        duplicate = confirm(
+            ConfirmationService(other), task["task_id"], operation["operation_id"], 1
         )
         release.set()
         sent = winner.result(timeout=5)

@@ -14,6 +14,7 @@ from server.errors import NotFoundError
 from server.gateway.runtime import INTERRUPTED_REASON, GatewayRuntime
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import ReplyDraftStore
+from tests.support import confirm
 from tests.support.agent_double import FakeAgentGateway
 
 pytestmark = pytest.mark.anyio
@@ -56,13 +57,6 @@ async def wait_for(predicate, timeout=5.0):
             return value
         await asyncio.sleep(0.01)
     raise AssertionError("等待超时")
-
-
-def confirm(service, task_id, operation_id, version):
-    """接受确认后立即执行：生产走 HTTP 接受 + 后台执行，测试在同一线程内串起来。"""
-    service.accept_confirmation(task_id, operation_id, version)
-    service.execute_accepted(operation_id)
-    return service.get_execution(operation_id)
 
 
 class Flow(NamedTuple):
@@ -447,9 +441,7 @@ async def test_delivery_failure_keeps_send_result_and_no_resend(flow):
     execution = flow.confirmations.get_execution(operation["operation_id"])
     assert execution["status"] == "sent"
     assert execution["result"] == {"status": "sent", "message_id": "sent-1"}
-    assert (
-        confirm(flow.confirmations, task["task_id"], operation["operation_id"], 1) == execution
-    )
+    assert confirm(flow.confirmations, task["task_id"], operation["operation_id"], 1) == execution
     assert len(flow.sender.calls) == 1
 
     runs = flow.service.list_runs(task["task_id"])
