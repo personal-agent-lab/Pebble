@@ -5,11 +5,15 @@ import pytest
 from qodercn_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, SystemMessage, TextBlock
 
 from server.agent import sdk_client
+from server.agent.toolset import build_tools
 from server.config import Settings
+from server.db import init_db
+from server.sessions.service import SessionStore
 from server.tools.gmail.client import MockGmailClient
-from server.tools.gmail.protocol import InMemoryDraftStorage
 from server.tools.gmail.sender import send_reply, verify_reply_status
+from server.tools.gmail.service import ReplyDraftStore
 from server.tools.gmail.tools import prepare_reply
+from server.tools.gmail.validator import validate_reply_draft
 
 FIELDS = dict(
     operation_id="op1",
@@ -75,26 +79,37 @@ def test_wrong_thread_and_header_injection_never_send():
     assert not client.sent_log
 
 
-def test_parallel_drafts_and_defensive_copy():
-    storage = InMemoryDraftStorage()
+def test_parallel_drafts_and_defensive_copy(settings):
+    """并发准备同一封原邮件只产生一个操作；读出的草稿是副本，改动不回写存储。"""
+    init_db()
+    storage = ReplyDraftStore(validate_reply_draft)
     data = {key: value for key, value in FIELDS.items() if key not in {"operation_id", "version"}}
-    data["task_id"] = "task1"
+    data["task_id"] = SessionStore().create_task("并发准备")["task_id"]
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(lambda _: storage.save_reply_draft(**data), range(50)))
     assert len({result["operation_id"] for result in results}) == 1
-    draft = storage.get_draft(results[0]["operation_id"])
+    assert {result["version"] for result in results} == {1}
+    operation_id = results[0]["operation_id"]
+    draft = storage.get_reply_draft(operation_id)
     draft["to"].append("intruder@example.com")
-    assert storage.get_draft(results[0]["operation_id"])["to"] == FIELDS["to"]
+    assert storage.get_reply_draft(operation_id)["to"] == FIELDS["to"]
 
 
-def test_schema_hides_storage_and_types_recipients():
+def test_schema_hides_injected_dependencies_and_types_recipients():
     schema = prepare_reply.parameters_schema
-    assert "storage" not in schema["properties"]
+    assert "drafts" not in schema["properties"]
     assert schema["properties"]["to"] == {"type": "array", "items": {"type": "string"}}
+    for definition in build_tools(drafts=ReplyDraftStore(None), tasks=SessionStore()):
+        assert not {"client", "drafts", "tasks"} & set(definition.parameters_schema["properties"])
 
 
 async def collect(stream):
     return [event async for event in stream]
+
+
+def gateway() -> sdk_client.QoderGateway:
+    """装配一套只用于事件流断言的网关；本组测试不调用工具，依赖不接触数据库。"""
+    return sdk_client.QoderGateway(build_tools(drafts=ReplyDraftStore(None), tasks=SessionStore()))
 
 
 def install_sdk_stub(monkeypatch, messages):
@@ -146,7 +161,9 @@ def test_stream_resume_delta_and_no_duplicate(monkeypatch, tmp_path):
             result(),
         ],
     )
-    events = asyncio.run(collect(sdk_client.stream_agent_turn("task", "回复", "session1")))
+    events = asyncio.run(
+        collect(gateway().stream_message(task_id="task", sdk_session_id="session1", message="回复"))
+    )
     assert [event["type"] for event in events] == ["session", "text", "done"]
     assert captured[0].resume == "session1"
     assert captured[0].tools == []
@@ -164,7 +181,9 @@ def test_stream_abnormal_end(monkeypatch, tmp_path, ending):
         ),
     )
     install_sdk_stub(monkeypatch, [SystemMessage("init", {"session_id": "session1"}), *ending])
-    events = asyncio.run(collect(sdk_client.stream_agent_turn("task", "回复")))
+    events = asyncio.run(
+        collect(gateway().stream_message(task_id="task", sdk_session_id=None, message="回复"))
+    )
     assert [event["type"] for event in events] == ["session", "error"]
 
 
@@ -182,8 +201,12 @@ def test_result_returns_to_original_session(monkeypatch, tmp_path, status):
     )
     events = asyncio.run(
         collect(
-            sdk_client.feed_execution_result(
-                "task", "session1", "op1", 2, {"status": status, "message_id": "sent1"}
+            gateway().stream_execution_result(
+                task_id="task",
+                sdk_session_id="session1",
+                operation_id="op1",
+                version=2,
+                result={"status": status, "message_id": "sent1"},
             )
         )
     )

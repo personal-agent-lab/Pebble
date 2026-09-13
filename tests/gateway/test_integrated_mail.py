@@ -12,13 +12,12 @@ from fastapi.testclient import TestClient
 from qodercn_agent_sdk import ResultMessage, SystemMessage
 
 from server.agent import sdk_client
+from server.agent.toolset import build_tools
 from server.background import GmailSource
 from server.config import Settings
 from server.db import init_db
 from server.main import create_app
 from server.sessions.service import SessionStore
-from server.tools.gmail import protocol
-from server.tools.gmail import tools as gmail_tools
 from server.tools.gmail.client import MockGmailClient
 from server.tools.gmail.sender import send_reply
 from server.tools.gmail.service import ReplyDraftStore
@@ -27,10 +26,10 @@ from server.tools.gmail.validator import validate_reply_draft
 
 def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
     init_db()
+    tasks = SessionStore()
     drafts = ReplyDraftStore(validate_reply_draft)
-    monkeypatch.setattr(protocol, "_default_storage", drafts)
     gmail = MockGmailClient()
-    monkeypatch.setattr(gmail_tools, "get_gmail_client", lambda: gmail)
+    tools = build_tools(drafts=drafts, tasks=tasks, gmail=gmail)
     monkeypatch.setattr(
         sdk_client,
         "get_settings",
@@ -113,9 +112,11 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
 
     monkeypatch.setattr(sdk_client, "QoderSDKClient", SDK)
     app = create_app(
-        gateway=sdk_client.QoderGateway(),
+        gateway=sdk_client.QoderGateway(tools),
         validate_reply_draft=validate_reply_draft,
         send_reply=partial(send_reply, client=gmail),
+        tasks=tasks,
+        drafts=drafts,
     )
     with TestClient(app) as http:
         task = http.portal.call(
@@ -250,7 +251,9 @@ def test_sdk_history_reads_its_persisted_transcript(settings, monkeypatch):
     ]
     (project / f"{sid}.jsonl").write_text("\n".join(json.dumps(e) for e in entries))
     history = asyncio.run(
-        sdk_client.QoderGateway().read_history(task_id="task", sdk_session_id=sid)
+        sdk_client.QoderGateway(
+            build_tools(drafts=ReplyDraftStore(None), tasks=SessionStore())
+        ).read_history(task_id="task", sdk_session_id=sid)
     )
     assert history == [
         {"role": "user", "text": "帮我写一封回信"},
@@ -268,7 +271,8 @@ def test_custom_model_and_new_mail_permissions(settings, monkeypatch):
         _env_file=None,
     )
     monkeypatch.setattr(sdk_client, "get_settings", lambda: configured)
-    options = sdk_client.build_options("task", allow_drafts=False)
+    tools = build_tools(drafts=ReplyDraftStore(None), tasks=SessionStore())
+    options = sdk_client.build_options(tools, "task", allow_drafts=False)
     assert options.resolve_model(None)["model"] == {
         "provider": "test-provider",
         "model": "test-model",
@@ -277,3 +281,48 @@ def test_custom_model_and_new_mail_permissions(settings, monkeypatch):
     }
     assert "test-key" not in options.system_prompt
     assert not any("reply" in name for name in options.allowed_tools)
+
+
+def test_tools_bind_assembled_dependencies_without_global_state(settings, tmp_path):
+    """两套装配各自持有存储：工具不查全局，同一进程可并存互不影响的应用。"""
+    from server.errors import DependencyUnavailableError
+
+    toolsets = []
+    for name in ("left", "right"):
+        path = tmp_path / f"{name}.db"
+        init_db(path)
+        tasks = SessionStore(path)
+        drafts = ReplyDraftStore(validate_reply_draft, path)
+        task_id = tasks.create_task(f"{name} 的任务")["task_id"]
+        tools = {
+            definition.name: definition
+            for definition in build_tools(drafts=drafts, tasks=tasks, gmail=MockGmailClient())
+        }
+        toolsets.append((name, task_id, drafts, tools))
+
+    saved = []
+    for name, task_id, _, tools in toolsets:
+        saved.append(
+            tools["gmail_prepare_reply"](
+                task_id=task_id,
+                source_message_id="msg_invite_001",
+                thread_id="thread_invite_001",
+                to=["alice@example.com"],
+                subject="Re: 邀请",
+                body=f"{name} 的草稿。",
+            )
+        )
+
+    # 同一原邮件在两套装配里各自建立操作，说明去重作用于各自的存储而不是进程全局。
+    assert saved[0]["operation_id"] != saved[1]["operation_id"]
+    for (name, _, drafts, _), result in zip(toolsets, saved, strict=True):
+        assert drafts.get_reply_draft(result["operation_id"])["body"] == f"{name} 的草稿。"
+
+    # 未接入 Gmail 时工具清单不变，调用按依赖未接入拒绝，不退回模拟邮箱。
+    unassembled = {
+        definition.name: definition
+        for definition in build_tools(drafts=ReplyDraftStore(None), tasks=SessionStore())
+    }
+    assert unassembled.keys() == toolsets[0][3].keys()
+    with pytest.raises(DependencyUnavailableError):
+        unassembled["gmail_get_message"](message_id="msg_invite_001")

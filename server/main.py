@@ -1,7 +1,7 @@
 """服务装配：创建 FastAPI 应用、初始化数据库、恢复中断工作并注册路由。
 
-Agent 网关（Qoder Agent SDK）、Gmail 与新邮件检测的真实实现由 B 接入；本模块只做装配，
-未接入时对应调用直接报错，不伪造行为。
+依赖按参数注入，进程内不使用工具或存储的全局单例：Agent 网关、邮件校验、发送函数与新邮件
+来源未接入时，相关调用直接报错，不伪造行为。
 """
 
 from collections.abc import AsyncIterator
@@ -25,9 +25,16 @@ def create_app(
     validate_reply_draft=None,
     send_reply=None,
     mail_source: MailSource | None = None,
+    tasks: SessionStore | None = None,
+    drafts: ReplyDraftStore | None = None,
 ) -> FastAPI:
-    tasks = SessionStore()
-    drafts = ReplyDraftStore(validate_reply_draft)
+    """装配应用。
+
+    `tasks` / `drafts` 供调用方先行构造：Agent 工具与 HTTP 必须共用同一组存储实例，
+    而工具要在构造 gateway 之前绑定依赖。未传入时按 `validate_reply_draft` 就地构造。
+    """
+    tasks = tasks if tasks is not None else SessionStore()
+    drafts = drafts if drafts is not None else ReplyDraftStore(validate_reply_draft)
     confirmations = ConfirmationService(send_reply)
     agent = GatewayRuntime(gateway, confirmations=confirmations)
 
@@ -61,25 +68,33 @@ def create_production_app() -> FastAPI:
     import os
 
     from server.agent.sdk_client import QoderGateway
+    from server.agent.toolset import build_tools
     from server.background import GmailSource
     from server.config import get_settings
     from server.tools.gmail.client import GoogleApiGmailClient
-    from server.tools.gmail.protocol import set_draft_storage
     from server.tools.gmail.sender import send_reply
     from server.tools.gmail.validator import validate_reply_draft
 
     settings = get_settings()
     os.environ["QODERCN_CONFIG_DIR"] = str(settings.data_dir / "agent" / "config-cn")
-    set_draft_storage(ReplyDraftStore(validate_reply_draft))
+    tasks = SessionStore()
+    drafts = ReplyDraftStore(validate_reply_draft)
     # 检测客户端仅在自己的顺序轮询中使用；工具与发送各自创建客户端，避免共享 HTTP 连接。
+    tools = build_tools(
+        drafts=drafts,
+        tasks=tasks,
+        gmail=GoogleApiGmailClient(settings.gmail_credentials_file, settings.gmail_token_file),
+    )
     source = GmailSource(
         GoogleApiGmailClient(settings.gmail_credentials_file, settings.gmail_token_file)
     )
     return create_app(
-        gateway=QoderGateway(),
+        gateway=QoderGateway(tools),
         validate_reply_draft=validate_reply_draft,
         send_reply=send_reply,
         mail_source=source,
+        tasks=tasks,
+        drafts=drafts,
     )
 
 

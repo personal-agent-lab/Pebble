@@ -3,14 +3,18 @@
 严格遵守安全红线：
 - 查询工具标记为 READONLY，模型可自主调用；
 - 外部写操作（发送邮件）不在此注册，模型不可见。
+
+客户端与存储是仅关键字参数：由 `server/agent/toolset.py` 在装配时绑定，既不进入模型 schema，
+也不在模块内查找全局单例；未装配的依赖在调用时直接拒绝，不退回模拟实现。
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from server.tools.gmail.client import BaseGmailClient, get_gmail_client
-from server.tools.gmail.protocol import DraftStorageProtocol, get_draft_storage
+from server.sessions.service import SessionStore
+from server.tools.gmail.client import BaseGmailClient
+from server.tools.gmail.service import ReplyDraftStore
 from server.tools.gmail.validator import validate_reply_draft
 from server.tools.registry import SideEffect, tool
 
@@ -26,17 +30,17 @@ from server.tools.registry import SideEffect, tool
 def query_emails(
     query: str,
     max_results: int = 10,
-    client: BaseGmailClient | None = None,
+    *,
+    client: BaseGmailClient,
 ) -> list[dict[str, Any]]:
     """搜索邮件列表并返回匹配的摘要信息。"""
-    active_client = client or get_gmail_client()
-    search_results = active_client.search_messages(query, max_results=max_results)
+    search_results = client.search_messages(query, max_results=max_results)
 
     email_summaries: list[dict[str, Any]] = []
     for item in search_results:
         msg_id = item["id"]
         try:
-            msg = active_client.get_message(msg_id)
+            msg = client.get_message(msg_id)
             email_summaries.append(
                 {
                     "id": msg.id,
@@ -93,11 +97,11 @@ def format_thread_transcript(messages: list[Any]) -> str:
 )
 def get_email_thread(
     thread_id: str,
-    client: BaseGmailClient | None = None,
+    *,
+    client: BaseGmailClient,
 ) -> dict[str, Any]:
     """获取线程内全部往来邮件详情，生成时间线对话记录注入模型上下文。"""
-    active_client = client or get_gmail_client()
-    messages = active_client.get_thread(thread_id)
+    messages = client.get_thread(thread_id)
 
     structured_messages = [
         {
@@ -130,11 +134,11 @@ def get_email_thread(
 )
 def get_email_detail(
     message_id: str,
-    client: BaseGmailClient | None = None,
+    *,
+    client: BaseGmailClient,
 ) -> dict[str, Any]:
     """获取单封邮件完整信息。"""
-    active_client = client or get_gmail_client()
-    msg = active_client.get_message(message_id)
+    msg = client.get_message(message_id)
 
     return {
         "id": msg.id,
@@ -166,7 +170,8 @@ def prepare_reply(
     to: list[str],
     subject: str,
     body: str,
-    storage: DraftStorageProtocol | None = None,
+    *,
+    drafts: ReplyDraftStore,
 ) -> dict[str, Any]:
     """拟定邮件回复草稿，经过业务规则校验后持久化，返回操作标识与审阅状态。"""
     # 1. 核心复用：调用纯函数业务规则校验
@@ -184,9 +189,8 @@ def prepare_reply(
             "validation_errors": val_res["errors"],
         }
 
-    # 2. 校验通过，调用持久化协议保存草稿（由 A 提供，自带去重机制）
-    active_storage = storage or get_draft_storage()
-    saved = active_storage.save_reply_draft(
+    # 2. 校验通过，交给草稿存储保存（自带按原邮件去重与版本管理）
+    saved = drafts.save_reply_draft(
         task_id=task_id,
         source_message_id=source_message_id,
         thread_id=thread_id,
@@ -220,21 +224,31 @@ def prepare_reply(
 
 
 @tool(name="gmail_read_reply_draft", side_effect=SideEffect.READONLY)
-def read_reply_draft(task_id: str, operation_id: str) -> dict:
+def read_reply_draft(
+    task_id: str,
+    operation_id: str,
+    *,
+    drafts: ReplyDraftStore,
+    tasks: SessionStore,
+) -> dict:
     """读取当前任务的完整已保存草稿；修改前先读取最新内容与版本。"""
-    from server.sessions.service import SessionStore
-
-    if operation_id not in {
-        op["operation_id"] for op in SessionStore().list_task_operations(task_id)
-    }:
+    if operation_id not in {op["operation_id"] for op in tasks.list_task_operations(task_id)}:
         raise ValueError("草稿不属于当前任务")
-    return get_draft_storage().get_reply_draft(operation_id)
+    return drafts.get_reply_draft(operation_id)
 
 
 @tool(name="gmail_update_reply_draft", side_effect=SideEffect.LOCAL_WRITE)
 def update_reply_draft(
-    task_id: str, operation_id: str, expected_version: int, to: list[str], subject: str, body: str
+    task_id: str,
+    operation_id: str,
+    expected_version: int,
+    to: list[str],
+    subject: str,
+    body: str,
+    *,
+    drafts: ReplyDraftStore,
+    tasks: SessionStore,
 ) -> dict:
     """按用户修改意见保存完整新版本，不发送；必须使用刚读取的当前版本。"""
-    read_reply_draft(task_id, operation_id)
-    return get_draft_storage().update_reply_draft(operation_id, expected_version, to, subject, body)
+    read_reply_draft(task_id, operation_id, drafts=drafts, tasks=tasks)
+    return drafts.update_reply_draft(operation_id, expected_version, to, subject, body)

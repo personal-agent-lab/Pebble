@@ -8,19 +8,15 @@ from server.tools.gmail.client import (
     SendReplyResult,
     get_gmail_client,
 )
-from server.tools.gmail.protocol import (
-    DraftSaveResult,
-    DraftStorageProtocol,
-    InMemoryDraftStorage,
-    get_draft_storage,
-    set_draft_storage,
-)
+from server.tools.gmail.service import ReplyDraftStore
 from server.tools.gmail.tools import (
     format_thread_transcript,
     get_email_detail,
     get_email_thread,
     prepare_reply,
     query_emails,
+    read_reply_draft,
+    update_reply_draft,
 )
 from server.tools.gmail.validator import (
     ValidationError,
@@ -30,22 +26,20 @@ from server.tools.gmail.validator import (
 
 __all__ = [
     "BaseGmailClient",
-    "DraftSaveResult",
-    "DraftStorageProtocol",
     "GmailMessage",
     "GoogleApiGmailClient",
-    "InMemoryDraftStorage",
     "MockGmailClient",
+    "ReplyDraftStore",
     "SendReplyResult",
     "ValidationError",
     "ValidationResult",
     "format_thread_transcript",
-    "get_draft_storage",
     "get_email_detail",
     "get_email_thread",
     "get_gmail_client",
     "prepare_reply",
     "query_emails",
-    "set_draft_storage",
+    "read_reply_draft",
+    "update_reply_draft",
     "validate_reply_draft",
 ]

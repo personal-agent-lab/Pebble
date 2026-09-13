@@ -96,7 +96,11 @@ class ToolRegistry:
 
     @staticmethod
     def _generate_parameters_schema(fn: Callable[..., Any]) -> dict[str, Any]:
-        """根据函数类型注解与默认值，自动生成轻量 JSON Schema 描述。"""
+        """根据函数类型注解与默认值，自动生成轻量 JSON Schema 描述。
+
+        仅关键字参数是装配注入的依赖（客户端、存储），由 `agent/toolset.py` 在装配时绑定，
+        不进入模型可见的 schema。模型可见参数一律声明为位置或关键字参数。
+        """
         sig = inspect.signature(fn)
         type_hints = get_type_hints(fn) if hasattr(fn, "__annotations__") else {}
 
@@ -113,8 +117,7 @@ class ToolRegistry:
         }
 
         for param_name, param in sig.parameters.items():
-            # 忽略内部注入参数（如 client, settings 等）
-            if param_name in ("self", "cls", "client", "storage"):
+            if param_name in ("self", "cls") or param.kind is inspect.Parameter.KEYWORD_ONLY:
                 continue
 
             param_type = type_hints.get(param_name, Any)
