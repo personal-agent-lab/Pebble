@@ -14,6 +14,11 @@ from server.tools.gmail.tools import (
     get_email_thread,
     query_emails,
 )
+from server.tools.gmail.validator import (
+    ValidationError,
+    ValidationResult,
+    validate_reply_draft,
+)
 
 __all__ = [
     "BaseGmailClient",
@@ -21,9 +26,12 @@ __all__ = [
     "GoogleApiGmailClient",
     "MockGmailClient",
     "SendReplyResult",
+    "ValidationError",
+    "ValidationResult",
     "format_thread_transcript",
     "get_email_detail",
     "get_email_thread",
     "get_gmail_client",
     "query_emails",
+    "validate_reply_draft",
 ]
