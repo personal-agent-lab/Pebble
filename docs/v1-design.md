@@ -62,7 +62,7 @@ Pebble/
 │   │   ├── routes.py         # 请求结构、服务依赖与路由：健康检查、任务、对话、确认
 │   │   └── errors.py         # 业务异常到 HTTP 响应的映射
 │   ├── gateway/              # 应用后台运行，不依赖 HTTP 请求生命周期
-│   │   ├── runtime.py        # 输入登记、调用调度、事件订阅、恢复与结果交回
+│   │   ├── runtime.py        # 输入登记、调用调度、事件订阅、恢复、结果交回与邮件来源插孔
 │   │   └── agent_contract.py # A/B 调用接口与事件类型
 │   ├── errors.py             # 跨模块共享的业务异常
 │   ├── agent/                # 不实现自有循环，只装配 SDK
@@ -73,7 +73,9 @@ Pebble/
 │   ├── tools/                # 统一注册 + 按服务分目录实现
 │   │   ├── registry.py       # 工具定义、副作用声明与统一注册
 │   │   ├── gmail/
-│   │   │   ├── tools.py      # 查询、同步游标、准备回复、核实发送结果
+│   │   │   ├── tools.py      # 给模型的查询与草稿工具
+│   │   │   ├── service.py    # 回复草稿的业务校验、存储与版本去重
+│   │   │   ├── sender.py     # 确认后发送与结果核实，只由 Confirmation 调用
 │   │   │   └── client.py     # Gmail 协议与认证
 │   │   ├── calendar/
 │   │   │   ├── tools.py      # 查询、冲突检查、准备创建
@@ -355,8 +357,8 @@ B 线（资料与能力成长）：
 
 ### Gateway 当前实现
 
-新邮件由 B 的检测程序交给 `gateway/runtime.py` 的内部入口，邮件去重关联保存在
-`mail_task_links`，由邮件 repository 读写。创建任务、邮件关联及首轮调用在同一写事务完成。
+新邮件由检测程序交给 `gateway/runtime.py` 的内部入口，邮件去重关联保存在
+`mail_task_links`，由该模块自己读写。创建任务、邮件关联及首轮调用在同一写事务完成。
 新邮件输入只携带邮件标识，摘要、建议及后续工具选择由 B 决定，不固化为邮件处理流水线。
 
 `gateway/runtime.py` 使用 FastAPI lifespan 所在事件循环管理异步任务，保留任务引用；每个任务
@@ -370,13 +372,14 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 回传共用事务。Confirmation 依赖 sessions 的调用记录存取，不依赖 SDK 或 api 实现。
 Agent 历史由 B 的 read_history 返回；A 不保存另一份模型对话历史。
 
-新邮件来源是装配插孔：`gateway/mail_source.py` 的 `MailSource` 只有 `start` / `stop`，
+新邮件来源是装配插孔：`gateway/runtime.py` 的 `MailSource` 只有 `start` / `stop`，
 由 `create_app(mail_source=...)` 传入，应用在恢复中断调用之后启动、关闭前停止。检测逻辑不在
 其中，真实 Gmail 检测（`background.py`）实现同一接口；默认装配没有邮件来源，不伪造邮件。
 
 ### 工具装配当前实现
 
-工具实现把 Gmail 客户端、草稿存储和任务存储声明为仅关键字参数，`agent/toolset.py` 在装配期
+回复草稿的业务校验是本仓纯函数，不设注入接口：`ReplyDraftStore` 直接调用，测试需要控制校验
+时机或结果时替换模块属性。工具实现把 Gmail 客户端、草稿存储和任务存储声明为仅关键字参数，`agent/toolset.py` 在装配期
 用闭包绑定，registry 不把仅关键字参数放进模型可见的 schema。进程内没有工具依赖的全局单例：
 `create_app` 接收已构造的存储，工具与 HTTP 共用同一实例，同一进程可并存互不影响的装配。
 未接入 Gmail 时工具清单不变，调用按依赖未接入拒绝，不退回模拟邮箱。

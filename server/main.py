@@ -13,8 +13,7 @@ from server.api.errors import install_error_handlers
 from server.api.routes import router
 from server.approval.service import ConfirmationService, recover_interrupted_executions
 from server.db import init_db
-from server.gateway.mail_source import MailSource
-from server.gateway.runtime import GatewayRuntime
+from server.gateway.runtime import GatewayRuntime, MailSource
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import ReplyDraftStore
 

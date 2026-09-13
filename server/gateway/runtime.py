@@ -8,6 +8,7 @@ import json
 import logging
 import sqlite3
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
 from server.approval.service import ConfirmationService
@@ -299,3 +300,20 @@ class GatewayRuntime:
         self.events.publish(
             row["task_id"], {"run_id": row["run_id"], "type": "error", "message": message}
         )
+
+
+class MailSource(Protocol):
+    """新邮件来源的装配插孔：`create_app(mail_source=...)` 传入，恢复中断调用之后启动。
+
+    检测逻辑不在这里：Gmail 同步游标与协议处理属于 Gmail 工具（`server/background.py`），
+    检测到未处理邮件后调用 `accept_new_mail`，去重与任务创建仍由本模块保证。
+    默认装配没有邮件来源，不伪造邮件。
+    """
+
+    async def start(self, agent: GatewayRuntime) -> None:
+        """在应用事件循环中开始检测；实现自行持有后台任务。"""
+        ...
+
+    async def stop(self) -> None:
+        """停止检测并等待后台任务结束。"""
+        ...
