@@ -53,7 +53,7 @@ def is_valid_email_address(addr: str) -> bool:
 def validate_reply_draft(
     source_message_id: str,
     thread_id: str,
-    to: list[str] | str,
+    to: list[str],
     subject: str,
     body: str,
 ) -> ValidationResult:
@@ -62,7 +62,7 @@ def validate_reply_draft(
     Args:
         source_message_id: 原邮件标识（供定位与去重）
         thread_id: Gmail 邮件线程 ID
-        to: 收件人地址列表（或逗号分隔字符串）
+        to: 收件人地址列表
         subject: 回复主题
         body: 回复正文
 
@@ -103,13 +103,7 @@ def validate_reply_draft(
         )
 
     # 2. 校验 to 必须为非空且符合 RFC 5322 格式的有效邮箱地址列表
-    recipient_list: list[str] = []
-    if isinstance(to, list):
-        recipient_list = [str(addr).strip() for addr in to if str(addr).strip()]
-    elif isinstance(to, str):
-        recipient_list = [addr.strip() for addr in to.split(",") if addr.strip()]
-
-    if not recipient_list:
+    if not isinstance(to, list) or not to:
         errors.append(
             {
                 "field": "to",
@@ -117,7 +111,7 @@ def validate_reply_draft(
             }
         )
     else:
-        for addr in recipient_list:
+        for addr in to:
             if not is_valid_email_address(addr):
                 errors.append(
                     {

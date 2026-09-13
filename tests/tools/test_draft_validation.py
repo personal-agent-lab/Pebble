@@ -29,7 +29,7 @@ def test_validate_reply_draft_valid_multiple_and_rfc_addresses() -> None:
     assert res["errors"] == []
 
 
-def test_validate_reply_draft_valid_comma_separated_string() -> None:
+def test_validate_reply_draft_rejects_string_recipients() -> None:
     res = validate_reply_draft(
         source_message_id="msg_123",
         thread_id="thread_456",
@@ -38,8 +38,8 @@ def test_validate_reply_draft_valid_comma_separated_string() -> None:
         body="正文",
     )
 
-    assert res["valid"] is True
-    assert res["errors"] == []
+    assert res["valid"] is False
+    assert [error["field"] for error in res["errors"]] == ["to"]
 
 
 def test_validate_reply_draft_missing_source_or_thread_id() -> None:
