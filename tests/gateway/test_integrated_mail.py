@@ -240,7 +240,7 @@ def test_sdk_history_reads_its_persisted_transcript(settings, monkeypatch):
     (project / f"{sid}.jsonl").write_text("\n".join(json.dumps(e) for e in entries))
     history = asyncio.run(
         sdk_client.QoderGateway(
-            build_tools(drafts=ReplyDraftStore(), tasks=SessionStore())
+            build_tools(drafts=ReplyDraftStore(), tasks=SessionStore(), gmail=MockGmailClient())
         ).read_history(task_id="task", sdk_session_id=sid)
     )
     assert history == [
@@ -259,7 +259,7 @@ def test_custom_model_and_new_mail_permissions(settings, monkeypatch):
         _env_file=None,
     )
     monkeypatch.setattr(sdk_client, "get_settings", lambda: configured)
-    tools = build_tools(drafts=ReplyDraftStore(), tasks=SessionStore())
+    tools = build_tools(drafts=ReplyDraftStore(), tasks=SessionStore(), gmail=MockGmailClient())
     options = sdk_client.build_options(tools, "task", allow_drafts=False)
     assert options.resolve_model(None)["model"] == {
         "provider": "test-provider",
@@ -299,7 +299,10 @@ def test_external_write_tools_are_never_exposed_to_the_model(settings, monkeypat
         """真实发送邮件；绝不注册给模型。"""
         raise AssertionError("模型不应当能调用外部写工具")
 
-    tools = [*build_tools(drafts=ReplyDraftStore(), tasks=SessionStore()), send_now]
+    tools = [
+        *build_tools(drafts=ReplyDraftStore(), tasks=SessionStore(), gmail=MockGmailClient()),
+        send_now,
+    ]
     for allow_drafts in (True, False):
         options = sdk_client.build_options(tools, "task", allow_drafts=allow_drafts)
         assert not any("send" in name for name in options.allowed_tools)
@@ -308,8 +311,6 @@ def test_external_write_tools_are_never_exposed_to_the_model(settings, monkeypat
 
 def test_tools_bind_assembled_dependencies_without_global_state(settings, tmp_path):
     """两套装配各自持有存储：工具不查全局，同一进程可并存互不影响的应用。"""
-    from server.errors import DependencyUnavailableError
-
     toolsets = []
     for name in ("left", "right"):
         path = tmp_path / f"{name}.db"
@@ -340,12 +341,3 @@ def test_tools_bind_assembled_dependencies_without_global_state(settings, tmp_pa
     assert saved[0]["operation_id"] != saved[1]["operation_id"]
     for (name, _, drafts, _), result in zip(toolsets, saved, strict=True):
         assert drafts.get_reply_draft(result["operation_id"])["body"] == f"{name} 的草稿。"
-
-    # 未接入 Gmail 时工具清单不变，调用按依赖未接入拒绝，不退回模拟邮箱。
-    unassembled = {
-        definition.name: definition
-        for definition in build_tools(drafts=ReplyDraftStore(), tasks=SessionStore())
-    }
-    assert unassembled.keys() == toolsets[0][3].keys()
-    with pytest.raises(DependencyUnavailableError):
-        unassembled["gmail_get_message"](message_id="msg_invite_001")

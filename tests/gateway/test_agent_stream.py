@@ -22,7 +22,9 @@ async def collect(stream):
 
 def gateway() -> sdk_client.QoderGateway:
     """装配一套只用于事件流断言的网关；本组测试不调用工具，依赖不接触数据库。"""
-    return sdk_client.QoderGateway(build_tools(drafts=ReplyDraftStore(), tasks=SessionStore()))
+    return sdk_client.QoderGateway(
+        build_tools(drafts=ReplyDraftStore(), tasks=SessionStore(), gmail=MockGmailClient())
+    )
 
 
 def install_sdk_stub(monkeypatch, messages):
@@ -132,7 +134,8 @@ def test_schema_hides_injected_dependencies_and_types_recipients():
     schema = prepare_reply.parameters_schema
     assert "drafts" not in schema["properties"]
     assert schema["properties"]["to"] == {"type": "array", "items": {"type": "string"}}
-    for definition in build_tools(drafts=ReplyDraftStore(), tasks=SessionStore()):
+    tools = build_tools(drafts=ReplyDraftStore(), tasks=SessionStore(), gmail=MockGmailClient())
+    for definition in tools:
         assert not {"client", "drafts", "tasks"} & set(definition.parameters_schema["properties"])
 
 
