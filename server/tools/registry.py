@@ -81,8 +81,6 @@ class ToolRegistry:
                 emits_draft_saved=emits_draft_saved,
             )
 
-            # 附加元数据到原函数
-            fn.__pebble_tool__ = tool_def
             self._tools[tool_name] = tool_def
             return tool_def
 
