@@ -1,7 +1,7 @@
 """工具注册中心：声明、schema 生成与全局注册。
 
-模型可见范围不在注册表这一层，由 `exposed_tools` 按每轮允许的副作用筛选，
-在 tests/gateway/test_integrated_mail.py 覆盖。
+模型可见范围不在注册表这一层，由 `server/agent/toolset.py` 按每轮允许的副作用筛选，
+在 tests/gateway/test_agent_stream.py 覆盖。
 """
 
 from server.tools.registry import SideEffect, ToolRegistry, default_registry, tool

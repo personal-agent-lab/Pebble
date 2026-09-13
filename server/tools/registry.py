@@ -6,7 +6,8 @@
 - 装饰器 @tool 用于声明与注册工具。
 
 注册表是装配的唯一来源：`agent/toolset.py` 遍历已注册工具绑定依赖，模型可见范围由
-`agent/sdk_client.py` 按本轮允许的副作用筛选。注册表本身不做筛选，避免两套宽严不同的边界。
+`agent/toolset.py` 的 `exposed_tools` 按本轮允许的副作用筛选。注册表本身不做筛选，
+避免两套宽严不同的边界。
 """
 
 from __future__ import annotations
@@ -95,7 +96,7 @@ class ToolRegistry:
         """全部已注册工具，按注册顺序。
 
         模型可见范围不在这里决定：注册表只记录声明，装配交给 `agent/toolset.py`，
-        每轮的允许集合由 `agent/sdk_client.py` 按副作用声明筛选，全流程只有那一处筛选。
+        每轮的允许集合由它的 `exposed_tools` 按副作用声明筛选，全流程只有那一处筛选。
         """
         return list(self._tools.values())
 

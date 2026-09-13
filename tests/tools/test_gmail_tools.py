@@ -20,8 +20,8 @@ def test_gmail_tools_registered_as_readonly() -> None:
 
 
 def test_query_emails_returns_summaries() -> None:
-    client = MockGmailClient()
-    results = query_emails(query="评审", client=client)
+    gmail = MockGmailClient()
+    results = query_emails(query="评审", gmail=gmail)
 
     assert len(results) == 1
     item = results[0]
@@ -33,9 +33,9 @@ def test_query_emails_returns_summaries() -> None:
 
 
 def test_get_email_thread_returns_structured_and_transcript_context() -> None:
-    client = MockGmailClient()
+    gmail = MockGmailClient()
     # 模拟在线程内已有一轮回复
-    client.raw_send_reply(
+    gmail.raw_send_reply(
         to=["alice@example.com"],
         subject="Re: 项目进展评审与架构讨论邀请",
         body="确认可以按时出席会议。",
@@ -43,7 +43,7 @@ def test_get_email_thread_returns_structured_and_transcript_context() -> None:
         in_reply_to_rfc_id="<invite-001@example.com>",
     )
 
-    thread_data = get_email_thread(thread_id="thread_invite_001", client=client)
+    thread_data = get_email_thread(thread_id="thread_invite_001", gmail=gmail)
 
     assert thread_data["thread_id"] == "thread_invite_001"
     assert thread_data["total_messages"] == 2
@@ -70,8 +70,8 @@ def test_format_thread_transcript_empty() -> None:
 
 
 def test_get_email_detail_returns_single_message() -> None:
-    client = MockGmailClient()
-    detail = get_email_detail(message_id="msg_invite_001", client=client)
+    gmail = MockGmailClient()
+    detail = get_email_detail(message_id="msg_invite_001", gmail=gmail)
 
     assert detail["id"] == "msg_invite_001"
     assert detail["from"] == "Alice <alice@example.com>"

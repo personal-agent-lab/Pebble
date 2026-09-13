@@ -32,13 +32,13 @@ def build_fixture_app() -> FastAPI:
     gateway = FakeAgentGateway()
     app = create_app(gateway=gateway, send_reply=send)
 
-    async def reply(*, task_id, sdk_session_id, message):
-        yield {"type": "session", "sdk_session_id": sdk_session_id or "test-session"}
-        operations = app.state.tasks.list_task_operations(task_id)
+    async def reply(turn):
+        yield {"type": "session", "sdk_session_id": turn.sdk_session_id or "test-session"}
+        operations = app.state.tasks.list_task_operations(turn.task_id)
         fields = {
             "to": ["a@example.com", "b@example.com"],
             "subject": " 回复：邀请 ",
-            "body": message,
+            "body": turn.message,
         }
         if operations:
             operation = operations[0]
@@ -47,7 +47,7 @@ def build_fixture_app() -> FastAPI:
             )
         else:
             saved = app.state.drafts.save_reply_draft(
-                task_id, "fixture-mail", "fixture-thread", **fields
+                turn.task_id, "fixture-mail", "fixture-thread", **fields
             )
         yield {
             "type": "draft_saved",

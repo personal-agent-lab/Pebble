@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from server.agent.mcp import MCP_MOUNT_PATH, ToolServer
 from server.api.errors import install_error_handlers
 from server.api.routes import router
 from server.approval.service import ConfirmationService
@@ -26,6 +27,7 @@ def create_app(
     mail_source: MailSource | None = None,
     tasks: SessionStore | None = None,
     drafts: ReplyDraftStore | None = None,
+    tool_server: ToolServer | None = None,
 ) -> FastAPI:
     """装配应用。
 
@@ -53,6 +55,9 @@ def create_app(
             await agent.close()
 
     app = FastAPI(title="Pebble", lifespan=lifespan)
+    if tool_server is not None:
+        # 工具端点挂在 /api 之外：CLI 子进程按回环地址直连，不经过业务路由与错误处理。
+        app.mount(MCP_MOUNT_PATH, tool_server)
     app.state.tasks = tasks
     app.state.drafts = drafts
     app.state.confirmations = confirmations
@@ -64,31 +69,33 @@ def create_app(
 
 
 def create_production_app() -> FastAPI:
-    import os
     from functools import partial
 
-    from server.agent.sdk_client import QoderGateway
-    from server.agent.toolset import build_tools
+    from server.agent.client import QoderGateway
+    from server.agent.toolset import ToolDeps
     from server.config import get_settings
     from server.tools.gmail.client import create_gmail_client
     from server.tools.gmail.sender import send_reply, verify_reply
     from server.tools.gmail.sync import GmailSource
 
     settings = get_settings()
-    os.environ["QODERCN_CONFIG_DIR"] = str(settings.data_dir / "agent" / "config-cn")
     tasks = SessionStore()
     drafts = ReplyDraftStore()
     # 三处用途各自构造客户端：检测在自己的顺序轮询里，工具随模型并发调用，发送与核实同为
     # Confirmation 串行调用故共用一个；不共享其余 HTTP 连接，凭证缺失在这里就失败。
-    tools = build_tools(drafts=drafts, tasks=tasks, gmail=create_gmail_client(settings))
+    tool_client = create_gmail_client(settings)
     confirmation_client = create_gmail_client(settings)
+    tool_server = ToolServer()
     return create_app(
-        gateway=QoderGateway(tools),
+        gateway=QoderGateway(
+            ToolDeps(drafts=drafts, tasks=tasks, gmail=tool_client), tool_server, settings=settings
+        ),
         send_reply=partial(send_reply, client=confirmation_client),
         verify_reply=partial(verify_reply, client=confirmation_client),
         mail_source=GmailSource(create_gmail_client(settings)),
         tasks=tasks,
         drafts=drafts,
+        tool_server=tool_server,
     )
 
 

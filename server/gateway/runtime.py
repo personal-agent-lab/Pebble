@@ -7,10 +7,13 @@ import asyncio
 import json
 import logging
 import sqlite3
+from contextlib import aclosing
 from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
+from server.agent.context import Material
+from server.agent.toolset import TurnKind
 from server.approval.service import ConfirmationService
 from server.db import session, write
 from server.errors import DependencyUnavailableError
@@ -18,11 +21,13 @@ from server.gateway.agent_contract import (
     AgentEvent,
     AgentGateway,
     AgentProtocolError,
+    Turn,
     checked_event,
 )
 from server.sessions import repository as operations
 from server.sessions import runs as repo
 from server.sessions.service import SessionStore, timestamp
+from server.tools.gmail.trigger import NEW_MAIL_GOAL, new_mail_content
 
 
 class EventHub:
@@ -48,9 +53,6 @@ class EventHub:
         return len(self._subscribers.get(task_id, ()))
 
 
-NEW_MAIL_GOAL = "处理新收到的邮件"
-
-
 # mail_task_links 只由新邮件入口读写：同一封邮件重复通知时找回原任务，不重复建任务。
 def find_task_link(conn: sqlite3.Connection, source_message_id: str) -> str | None:
     row = conn.execute(
@@ -66,6 +68,21 @@ def insert_task_link(
 
 
 INTERRUPTED_REASON = "上次进程退出时调用尚未结束，已记录中断"
+
+EXECUTION_RESULT_MESSAGE = "系统已完成你此前请求的操作，执行结果见系统提示。请向用户简要汇报。"
+EXECUTION_RESULT_MATERIAL_TITLE = "执行结果（外部操作已结束，请据此向用户汇报）"
+
+
+def execution_result_content(
+    *, operation_id: str, version: int, result: dict
+) -> tuple[str, tuple[Material, ...]]:
+    """执行结果回传轮的消息与材料：措辞属于确认子系统，与具体触发域无关。"""
+    return EXECUTION_RESULT_MESSAGE, (
+        Material(
+            EXECUTION_RESULT_MATERIAL_TITLE,
+            {"operation_id": operation_id, "version": version, "result": result},
+        ),
+    )
 
 
 FINISHED_KINDS = ("done", "error")
@@ -242,38 +259,51 @@ class GatewayRuntime:
             return repo.claim(conn, run_id, timestamp())
 
     def _invoke(self, row: dict, payload: dict):
+        """按调用种类组装一轮输入：触发域提供消息与材料，这里只负责构造 Turn。"""
         task_id = row["task_id"]
         sdk_session_id = self._sessions.get_task(task_id)["sdk_session_id"]
         if row["kind"] == repo.KIND_NEW_MAIL:
-            return self.gateway.stream_new_mail(
+            message, materials = new_mail_content(**payload)
+        elif row["kind"] == repo.KIND_MESSAGE:
+            message, materials = payload["message"], ()
+        else:
+            delivery = (
+                self.confirmations.get_agent_result(payload["operation_id"])
+                if self.confirmations is not None
+                else None
+            )
+            if delivery is None:
+                raise AgentProtocolError("回传输入不可用：结果或会话缺失")
+            # 回传目标以确认记录为准：共享操作回到执行任务与其会话，而非发起任务。
+            task_id = delivery["task_id"]
+            sdk_session_id = delivery["sdk_session_id"]
+            message, materials = execution_result_content(
+                operation_id=delivery["operation_id"],
+                version=delivery["version"],
+                result=delivery["result"],
+            )
+        return self.gateway.stream_turn(
+            Turn(
+                kind=TurnKind(row["kind"]),
                 task_id=task_id,
                 sdk_session_id=sdk_session_id,
-                source_message_id=payload["source_message_id"],
-                thread_id=payload["thread_id"],
+                message=message,
+                materials=materials,
             )
-        if row["kind"] == repo.KIND_MESSAGE:
-            return self.gateway.stream_message(
-                task_id=task_id, sdk_session_id=sdk_session_id, message=payload["message"]
-            )
-        delivery = (
-            self.confirmations.get_agent_result(payload["operation_id"])
-            if self.confirmations is not None
-            else None
         )
-        if delivery is None:
-            raise AgentProtocolError("回传输入不可用：结果或会话缺失")
-        return self.gateway.stream_execution_result(**delivery)
 
     async def _stream(self, row: dict) -> None:
         terminal = None
-        async for raw in self._invoke(row, json.loads(row["input"])):
-            if terminal is not None:
-                raise AgentProtocolError("结束事件之后仍有事件")
-            event = checked_event(raw)
-            if event["type"] in FINISHED_KINDS:
-                terminal = event
-            else:
-                self._forward(row, event)
+        # 显式关闭事件流：异常路径也要走网关自己的清理（如撤销本轮登记的工具端点）。
+        async with aclosing(self._invoke(row, json.loads(row["input"]))) as stream:
+            async for raw in stream:
+                if terminal is not None:
+                    raise AgentProtocolError("结束事件之后仍有事件")
+                event = checked_event(raw)
+                if event["type"] in FINISHED_KINDS:
+                    terminal = event
+                else:
+                    self._forward(row, event)
         if terminal is None:
             raise AgentProtocolError("事件流未给出 done 或 error")
         self._forward(row, terminal)

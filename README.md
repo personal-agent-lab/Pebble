@@ -145,67 +145,15 @@ npm run build
 ## 验证范围
 
 - `tests/storage/`：真实 SQLite 的版本、并发、回滚、恢复与确认去重。
-- `tests/gateway/`：后台调度、SDK 事件和工具边界、执行结果回传。
+- `tests/gateway/`：后台调度、SDK 选项装配与事件映射、工具端点与工具边界、执行结果回传。
 - `tests/api/test_http_flow.py`：独立进程的 HTTP/SSE、断线后继续执行与重启。
-- `tests/api/test_manual_flow.py`：手动验收装配的健康检查、七步邮件流程与历史恢复。
 - `tests/tools/`：邮件解析、草稿校验、报文构建与发送结果核实。
 
-测试只替换外部服务或 Agent 边界，不连接真实邮箱。SDK 模型响应与 Gmail 投递仍须用明确授权
-的账号和内容验收；测试通过不代表真实邮件发送成功。
-
-## 手动跑通完整邮件流程
-
-在网页上按业务顺序走一遍七步：收到新邮件 → 摘要和建议 → 要求准备回信 → 生成草稿 →
-多轮修改与直接编辑 → 确认发送 → 展示结果并交回 Agent。需要三个东西：替身后端、前端开发
-服务器，以及投递邮件的命令。任务、草稿版本、确认执行、SSE 与 SQLite 都是真的；邮件内容、
-摘要建议、草稿改写和 Gmail 发送是替身，不会真实发信。
-
-后端（仓库根执行；数据目录另给一个，避免和 `.data` 混在一起）：
-
-```bash
-PYTHONPATH=. PEBBLE_DATA_DIR=/tmp/pebble-manual PEBBLE_TEST_SEND_DELAY=2 uv run --project server uvicorn tests.support.manual_backend:app --host 127.0.0.1 --port 8000
-```
-
-前端按「启动」一节运行 `npm run dev`；端口 8000 与 Vite 默认代理目标一致，页面在
-`http://127.0.0.1:5173`。
-
-投递邮件（另开终端，`PEBBLE_DATA_DIR` 与后端一致）：
-
-```bash
-PYTHONPATH=. PEBBLE_DATA_DIR=/tmp/pebble-manual uv run --project server python -m tests.mail_inbox list
-```
-
-```bash
-PYTHONPATH=. PEBBLE_DATA_DIR=/tmp/pebble-manual uv run --project server python -m tests.mail_inbox deliver invite
-```
-
-现写一封：
-
-```bash
-PYTHONPATH=. PEBBLE_DATA_DIR=/tmp/pebble-manual uv run --project server python -m tests.mail_inbox compose --from lawyer@example.com --subject "合同条款确认" --body "你好，\n\n第 7 条的付款周期希望改成 30 天，能接受吗？"
-```
-
-`compose` 只有 `--from`、`--subject`、`--body` 必填（正文里的 `\n` 当换行），其余可选：
-`--thread` 给已有线程即为同线程的另一封邮件，`--id` 复用同一个 ID 用来验证去重，
-`--summary`、`--suggestion`、`--reply-body` 指定替身的摘要、建议和起草正文；不给就按正文生成。
-
-邮件就是收件箱目录（默认 `<数据目录>/inbox`，可用 `PEBBLE_TEST_INBOX_DIR` 指定）里的 json，
-所以手写一个文件放进去、或用编辑器改一改再存，效果和上面的命令一样；`deliver` 也接受 json 路径，
-样例在 `tests/support/mails/`，`clear` 清空收件箱。后台每秒扫描一次，邮件 ID 决定去重：
-重复投递同一个 ID 不重复建任务，重启后重新扫描也不会重复。
-
-替身 Agent 按关键词判断意图：普通提问只回答，出现「回信」「草稿」「改」「正式」「链接」
-这类词才动草稿，所以「让它准备草稿」和「确认发送」始终是两件事。草稿保存、版本、
-版本冲突和发送都走服务端真实接口。可调环境变量：`PEBBLE_TEST_AGENT_DELAY` 每段文本间隔
-（默认 0.4 秒），`PEBBLE_TEST_SEND_DELAY` 发送耗时（默认 0；设成 2 能在页面上看到 sending
-中间态），`PEBBLE_TEST_SEND_STATUS` 取 `sent`、`failed` 或 `unknown`。
-
-替身的记录都在数据目录：`sent.jsonl` 是发送替身实际收到的参数，`mock_agent_history.jsonl`
-是会话历史（重启后仍在），`mock_agent_mails.json` 是任务与邮件的对应关系。会话标识按任务生成，
-重启后新任务不会捡到旧任务的历史。
+测试只替换 SDK 子进程与 Gmail 投递这两个外部边界，其余模块、SQLite、HTTP 都是真的。
+SDK 模型响应与 Gmail 投递仍须用明确授权的账号和内容验收；测试通过不代表真实邮件发送成功。
 
 新邮件来源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/runtime.py` 的
-`MailSource`（`start` / `stop` / `error`）。真实 Gmail 检测由 `server/tools/gmail/sync.py` 实现同一接口，生产工厂统一装配。`tests/support/` 下的模拟邮箱与替身 Agent 只用于测试和人工验收。
+`MailSource`（`start` / `stop` / `error`）。真实 Gmail 检测由 `server/tools/gmail/sync.py` 实现同一接口，生产工厂统一装配。
 
 ## 生产装配
 
@@ -221,6 +169,12 @@ Gmail 首次启动记录当前 historyId，随后每 10 秒检测新增的收件
 更新使用当前已保存版本，直接编辑与 Agent 修改共用 ReplyDraftStore 的版本控制。草稿保存事件交给网页。
 发送函数仅由 Confirmation 调用，执行结果回到确认任务的原 SDK 会话。
 
+模型经应用进程内的 MCP 端点（server 名 `pebble`）调用工具，内置工具与本机设置关闭：每轮登记一个
+一次性路径供 qodercli 子进程按回环地址连接，轮次结束即撤销。每轮独立启动一次 qodercli 子进程，
+会话标识由 SDK 生成并按任务保存，重启后靠它接续。会话记录落在 `.data/agent/config/` 下，
+历史接口直接读取该记录。
+
 联合测试 `tests/gateway/test_integrated_mail.py` 覆盖实际模块衔接、Agent 修改与手动编辑、
-旧版本拒绝、最终内容一致性、重复确认、结果会话关联、游标推进、SDK 历史读取与 BYOK 配置。
-其中 SDK 模型响应和 Gmail 投递仍为测试边界替身；真实验收结果需另行记录。
+旧版本拒绝、最终内容一致性、重复确认、结果会话关联与游标推进；`tests/gateway/test_agent_stream.py`
+覆盖选项装配、事件映射、工具边界与会话历史读取。其中 SDK 模型响应和 Gmail 投递仍为测试边界替身；
+真实验收结果需另行记录。

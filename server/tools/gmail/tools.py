@@ -4,8 +4,9 @@
 - 查询工具标记为 READONLY，模型可自主调用；
 - 外部写操作（发送邮件）不在此注册，模型不可见。
 
-客户端与存储是仅关键字参数：由 `server/agent/toolset.py` 在装配时绑定，既不进入模型 schema，
-也不在模块内查找全局单例；未装配的依赖在调用时直接拒绝，不退回模拟实现。
+客户端与存储是仅关键字参数，参数名与 `server/agent/toolset.py` 的 `ToolDeps` 字段一致：
+装配时按名字绑定，不进入模型 schema，也不在模块内查找全局单例；未装配的依赖不会出现在
+工具集里，不退回模拟实现。
 """
 
 from __future__ import annotations
@@ -31,16 +32,16 @@ def query_emails(
     query: str,
     max_results: int = 10,
     *,
-    client: BaseGmailClient,
+    gmail: BaseGmailClient,
 ) -> list[dict[str, Any]]:
     """搜索邮件列表并返回匹配的摘要信息。"""
-    search_results = client.search_messages(query, max_results=max_results)
+    search_results = gmail.search_messages(query, max_results=max_results)
 
     email_summaries: list[dict[str, Any]] = []
     for item in search_results:
         msg_id = item["id"]
         try:
-            msg = client.get_message(msg_id)
+            msg = gmail.get_message(msg_id)
             email_summaries.append(
                 {
                     "id": msg.id,
@@ -98,10 +99,10 @@ def format_thread_transcript(messages: list[Any]) -> str:
 def get_email_thread(
     thread_id: str,
     *,
-    client: BaseGmailClient,
+    gmail: BaseGmailClient,
 ) -> dict[str, Any]:
     """获取线程内全部往来邮件详情，生成时间线对话记录注入模型上下文。"""
-    messages = client.get_thread(thread_id)
+    messages = gmail.get_thread(thread_id)
 
     structured_messages = [
         {
@@ -135,10 +136,10 @@ def get_email_thread(
 def get_email_detail(
     message_id: str,
     *,
-    client: BaseGmailClient,
+    gmail: BaseGmailClient,
 ) -> dict[str, Any]:
     """获取单封邮件完整信息。"""
-    msg = client.get_message(message_id)
+    msg = gmail.get_message(message_id)
 
     return {
         "id": msg.id,

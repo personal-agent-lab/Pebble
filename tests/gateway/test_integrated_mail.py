@@ -1,4 +1,4 @@
-"""模块集成验证：真实业务模块、SQLite、HTTP；只替换 SDK 和 Gmail 的外部边界。"""
+"""模块集成验证：真实业务模块、SQLite、HTTP；只替换 SDK 子进程和 Gmail 的外部边界。"""
 
 import asyncio
 import json
@@ -9,10 +9,12 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from qodercn_agent_sdk import ResultMessage, SystemMessage
+from qodercn_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, TextBlock
 
-from server.agent import sdk_client
-from server.agent.toolset import build_tools
+from server.agent import client as agent_client
+from server.agent.client import QoderGateway
+from server.agent.mcp import TOOL_SERVER_NAME, ToolServer
+from server.agent.toolset import ToolDeps, build_tools
 from server.config import Settings
 from server.db import init_db
 from server.main import create_app
@@ -20,41 +22,31 @@ from server.sessions.service import SessionStore
 from server.tools.gmail.sender import send_reply
 from server.tools.gmail.service import ReplyDraftStore
 from server.tools.gmail.sync import GmailSource
-from server.tools.registry import SideEffect, ToolRegistry
 from tests.support.gmail_double import MockGmailClient
+from tests.support.mcp_http import mcp_session, tool_payload
 
 
 def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
+    """从新邮件分析到用户确认发送：脚本化 SDK 经工具端点调用真实工具，其余全是真的。"""
     init_db()
     tasks = SessionStore()
     drafts = ReplyDraftStore()
     gmail = MockGmailClient()
-    tools = build_tools(drafts=drafts, tasks=tasks, gmail=gmail)
-    monkeypatch.setattr(
-        sdk_client,
-        "get_settings",
-        lambda: Settings(
+    tool_server = ToolServer()
+    gateway = QoderGateway(
+        ToolDeps(drafts=drafts, tasks=tasks, gmail=gmail),
+        tool_server,
+        settings=Settings(
             data_dir=settings.data_dir, QODERCN_PERSONAL_ACCESS_TOKEN="test", _env_file=None
         ),
     )
-    handlers = {}
-    original_tool = sdk_client.tool
-
-    def register(name, description, schema):
-        assert "task_id" not in schema["properties"]
-
-        def decorate(handler):
-            handlers[name] = handler
-            return original_tool(name, description, schema)(handler)
-
-        return decorate
-
-    monkeypatch.setattr(sdk_client, "tool", register)
     sessions = []
     turns = []
     operation = {}
 
     class SDK:
+        """脚本化 SDK：按消息内容决定调用哪些工具，模型消息由脚本给出。"""
+
         def __init__(self, options):
             self.options = options
             self.sid = options.resume or str(uuid4())
@@ -63,22 +55,28 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
         async def __aenter__(self):
             return self
 
-        async def __aexit__(self, *args):
-            pass
+        async def __aexit__(self, *exc):
+            return False
 
         async def query(self, message):
             self.message = message
 
         async def call(self, name, fields):
-            response = await handlers[name](fields)
-            assert not response["isError"], response
-            return json.loads(response["content"][0]["text"])
+            url = self.options.mcp_servers[TOOL_SERVER_NAME]["url"]
+            async with mcp_session(app, url) as session:
+                result = await session.call_tool(name, fields)
+            assert result.isError is False, result
+            return tool_payload(result)
+
+        def say(self, text):
+            return AssistantMessage([TextBlock(text)], "model", session_id=self.sid)
 
         async def receive_response(self):
             yield SystemMessage("init", {"session_id": self.sid})
             turns.append(self.message)
             if self.message.startswith("收到新邮件"):
-                await self.call("gmail_get_message", {"message_id": "msg_invite_001"})
+                message = await self.call("gmail_get_message", {"message_id": "msg_invite_001"})
+                yield self.say(f"邮件主题：{message['subject']}")
             elif self.message == "帮我写一封回信":
                 operation.update(
                     await self.call(
@@ -92,6 +90,7 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
                         },
                     )
                 )
+                yield self.say("草稿已保存，请审核。")
             elif self.message == "询问会议链接":
                 current = await self.call(
                     "gmail_read_reply_draft", {"operation_id": operation["operation_id"]}
@@ -106,16 +105,19 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
                         "body": current["body"] + "\n请提供会议链接。",
                     },
                 )
+                yield self.say("已按你的要求补充。")
             else:
                 assert '"status": "sent"' in self.options.system_prompt
+                yield self.say("邮件已经发出去了。")
             yield ResultMessage("success", 1, 1, False, 1, self.sid)
 
-    monkeypatch.setattr(sdk_client, "QoderSDKClient", SDK)
+    monkeypatch.setattr(agent_client, "QoderSDKClient", SDK)
     app = create_app(
-        gateway=sdk_client.QoderGateway(tools),
+        gateway=gateway,
         send_reply=partial(send_reply, client=gmail),
         tasks=tasks,
         drafts=drafts,
+        tool_server=tool_server,
     )
     with TestClient(app) as http:
         task = http.portal.call(
@@ -148,7 +150,7 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
         assert current["version"] == 2
         assert "会议链接" in current["body"]
         assert not gmail.sent_log
-        edited = {k: current[k] for k in ("to", "subject", "body")}
+        edited = {key: current[key] for key in ("to", "subject", "body")}
         edited["body"] += "\n用户审核后的结尾  "
         response = http.patch(
             f"/api/operations/{oid}/draft", json={"expected_version": 2, **edited}
@@ -165,7 +167,7 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
         wait()
         assert http.post(endpoint, json={"operation_id": oid, "version": 3}).status_code == 202
         assert len(gmail.sent_log) == 1
-        assert {k: gmail.sent_log[0][k] for k in edited} == edited
+        assert {key: gmail.sent_log[0][key] for key in edited} == edited
         assert len(set(sessions)) == 1
         assert len(turns) == 4
 
@@ -205,110 +207,6 @@ def test_gmail_cursor_only_advances_after_acceptance(settings):
     assert tasks.list_tasks() == []
 
 
-def test_sdk_history_reads_its_persisted_transcript(settings, monkeypatch):
-    from qodercn_agent_sdk import project_key_for_directory
-
-    config = settings.data_dir / "agent" / "config"
-    workspace = settings.data_dir / "agent" / "workspace"
-    workspace.mkdir(parents=True)
-    monkeypatch.setenv("QODERCN_CONFIG_DIR", str(config))
-    project = config / "projects" / project_key_for_directory(workspace)
-    project.mkdir(parents=True)
-    sid, user_id, assistant_id = (str(uuid4()) for _ in range(3))
-    entries = [
-        {
-            "uuid": user_id,
-            "parentUuid": None,
-            "sessionId": sid,
-            "type": "user",
-            "message": {"role": "user", "content": "帮我写一封回信"},
-        },
-        {
-            "uuid": assistant_id,
-            "parentUuid": user_id,
-            "sessionId": sid,
-            "type": "assistant",
-            "message": {
-                "role": "assistant",
-                "content": [
-                    {"type": "thinking", "thinking": "不展示"},
-                    {"type": "text", "text": "草稿已准备好"},
-                ],
-            },
-        },
-    ]
-    (project / f"{sid}.jsonl").write_text("\n".join(json.dumps(e) for e in entries))
-    history = asyncio.run(
-        sdk_client.QoderGateway(
-            build_tools(drafts=ReplyDraftStore(), tasks=SessionStore(), gmail=MockGmailClient())
-        ).read_history(task_id="task", sdk_session_id=sid)
-    )
-    assert history == [
-        {"role": "user", "text": "帮我写一封回信"},
-        {"role": "assistant", "text": "草稿已准备好"},
-    ]
-
-
-def test_custom_model_and_new_mail_permissions(settings, monkeypatch):
-    configured = Settings(
-        data_dir=settings.data_dir,
-        QODERCN_PERSONAL_ACCESS_TOKEN="test-pat",
-        model_provider="test-provider",
-        qoder_model="test-model",
-        model_api_key="test-key",
-        _env_file=None,
-    )
-    monkeypatch.setattr(sdk_client, "get_settings", lambda: configured)
-    tools = build_tools(drafts=ReplyDraftStore(), tasks=SessionStore(), gmail=MockGmailClient())
-    options = sdk_client.build_options(tools, "task", allow_drafts=False)
-    assert options.resolve_model(None)["model"] == {
-        "provider": "test-provider",
-        "model": "test-model",
-        "api_key": "test-key",
-        "style": "openai",
-    }
-    assert "test-key" not in options.system_prompt
-
-    # 新邮件轮只分析不起草：按副作用声明排除所有写工具，只读工具照常可用。
-    def names(definitions):
-        return {f"mcp__pebble__{definition.name}" for definition in definitions}
-
-    readonly = [t for t in tools if t.side_effect is SideEffect.READONLY]
-    local_write = [t for t in tools if t.side_effect is SideEffect.LOCAL_WRITE]
-    assert local_write, "用例前提：工具集里有本地写工具"
-    assert set(options.allowed_tools) == names(readonly)
-    assert not names(local_write) & set(options.allowed_tools)
-    assert set(sdk_client.build_options(tools, "task").allowed_tools) == names(
-        readonly + local_write
-    )
-
-
-def test_external_write_tools_are_never_exposed_to_the_model(settings, monkeypatch):
-    """外部写工具即使注册进工具集也不会进入模型可见范围；发送只由 Confirmation 调用。"""
-    monkeypatch.setattr(
-        sdk_client,
-        "get_settings",
-        lambda: Settings(
-            data_dir=settings.data_dir, QODERCN_PERSONAL_ACCESS_TOKEN="test", _env_file=None
-        ),
-    )
-    registry = ToolRegistry()
-
-    @registry.register(name="gmail_send_reply", side_effect=SideEffect.EXTERNAL_WRITE)
-    def send_now(operation_id: str) -> dict:
-        """真实发送邮件；绝不注册给模型。"""
-        raise AssertionError("模型不应当能调用外部写工具")
-
-    tools = [
-        *build_tools(drafts=ReplyDraftStore(), tasks=SessionStore(), gmail=MockGmailClient()),
-        send_now,
-    ]
-    for allow_drafts in (True, False):
-        options = sdk_client.build_options(tools, "task", allow_drafts=allow_drafts)
-        assert not any("send" in name for name in options.allowed_tools)
-    assert send_now not in sdk_client.exposed_tools(tools, allow_drafts=True)
-
-
 def test_tools_bind_assembled_dependencies_without_global_state(settings, tmp_path):
     """两套装配各自持有存储：工具不查全局，同一进程可并存互不影响的应用。"""
     toolsets = []
@@ -320,7 +218,9 @@ def test_tools_bind_assembled_dependencies_without_global_state(settings, tmp_pa
         task_id = tasks.create_task(f"{name} 的任务")["task_id"]
         tools = {
             definition.name: definition
-            for definition in build_tools(drafts=drafts, tasks=tasks, gmail=MockGmailClient())
+            for definition in build_tools(
+                ToolDeps(drafts=drafts, tasks=tasks, gmail=MockGmailClient())
+            )
         }
         toolsets.append((name, task_id, drafts, tools))
 
@@ -328,12 +228,12 @@ def test_tools_bind_assembled_dependencies_without_global_state(settings, tmp_pa
     for name, task_id, _, tools in toolsets:
         saved.append(
             tools["gmail_prepare_reply"](
-                task_id=task_id,
                 source_message_id="msg_invite_001",
                 thread_id="thread_invite_001",
                 to=["alice@example.com"],
                 subject="Re: 邀请",
                 body=f"{name} 的草稿。",
+                task_id=task_id,
             )
         )
 

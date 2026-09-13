@@ -93,15 +93,11 @@ async def test_new_mail_runs_summary_without_draft_or_send(flow):
     assert task["goal"] == "处理新收到的邮件"
     await drain(flow.service)
 
-    assert flow.gateway.calls_of("new_mail") == [
-        {
-            "kind": "new_mail",
-            "task_id": task["task_id"],
-            "sdk_session_id": None,
-            "source_message_id": "m1",
-            "thread_id": "thread-1",
-        }
-    ]
+    calls = flow.gateway.calls_of("new_mail")
+    assert len(calls) == 1
+    call = calls[0]
+    assert (call["task_id"], call["sdk_session_id"]) == (task["task_id"], None)
+    assert call["materials"][0].content == {"source_message_id": "m1", "thread_id": "thread-1"}
     assert flow.tasks.get_task(task["task_id"])["sdk_session_id"] == "fake-session-1"
     assert flow.tasks.list_task_operations(task["task_id"]) == []
     assert flow.sender.calls == []
@@ -119,7 +115,9 @@ async def test_same_message_reuses_task_and_new_message_new_task(flow):
     assert duplicate == first
     assert same_thread["task_id"] != first["task_id"]
     await drain(flow.service)
-    assert [call["source_message_id"] for call in flow.gateway.calls_of("new_mail")] == ["m1", "m2"]
+    calls = flow.gateway.calls_of("new_mail")
+    ids = [call["materials"][0].content["source_message_id"] for call in calls]
+    assert ids == ["m1", "m2"]
     assert len(flow.service.list_runs(first["task_id"])) == 1
     assert len(flow.service.list_runs(same_thread["task_id"])) == 1
 
@@ -128,9 +126,9 @@ async def test_user_request_saves_draft_without_sending(flow):
     task = flow.service.accept_new_mail("m1", "thread-1")
     await drain(flow.service)
 
-    def handler(*, task_id, sdk_session_id, message, **kwargs):
+    def handler(turn):
         async def events():
-            draft = flow.drafts.save_reply_draft(task_id, "m1", "thread-1", **DRAFT)
+            draft = flow.drafts.save_reply_draft(turn.task_id, "m1", "thread-1", **DRAFT)
             yield {
                 "type": "draft_saved",
                 "operation_id": draft["operation_id"],
@@ -182,12 +180,12 @@ async def test_same_task_inputs_run_in_acceptance_order(flow):
     release = threading.Event()
     seen: list[str] = []
 
-    def handler(*, message, **kwargs):
+    def handler(turn):
         async def events():
-            seen.append(message)
-            if message == "第一条":
+            seen.append(turn.message)
+            if turn.message == "第一条":
                 await asyncio.to_thread(release.wait, 5)
-            yield {"type": "text", "text": f"回复：{message}"}
+            yield {"type": "text", "text": f"回复：{turn.message}"}
             yield {"type": "done"}
 
         return events()
@@ -210,11 +208,11 @@ async def test_different_tasks_do_not_block_each_other(flow):
     release = threading.Event()
     completed: list[str] = []
 
-    def handler(*, message, **kwargs):
+    def handler(turn):
         async def events():
-            if message == "慢":
+            if turn.message == "慢":
                 await asyncio.to_thread(release.wait, 5)
-            completed.append(message)
+            completed.append(turn.message)
             yield {"type": "done"}
 
         return events()
@@ -393,16 +391,15 @@ async def test_confirmed_result_waits_for_session_then_delivers(flow):
     flow.tasks.bind_sdk_session(task["task_id"], "sdk-1")
     flow.service.kick()
     assert await wait_for(lambda: flow.gateway.calls_of("execution_result"))
-    assert flow.gateway.calls_of("execution_result") == [
-        {
-            "kind": "execution_result",
-            "task_id": task["task_id"],
-            "sdk_session_id": "sdk-1",
-            "operation_id": operation["operation_id"],
-            "version": 1,
-            "result": {"status": "sent", "message_id": "sent-1"},
-        }
-    ]
+    calls = flow.gateway.calls_of("execution_result")
+    assert len(calls) == 1
+    call = calls[0]
+    assert (call["task_id"], call["sdk_session_id"]) == (task["task_id"], "sdk-1")
+    assert call["materials"][0].content == {
+        "operation_id": operation["operation_id"],
+        "version": 1,
+        "result": {"status": "sent", "message_id": "sent-1"},
+    }
     assert await wait_for(lambda: flow.service.list_runs(task["task_id"])[0]["status"] == "done")
 
 
@@ -478,7 +475,8 @@ async def test_result_variants_delivered_without_resend(flow, returned):
     assert flow.confirmations.get_execution(op["operation_id"])["status"] == expected
     assert len(calls) == 1
     assert len(flow.gateway.calls_of("execution_result")) == 1
-    assert flow.gateway.calls_of("execution_result")[0]["result"]["status"] == expected
+    delivered = flow.gateway.calls_of("execution_result")[0]["materials"][0].content
+    assert delivered["result"]["status"] == expected
 
 
 async def test_result_and_delivery_rollback_together(flow, monkeypatch):

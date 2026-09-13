@@ -1,11 +1,27 @@
-"""Agent 接口：三类调用与历史读取。
+"""Agent 接口：逐轮调用与历史读取。
 
 Gateway 通过本接口把输入交给 Agent 会话并消费事件流；实现由 Qoder Agent SDK
 装配提供，测试使用替身。接口只定义输入与事件，不规定 SDK 装配方式。
+一轮的消息与材料由调用方（调度层与触发域）组装，网关不区分触发来源。
 """
 
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Protocol, TypedDict
+
+from server.agent.context import Material
+from server.agent.toolset import TurnKind
+
+
+@dataclass(frozen=True)
+class Turn:
+    """一轮调用的输入；材料只进系统提示，不进对话历史。"""
+
+    kind: TurnKind
+    task_id: str
+    sdk_session_id: str | None
+    message: str
+    materials: tuple[Material, ...] = ()
 
 
 class AgentEvent(TypedDict, total=False):
@@ -24,28 +40,7 @@ class AgentProtocolError(Exception):
 
 
 class AgentGateway(Protocol):
-    def stream_new_mail(
-        self,
-        *,
-        task_id: str,
-        sdk_session_id: str | None,
-        source_message_id: str,
-        thread_id: str,
-    ) -> AsyncIterator[AgentEvent]: ...
-
-    def stream_message(
-        self, *, task_id: str, sdk_session_id: str | None, message: str
-    ) -> AsyncIterator[AgentEvent]: ...
-
-    def stream_execution_result(
-        self,
-        *,
-        task_id: str,
-        sdk_session_id: str,
-        operation_id: str,
-        version: int,
-        result: dict,
-    ) -> AsyncIterator[AgentEvent]: ...
+    def stream_turn(self, turn: Turn) -> AsyncIterator[AgentEvent]: ...
 
     async def read_history(self, *, task_id: str, sdk_session_id: str | None) -> list[dict]: ...
 

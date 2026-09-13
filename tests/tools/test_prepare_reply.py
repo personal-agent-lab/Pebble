@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from server.agent.sdk_client import exposed_tools
+from server.agent.toolset import ALLOWED_EFFECTS, TurnKind, exposed_tools
 from server.db import init_db
 from server.errors import DraftValidationError, NotFoundError
 from server.sessions.service import SessionStore
@@ -34,8 +34,8 @@ def test_prepare_reply_registered_as_local_write() -> None:
     assert tool_def.side_effect == SideEffect.LOCAL_WRITE
     # LOCAL_WRITE 只在允许起草的轮次对模型可见；新邮件轮只分析，不起草。
     tools = default_registry.list_tools()
-    assert tool_def in exposed_tools(tools, allow_drafts=True)
-    assert tool_def not in exposed_tools(tools, allow_drafts=False)
+    assert tool_def in exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
+    assert tool_def not in exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.NEW_MAIL])
 
 
 def test_prepare_reply_validation_failure_blocks_saving(drafts, task_id) -> None:
