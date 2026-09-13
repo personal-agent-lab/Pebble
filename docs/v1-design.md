@@ -67,6 +67,7 @@ Pebble/
 │   ├── errors.py             # 跨模块共享的业务异常
 │   ├── agent/                # 不实现自有循环，只装配 SDK
 │   │   ├── sdk_client.py     # QoderSDKClient 装配、按 ID 恢复会话、消息流转
+│   │   ├── toolset.py        # 按装配依赖绑定业务工具，交给 SDK 装配
 │   │   ├── context.py        # 每轮加载 Memory 规则与已生效 Skills
 │   │   └── prompt.py         # 面向个人助理的系统提示
 │   ├── tools/                # 统一注册 + 按服务分目录实现
@@ -372,6 +373,18 @@ Agent 历史由 B 的 read_history 返回；A 不保存另一份模型对话历�
 新邮件来源是装配插孔：`gateway/mail_source.py` 的 `MailSource` 只有 `start` / `stop`，
 由 `create_app(mail_source=...)` 传入，应用在恢复中断调用之后启动、关闭前停止。检测逻辑不在
 其中，真实 Gmail 检测（`background.py`）实现同一接口；默认装配没有邮件来源，不伪造邮件。
+
+### 工具装配当前实现
+
+工具实现把 Gmail 客户端、草稿存储和任务存储声明为仅关键字参数，`agent/toolset.py` 在装配期
+用闭包绑定，registry 不把仅关键字参数放进模型可见的 schema。进程内没有工具依赖的全局单例：
+`create_app` 接收已构造的存储，工具与 HTTP 共用同一实例，同一进程可并存互不影响的装配。
+未接入 Gmail 时工具清单不变，调用按依赖未接入拒绝，不退回模拟邮箱。
+
+模型可见范围由注册时的副作用声明决定，不是手写清单：EXTERNAL_WRITE 不在任何一轮的允许集合内，
+新邮件轮只允许 READONLY。回复草稿的业务校验只在 `ReplyDraftStore` 内做一次，且在按原邮件去重
+之后，符合契约 §4 复用已有操作时候选内容不参与校验。工具边界把已实现的契约错误按
+`server/errors.py` 的名称与字段交回模型，与 HTTP 响应体同一套词汇。
 
 未接入 Agent、校验或发送依赖时，相关新工作在写入前拒绝。只读任务、草稿及执行查询仍可用。
 生产默认装配不使用替身；测试替身和可启动验收应用均位于 tests。认证部署不属于本地后端

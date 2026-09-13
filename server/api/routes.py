@@ -157,6 +157,11 @@ def read_draft(operation_id: str, drafts: Drafts, version: int | None = None) ->
 
 @router.patch("/operations/{operation_id}/draft", tags=["approvals"])
 def edit_draft(operation_id: str, body: DraftEdit, drafts: Drafts) -> dict:
+    """按契约 §4 编辑草稿：输入不含任务标识，同一操作可由任何关联任务的页面编辑。
+
+    工具路径另有归属检查，限制模型只能读写本会话任务的草稿，防邮件正文里的指令越界；
+    那不是用户授权检查，与本接口不同是有意的。用户身份检查随正式 Web 接入一起补。
+    """
     return drafts.update_reply_draft(
         operation_id, body.expected_version, list(body.to), body.subject, body.body
     )
