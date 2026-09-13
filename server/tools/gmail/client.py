@@ -50,6 +50,8 @@ class GmailMessage:
     body_html: str = ""
     internal_date_ms: int = 0
     labels: list[str] = field(default_factory=list)
+    in_reply_to: str = ""
+    references: str = ""
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,10 @@ class SendReplyResult:
 
 class BaseGmailClient(Protocol):
     """Gmail 客户端抽象协议。"""
+
+    def send_raw_message(self, raw: str, thread_id: str) -> SendReplyResult:
+        """发送已构建的 MIME；仅供内部审批执行器调用。"""
+        ...
 
     def get_message(self, message_id: str) -> GmailMessage:
         """获取指定 ID 的单封邮件详情。"""
@@ -263,6 +269,8 @@ class GoogleApiGmailClient(BaseGmailClient):
             body_html=body_html,
             internal_date_ms=internal_date_ms,
             labels=labels,
+            in_reply_to=headers.get("in-reply-to", ""),
+            references=headers.get("references", ""),
         )
 
     def get_message(self, message_id: str) -> GmailMessage:
@@ -291,6 +299,16 @@ class GoogleApiGmailClient(BaseGmailClient):
             service.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
         )
         return [{"id": m["id"], "threadId": m["threadId"]} for m in res.get("messages", [])]
+
+    def send_raw_message(self, raw: str, thread_id: str) -> SendReplyResult:
+        result = (
+            self.get_service()
+            .users()
+            .messages()
+            .send(userId="me", body={"raw": raw, "threadId": thread_id})
+            .execute(num_retries=0)
+        )
+        return SendReplyResult(result.get("id", ""), result.get("threadId", thread_id))
 
     def raw_send_reply(
         self,
@@ -394,6 +412,27 @@ class MockGmailClient(BaseGmailClient):
                 if len(results) >= max_results:
                     break
         return results
+
+    def send_raw_message(self, raw: str, thread_id: str) -> SendReplyResult:
+        from dataclasses import replace
+        from email import policy
+        from email.parser import BytesParser
+
+        mime = BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(raw))
+        result = self.raw_send_reply(
+            MimeParser.parse_address_list(str(mime["To"])),
+            str(mime["Subject"]),
+            mime.get_content(),
+            thread_id,
+            str(mime["In-Reply-To"]),
+        )
+        self.messages[result.message_id] = replace(
+            self.messages[result.message_id],
+            rfc_message_id=str(mime["Message-ID"]),
+            in_reply_to=str(mime["In-Reply-To"]),
+            references=str(mime["References"]),
+        )
+        return result
 
     def raw_send_reply(
         self,

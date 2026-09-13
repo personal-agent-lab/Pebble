@@ -12,7 +12,7 @@ import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, get_type_hints
+from typing import Any, get_args, get_origin, get_type_hints
 
 
 class SideEffect(StrEnum):
@@ -114,13 +114,16 @@ class ToolRegistry:
 
         for param_name, param in sig.parameters.items():
             # 忽略内部注入参数（如 client, settings 等）
-            if param_name in ("self", "cls", "client"):
+            if param_name in ("self", "cls", "client", "storage"):
                 continue
 
             param_type = type_hints.get(param_name, Any)
-            json_type = type_mapping.get(param_type, "string")
+            json_type = type_mapping.get(get_origin(param_type) or param_type, "string")
 
             prop: dict[str, Any] = {"type": json_type}
+            if json_type == "array":
+                item_type = get_args(param_type)
+                prop["items"] = {"type": type_mapping.get(item_type[0], "string")}
             if param.default is inspect.Parameter.empty:
                 required.append(param_name)
             else:
@@ -132,6 +135,7 @@ class ToolRegistry:
             "type": "object",
             "properties": properties,
             "required": required,
+            "additionalProperties": False,
         }
 
 

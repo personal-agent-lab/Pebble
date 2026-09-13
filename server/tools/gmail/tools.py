@@ -202,7 +202,7 @@ def prepare_reply(
     if status == "pending":
         msg = (
             f"回复草稿已成功保存为待审阅状态（操作ID: {op_id}, 版本: {version}）。"
-            "已向用户展示预览，等待用户在界面审阅并明确确认后才会发送。"
+            "回复草稿已准备好，请审阅确认。"
         )
     else:
         msg = (

@@ -98,3 +98,34 @@ docs/       规格与设计
 
 第一条邮件完整链：聊天提交与 SSE、草稿编辑与确认、SDK 装配与 Gmail 工具。
 数据库业务表随该链路的接口约定一起建，不提前铺空目录。
+
+## B 侧邮件链接口（已实现）
+
+- `server.tools.gmail.tools.prepare_reply(...)`：先校验再调用
+  `DraftStorageProtocol.save_reply_draft`；相同原邮件复用记录，不覆盖内容。
+  默认 `InMemoryDraftStorage` 仅用于自测，重启会丢失；A 在启动时用
+  `set_draft_storage(storage)` 注入 SQLite 实现。
+- `server.tools.gmail.sender.send_reply(...)`：仅供审批控制器内部调用，不注册 MCP。
+  A 须验证用户身份与确认版本，在数据库中原子取得执行权并记录 `sending`，
+  再于事务外传入该持久化版本的完整字段。A 必须拦截重复确认，
+  对 `sending/sent/failed/unknown` 均不得自动重发。
+- `verify_reply_status(thread_id, source_message_id)`：只读核实固定 Message-ID、
+  SENT 标签与原邮件关联；未找到或查询失败返回 `unknown`，不代表未发送。
+  超时发送路径另比对确认内容，不使用旧客户端的主题匹配辅助方法。
+- `server.agent.sdk_client.stream_agent_turn(...)`：异步输出
+  `session → text* → done/error`，SDK 异常不会暴露凭证或原始异常给前端。
+- `feed_execution_result(...)`：A 先持久化实际结果，再回传原会话。
+  结果作为本轮系统上下文注入；`done` 只代表运行结束。
+
+SDK 锁定 `qoder-agent-sdk==1.0.14`（包含配套 CLI）。服务端设置
+`QODER_PERSONAL_ACCESS_TOKEN`，可用 `PEBBLE_QODER_MODEL` 选择模型；不要将令牌提交到 Git。
+使用独立 `.data/agent/workspace` 与 `.data/agent/config`，禁用内置工具、
+文件配置加载和 Skills，只允许四个明确列出的 Gmail 查询/草稿工具。
+准备工具的 `task_id` 由网关调用上下文注入，模型不能指定其他任务身份。
+
+当前官方 SDK 的恢复参数为 `resume=sdk_session_id`，不是布尔 `True`：
+[Qoder Python SDK 参考](https://docs.qoder.com/cli/sdk/references-python)。
+
+验证范围：无凭证自动测试覆盖 MIME 原文、草稿并发去重、超时核实与会话事件映射。
+尚未进行真实账号 SDK/Gmail 集成测试；本提交不包含 A 的审批控制器、业务表或前端 SSE 接线，
+不能据此认定完整 Web 邮件链已上线。无凭证的默认发送明确失败，不会报告模拟发送成功。

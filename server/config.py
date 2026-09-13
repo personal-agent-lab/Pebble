@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
 
+    qoder_model: str | None = None
+
     gmail_credentials_path: Path | None = None
     gmail_token_path: Path | None = None
 

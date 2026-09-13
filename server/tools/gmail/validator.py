@@ -31,6 +31,8 @@ def is_valid_email_address(addr: str) -> bool:
     if not addr or not isinstance(addr, str):
         return False
 
+    if "\r" in addr or "\n" in addr:
+        return False
     clean_str = addr.strip()
     if not clean_str:
         return False
@@ -116,6 +118,9 @@ def validate_reply_draft(
                         "message": f"邮箱格式错误: {addr}",
                     }
                 )
+
+    if isinstance(subject, str) and ("\r" in subject or "\n" in subject):
+        errors.append({"field": "subject", "message": "邮件主题不能包含换行"})
 
     # 3. 校验 subject 与 body 不能为空或全空白字符
     if not isinstance(subject, str) or not subject.strip():
