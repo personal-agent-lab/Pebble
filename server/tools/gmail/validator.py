@@ -113,7 +113,7 @@ def validate_reply_draft(
                 errors.append(
                     {
                         "field": "to",
-                        "message": f"收件人地址不符合 RFC 5322 格式规范: {addr}",
+                        "message": f"邮箱格式错误: {addr}",
                     }
                 )
 
