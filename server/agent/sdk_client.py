@@ -163,7 +163,7 @@ def build_options(
 
 
 class QoderGateway:
-    """A 的 Gateway 契约直接对应 SDK 调用，不实现 Agent 循环。"""
+    """Gateway 契约直接对应 SDK 调用，不实现 Agent 循环。"""
 
     def __init__(self, tools: list[ToolDefinition]):
         self.tools = tools
@@ -245,7 +245,7 @@ class QoderGateway:
         version: int,
         result: dict,
     ) -> AsyncIterator[dict]:
-        """仅供 A 持久化实际执行结果后调用，不注册为模型工具。"""
+        """仅供持久化实际执行结果后调用，不注册为模型工具。"""
         status = result.get("status")
         if (
             not sdk_session_id

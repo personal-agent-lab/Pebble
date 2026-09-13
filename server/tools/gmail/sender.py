@@ -1,6 +1,6 @@
-"""仅供 A 的审批控制器调用；调用前须原子取得执行权并读取确认版本。
+"""仅供 Confirmation 调用；调用前须原子取得执行权并读取确认版本。
 
-A 必须持久化 sending/sent/failed/unknown，同一版本不可再次投递。
+Confirmation 持久化 sending/sent/failed/unknown，同一版本不可再次投递。
 本模块不注册 MCP，不自动重试；未知结果只读核实。
 
 两个入口都由 Confirmation 注入 Gmail 客户端后调用，模型不可见：`send_reply` 执行已确认版本，
@@ -78,7 +78,7 @@ def send_reply(
     *,
     client: BaseGmailClient,
 ) -> dict[str, Any]:
-    """直接发送 A 已确认的持久化字段；不经过 LLM，不在此推断用户确认。"""
+    """直接发送已确认的持久化字段；不经过 LLM，不在此推断用户确认。"""
     validation = validate_reply_draft(source_message_id, thread_id, to, subject, body)
     if not operation_id or type(version) is not int or version < 1 or not validation["valid"]:
         return {"status": "failed", "reason": "已确认草稿字段不合法"}

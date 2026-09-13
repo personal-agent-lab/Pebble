@@ -1,7 +1,7 @@
-"""A/B Agent 接口：三类调用与历史读取。
+"""Agent 接口：三类调用与历史读取。
 
-A 通过本接口把输入交给 Agent 会话并消费事件流；实现由 B 提供（Qoder Agent SDK
-装配），测试使用替身。接口只定义输入与事件，不规定 SDK 装配方式。
+Gateway 通过本接口把输入交给 Agent 会话并消费事件流；实现由 Qoder Agent SDK
+装配提供，测试使用替身。接口只定义输入与事件，不规定 SDK 装配方式。
 """
 
 from collections.abc import AsyncIterator

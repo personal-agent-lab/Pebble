@@ -90,7 +90,7 @@ def log(step, **fields):
 @pytest.mark.parametrize("outcome", ["sent", "failed", "unknown"])
 def test_http_sse_flow_and_process_restart(settings, outcome, monkeypatch):
     monkeypatch.setenv("PEBBLE_TEST_SEND_STATUS", outcome)
-    log("开始：真实 A 后端 + B 替身", outcome=outcome, evidence=str(settings.data_dir))
+    log("开始：真实后端 + Agent/Gmail 替身", outcome=outcome, evidence=str(settings.data_dir))
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -327,6 +327,7 @@ def test_verification_route_upgrades_and_delivers(settings):
         op = drafts.save_reply_draft(tid, "m", "t", ["a@example.com"], "主题", "正文")
         oid = op["operation_id"]
         client.post(f"/api/tasks/{tid}/confirmations", json={"operation_id": oid, "version": 1})
+
         def saved_unknown():
             view = client.get(f"/api/operations/{oid}/execution").json()
             return view if view["status"] == "unknown" else None

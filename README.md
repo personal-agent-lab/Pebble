@@ -3,7 +3,7 @@
 持续运行的个人 Agent。一个常驻 Python 服务，由单个 Agent 按用户目标组合工具（Gmail、iCloud Calendar、个人资料库）完成真实事务，
 程序负责保证确认、持久化与去重。单用户单实例部署，PC 和手机浏览器都能发起任务、编辑草稿和确认操作；任务不依赖浏览器页面保持开启。
 
-当前状态：A/B 分支已合并，任务、草稿版本、确认执行、Gateway、网页与 Qoder CN/Gmail
+当前状态：任务、草稿版本、确认执行、Gateway、网页与 Qoder CN/Gmail
 生产装配已连接，SQLite schema 为 3。支持新邮件增量检测、任务历史、SSE、Agent 草稿修改、
 网页编辑及最终版本确认。待核实的发送结果可显式核实实际结果并回传原会话。
 生产入口不使用模拟邮箱或内存草稿；真实账号七步验收仍在进行，
@@ -12,11 +12,11 @@
 ## 文档
 
 - `docs/v1-spec.md`：需求范围、产品行为、验收标准。内容冲突时以此为准。
-- `docs/v1-design.md`：组件划分、交付阶段、验证要求、协作分工。
-- `docs/v1-mail-flow-contract.md`：第一条邮件链的接口约定，未定稿。
+- `docs/v1-design.md`：组件划分、交付阶段、验证要求、当前实现。
+- `docs/v1-mail-flow-contract.md`：第一条邮件链的接口字段与语义。
 
 设计文档第 2 节的组件表是目标结构，`server/sessions/`、`server/tools/gmail/` 与 `server/approval/`
-已实现本地存储；HTTP 接口位于 `server/api/`，A 的调用管理位于 `server/gateway/`，调用记录位于 `server/sessions/`，
+已实现本地存储；HTTP 接口位于 `server/api/`，后台调用管理位于 `server/gateway/`，调用记录位于 `server/sessions/`，
 `server/agent/` 装配 Qoder CN SDK，会话历史直接读取 SDK 持久化记录。
 
 ## 前置依赖
@@ -73,6 +73,8 @@ npm run dev
 `/tasks/:taskId`（对话、待确认内容与逐项执行结果）、`/tasks/:taskId/confirm`（草稿编辑与确认）。
 视觉设计系统 token 见 `src/styles/tokens.css`。
 断点 900px：以上为侧栏布局，以下折叠为底部 tab，两端功能一致。
+对话卡片进入完整草稿页审阅与确认；未保存的修改不能确认，确认绑定展示草稿的版本。
+编辑收件人时每行填写一个地址，可保留显示名。
 
 任务列表没有列表级事件流，按 5 秒轮询刷新（页面不可见时暂停），新邮件自动触发的任务无需手动刷新；
 确认后的发送在后台执行，事件流不携带执行状态，页面对执行结果按 1.5 秒轮询直到状态离开 `sending`。
@@ -120,7 +122,7 @@ npm run build
 初始化数据库后使用 `server.sessions.service.SessionStore`、
 `server.tools.gmail.service.ReplyDraftStore` 和 `server.approval.service.ConfirmationService`。
 三者默认使用实例数据库，也可显式传入 `path=Path(...)`。草稿校验由 `server/tools/gmail/service.py`
-的纯函数在存储内完成；`ConfirmationService` 必须传入 B 的同步发送函数，生产代码没有
+的纯函数在存储内完成；`ConfirmationService` 必须传入 Gmail 同步发送函数，生产代码没有
 默认成功的发送函数。输入输出字段及错误含义见
 [邮件接口字段契约](docs/v1-mail-flow-contract.md)。
 
@@ -129,98 +131,27 @@ npm run build
 
 ### 确认发送
 
-- `confirm_reply(task_id, operation_id, version)`：检查版本、取得执行权、调用发送函数并保存结果；
-  重复确认返回已有状态，不再次发送。
+- `accept_confirmation(task_id, operation_id, version)`：检查版本、保存确认并取得执行权。
+- `execute_accepted(operation_id)`：后台读取已确认版本、发送并保存结果；重复调用不再次发送。
 - `get_execution(operation_id)`：操作当前状态、确认信息及已保存结果。
 - `get_agent_result(operation_id)`：契约第 7 节的回传数据；尚无结果或回传任务未关联会话时返回 `None`。
-- `recover_interrupted_executions()`：把上次进程遗留的 `sending` 置为 `unknown`；`server/main.py`
-  在 `init_db()` 之后、接受请求之前调用，数据库初始化本身不执行该恢复。
+- `verify_pending(operation_id)`：只读核实 `unknown`，找到已发送证据后更新为 `sent` 并登记回传。
+- `recover_interrupted_executions()`：重启时已开始的发送记 `unknown`，尚未开始的记 `failed`；
+  在数据库初始化后、接受请求前调用，不自动重发。
 
 发送函数输入输出见契约第 6 节；异常、中断及不符契约的返回都记 `unknown`，不自动重试，
-`unknown` 结果不会阻止后续核实，但重复确认不会重新发送。结果核实由 B 后续接入，
-本步骤不提供重发入口，也不提供任意修改操作状态的接口。
+`unknown` 可以显式核实，重复确认不会重新发送，也没有重发入口。
 
-### 第二步验收记录（2026-09-10）
+## 验证范围
 
-- `uv run --project server pytest -c server/pyproject.toml`：20 项通过。
-- `uv run --project server ruff check --config server/pyproject.toml server tests`：通过。
-- 真实 SQLite：跨进程恢复、并发编辑与准备、历史版本、跨任务关联、失败回滚、
-  不可编辑状态、schema 0 到 1 原子升级和重复初始化均已验证。
-- `tests/storage/test_store.py::test_cross_process`：写入进程退出后，新进程打开同一数据库，
-  比较完整任务、会话关联、草稿及操作列表；测试只写临时目录。
-- B 校验接口：仅测试替身验证通过，包括拒绝保存及防止校验器改写收件人。
-  真实邮件规则、SDK 会话恢复、网页和确认发送不属于此次通过范围。
+- `tests/storage/`：真实 SQLite 的版本、并发、回滚、恢复与确认去重。
+- `tests/gateway/`：后台调度、SDK 事件和工具边界、执行结果回传。
+- `tests/api/test_http_flow.py`：独立进程的 HTTP/SSE、断线后继续执行与重启。
+- `tests/api/test_manual_flow.py`：手动验收装配的健康检查、七步邮件流程与历史恢复。
+- `tests/tools/`：邮件解析、草稿校验、报文构建与发送结果核实。
 
-### 第三步验收记录（2026-09-12）
-
-- `uv run --project server pytest -c server/pyproject.toml`：43 项通过。
-- `uv run --project server ruff check --config server/pyproject.toml server tests`：通过。
-- 真实 SQLite 已通过：确认记录与结果落盘、新进程读取一致、并发重复确认只有一份执行记录且
-  发送调用为 1 次、编辑与确认竞争只出现合法结果、提交前失败整体回滚、
-  schema 1 到 2 升级与重复初始化保留任务、草稿和历史版本、执行记录唯一约束有效。
-- 发送替身已通过：多轮修改后只发送最终确认版本且中文、空白、换行与收件人顺序逐字段一致；
-  确认旧版本返回版本冲突且零调用；`sent`、`failed`、`unknown` 三类结果正确保存并阻止重复确认；
-  调用异常与不符契约返回记待核实；发送后结果保存失败向调用方报错并阻止重发；
-  执行中进程退出后重启置为待核实且不再次调用发送函数；共享操作的回传任务取首次确认任务。
-- 真实 SQLite 与发送替身共同验证了 `get_agent_result` 在会话未关联时返回 `None`、关联后可读取，
-  以及 `recover_interrupted_executions` 在服务启动流程中先于请求执行。
-- 待联合验证：真实 Gmail 发送（B 的发送函数）与 Agent 结果回传（SDK 会话接入后读取
-  `get_agent_result`），网页确认入口不在本次范围。
-
-## 网页界面验收（2026-09-12）
-
-`npm run typecheck` 与 `npm run build` 通过。以下用脚本化替身后端
-（真实 HTTP、SQLite、确认执行，发送为替身，不会真实发信；现由
-`tests/api/test_http_flow.py:build_fixture_app` 装配），在浏览器 1280×860 与 375×812
-两个视口手动走完，两端行为一致：
-
-- 替身启动时自动投递的新邮件任务出现在列表；提交消息后 SSE 出回复文本，
-  `draft_saved` 后出现待确认卡，侧栏与顶栏的待确认计数同步。
-- 确认页编辑正文并保存为新版本，版本号由 v1 递增到 v2，版本历史标出当前版本。
-- 另一路把草稿改到 v3、v4 后，页面上以旧版本确认被拒：提示「你确认或编辑依据的是 vN，
-  当前内容已是 vM」，内容刷新到最新版，`sent.jsonl` 未增加行，即未产生发送调用。
-- 确认当前版本后状态转为 sent，确认记录显示确认版本、时间与邮件 ID；
-  发送参数与所确认版本逐字段一致；重复确认返回已有状态，`sent.jsonl` 行数不变。
-- 执行结果分区按「N / M」如实汇总，逐项展示；`PEBBLE_TEST_SEND_STATUS=failed` 显示失败原因并
-  说明不自动重试，`=unknown` 显示待核实且页面上不存在任何重发入口。
-- 结果回传后 Agent 的后续回复出现在同一对话中。
-- 确认前刷新页面，草稿与待确认卡原样恢复。
-- 停掉后端刷新页面显示「无法连接服务」与重试按钮，不白屏；后端恢复后点重试即回到列表。
-
-未覆盖：真实 SDK 历史、真实 Gmail 发送、真机浏览器与认证部署；`sending` 中间态因替身同步返回
-过快未单独截取。前端尚无自动化测试，按 `docs/v1-design.md` §9 的视口端到端测试待接口稳定后补。
-
-## Gateway 后端验收（2026-09-12）
-
-A 的 `server/gateway/runtime.py` 管理应用生命周期内的异步任务和事件订阅，API 将事件编码为 SSE，
-同目录的 `agent_contract.py` 定义 B 的调用接口；`server/sessions/runs.py` 保存调用记录。
-没有独立工作线程、额外事件循环或自建 Agent 循环。同步发送使用线程池。
-`tests/support/agent_double.py` 等测试替身仅用于测试，不进入默认应用装配。
-
-本次检查：67 项 pytest 通过，Ruff 检查通过；保留一条上游 Starlette 弃用提示。
-
-运行完整后端链路验收：
-
-```bash
-uv run --project server pytest -c server/pyproject.toml tests/api/test_http_flow.py -v
-uv run --project server pytest -c server/pyproject.toml
-uv run --project server ruff check --config server/pyproject.toml server tests
-```
-
-`tests/api/test_http_flow.py` 启动独立 Uvicorn 进程并访问真实 HTTP/SSE：自动新邮件摘要、用户要求
-准备草稿、多轮修改、旧版本拒绝、最终确认、参数逐字段比较、重复确认、结果回传及进程重启。
-SSE 收到事件后主动断开，后端仍完成工作。数据库与发送参数日志均保存在独立临时目录。
-其他测试覆盖并发、回滚、三类发送结果、异常格式、中断恢复和回传失败。
-
-真实 SQLite、HTTP/SSE 与后端业务服务属于真实验收；摘要、草稿生成、校验及 Gmail 发送
-使用替身。历史对话由 B 接口读取，当前替身仅存内存，不能据此宣称真实 SDK 历史跨进程恢复通过。
-网页操作、真实邮箱投递与真实 Agent 判断仍待接入。
-
-供 B 装配的入口为 `create_app(gateway=..., send_reply=..., verify_reply=..., mail_source=...)`。
-后台邮件检测在应用事件循环中调用 `app.state.agent.accept_new_mail(source_message_id, thread_id)`；
-每封新邮件一个任务，同一邮件重复检测不重复启动，同线程不同邮件创建不同任务。
-
-手动启动替身后端走完整流程见下一节「手动跑通完整邮件流程」。
+测试只替换外部服务或 Agent 边界，不连接真实邮箱。SDK 模型响应与 Gmail 投递仍须用明确授权
+的账号和内容验收；测试通过不代表真实邮件发送成功。
 
 ## 手动跑通完整邮件流程
 
@@ -273,39 +204,23 @@ PYTHONPATH=. PEBBLE_DATA_DIR=/tmp/pebble-manual uv run --project server python -
 是会话历史（重启后仍在），`mock_agent_mails.json` 是任务与邮件的对应关系。会话标识按任务生成，
 重启后新任务不会捡到旧任务的历史。
 
-新邮件来源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/mail_source.py` 的
-`MailSource`（`start` / `stop`）。真实 Gmail 检测由 `server/tools/gmail/sync.py` 实现同一接口，生产工厂统一装配。`tests/support/` 下的模拟邮箱与替身 Agent 只用于测试和人工验收。
+新邮件来源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/runtime.py` 的
+`MailSource`（`start` / `stop` / `error`）。真实 Gmail 检测由 `server/tools/gmail/sync.py` 实现同一接口，生产工厂统一装配。`tests/support/` 下的模拟邮箱与替身 Agent 只用于测试和人工验收。
 
-### 手动验收记录（2026-09-12）
-
-浏览器 1280×860 走完上述七步：投递 `invite` 后任务自动出现；对话里先给摘要和建议且没有
-自建草稿；问一句「这封邮件说了什么」只得到回答，操作数仍为 0；说「帮我写一封回信」后出现
-v1 草稿与待确认卡；「再问一下会议链接」改出 v2；确认页手动编辑保存为 v3；确认发送时出现
-`sending`（`PEBBLE_TEST_SEND_DELAY=2`），随后转 `sent` 并显示邮件 ID；`sent.jsonl` 只有一行，
-收件人、主题、正文与 v3 逐字段一致；执行结果分区按「1 / 1」汇总，Agent 在同一对话里给出
-后续回复；已发送后再要求修改被明确拒绝。重复投递同一封邮件任务数不变；投递第二封生成
-独立任务和独立草稿；重启后端后任务不重复、对话历史仍在。
-
-另外验证了 `compose` 现写的邮件：没有摘要字段时按正文首句摘要（跳过称呼），起草的回信按
-真实发件人和主题生成。
-
-自动化覆盖同一套装配的是 `tests/api/test_manual_flow.py`：七步、两封邮件各自独立、重启后
-历史不串、现写邮件无摘要字段。
-
-## A/B 生产集成（2026-09-13）
+## 生产装配
 
 生产入口为 `server.main:create_production_app`（Uvicorn factory），上面的 `python -m server.main`
 已使用该入口。`create_app()` 保留为显式依赖注入的应用构造函数，供测试使用。
 
 Gmail 首次启动记录当前 historyId，随后每 10 秒检测新增的收件箱邮件；首次启动前的旧邮件
-不会批量触发。跨进程游标保存在 `.data/gmail_sync.json`。邮件成功交给 A 的持久化任务入口后
-才推进游标，重复通知由 A 去重。游标失效明确停止检测，health 显示原因，需要核对后重新建立
+不会批量触发。跨进程游标保存在 `.data/gmail_sync.json`。邮件成功交给 Gateway 的持久化任务入口后
+才推进游标，重复通知由 Gateway 去重。游标失效明确停止检测，health 显示原因，需要核对后重新建立
 同步位置，不静默跳过缺口。常规检测错误保留游标，在下一轮重新查询。
 
 新邮件轮次仅开放邮件读取工具。用户要求起草后，SDK 才可调用准备、读取及更新草稿工具；
-更新使用当前已保存版本，直接编辑与 Agent 修改共用 A 的版本控制。草稿保存事件交给网页。
+更新使用当前已保存版本，直接编辑与 Agent 修改共用 ReplyDraftStore 的版本控制。草稿保存事件交给网页。
 发送函数仅由 Confirmation 调用，执行结果回到确认任务的原 SDK 会话。
 
-联合测试 `tests/gateway/test_integrated_mail.py` 覆盖实际 A/B 模块衔接、Agent 修改与手动编辑、
+联合测试 `tests/gateway/test_integrated_mail.py` 覆盖实际模块衔接、Agent 修改与手动编辑、
 旧版本拒绝、最终内容一致性、重复确认、结果会话关联、游标推进、SDK 历史读取与 BYOK 配置。
 其中 SDK 模型响应和 Gmail 投递仍为测试边界替身；真实验收结果需另行记录。

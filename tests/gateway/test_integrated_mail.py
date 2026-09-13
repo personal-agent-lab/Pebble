@@ -1,4 +1,4 @@
-"""A/B 联合验证：真实业务模块、SQLite、HTTP；只替换 SDK 和 Gmail 的外部边界。"""
+"""模块集成验证：真实业务模块、SQLite、HTTP；只替换 SDK 和 Gmail 的外部边界。"""
 
 import asyncio
 import json

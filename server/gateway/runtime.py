@@ -119,7 +119,7 @@ class GatewayRuntime:
         return task
 
     def submit_message(self, task_id: str, message: str) -> dict:
-        """登记用户消息并返回调用记录；会话标识由 A 从任务记录读取。"""
+        """登记用户消息并返回调用记录；会话标识从任务记录读取。"""
         self.require_gateway()
         now = timestamp()
         run_id = str(uuid4())
@@ -309,7 +309,7 @@ class MailSource(Protocol):
 
     检测逻辑不在这里：Gmail 同步游标与协议处理属于 Gmail 工具（`server/tools/gmail/sync.py`），
     检测到未处理邮件后调用 `accept_new_mail`，去重与任务创建仍由本模块保证。
-    默认装配没有邮件来源，不伪造邮件。
+    生产工厂装配 GmailSource，测试显式传入替身。
     """
 
     # 检测中断的原因，健康检查据此报 degraded；正常运行为 None。

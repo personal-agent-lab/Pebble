@@ -1,4 +1,4 @@
-"""tests/test_gmail_client.py: 测试 GmailClient 协议实现、Mock 回退与 MIME 报文解析。"""
+"""tests/test_gmail_client.py: 测试 GmailClient 协议实现、显式替身与 MIME 报文解析。"""
 
 import base64
 import email
