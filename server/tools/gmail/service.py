@@ -211,6 +211,10 @@ class ReplyDraftStore:
         if not result["valid"]:
             raise DraftValidationError(result["errors"])
 
+    def _reuse(self, conn: sqlite3.Connection, task_id: str, operation_id: str) -> dict:
+        operations.link(conn, task_id, operation_id)
+        return summary(operations.operation(conn, operation_id))
+
     def save_reply_draft(
         self,
         task_id: str,
@@ -220,20 +224,23 @@ class ReplyDraftStore:
         subject: str,
         body: str,
     ) -> dict:
+        """去重先于校验（契约 §4）：复用已有操作时候选内容不参与校验。
+
+        只读检查与纯函数校验都不持有写锁，并发准备互不阻塞；创建前的写事务内再查一次，
+        两个并发请求只有一个能创建，另一个复用。
+        """
         recipients = list(to)
-        with session(self.path) as conn, write(conn):
+        with session(self.path) as conn:
             operations.task(conn, task_id)
-            existing = find_reply(conn, source_message_id)
-            if existing is not None:
-                operations.link(conn, task_id, existing)
-                return summary(operations.operation(conn, existing))
+            known = find_reply(conn, source_message_id)
+        if known is not None:
+            with session(self.path) as conn, write(conn):
+                return self._reuse(conn, task_id, known)
         self._validate(source_message_id, thread_id, recipients, subject, body)
         with session(self.path) as conn, write(conn):
-            operations.task(conn, task_id)
             existing = find_reply(conn, source_message_id)
             if existing is not None:
-                operations.link(conn, task_id, existing)
-                return summary(operations.operation(conn, existing))
+                return self._reuse(conn, task_id, existing)
             operation = create_operation(conn, task_id, "mail_reply")
             operation_id = operation["operation_id"]
             insert_draft(conn, operation_id, source_message_id, thread_id)
