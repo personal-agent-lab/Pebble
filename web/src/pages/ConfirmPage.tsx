@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { ApiError, confirmOperation, editDraft, verifyExecution, type FieldError } from "../api";
+import { ApiError, confirmOperation, editDraft, verifyExecution, type Draft, type FieldError } from "../api";
 import AppShell from "../components/AppShell";
 import Notice from "../components/Notice";
 import StatusBadge from "../components/StatusBadge";
@@ -18,11 +18,11 @@ const MAIL_ICON = (
 
 type Form = { to: string; subject: string; body: string };
 
-function formOf(view: OperationView): Form {
+function formOf(draft: Draft): Form {
   return {
-    to: view.draft?.to.join(", ") ?? "",
-    subject: view.draft?.subject ?? "",
-    body: view.draft?.body ?? "",
+    to: draft.to.join("\n"),
+    subject: draft.subject,
+    body: draft.body,
   };
 }
 
@@ -32,7 +32,7 @@ function fieldError(errors: FieldError[] | undefined, field: string): string | u
 
 type CardProps = {
   taskId: string;
-  view: OperationView;
+  view: OperationView & { draft: Draft };
   onChanged: () => Promise<void>;
 };
 
@@ -44,24 +44,22 @@ type CardProps = {
  */
 function OperationEditor({ taskId, view, onChanged }: CardProps) {
   const status = effectiveStatus(view);
-  const version = view.execution?.version ?? view.summary.version;
+  const version = view.draft.version;
   const editable = status === "pending";
 
-  const [form, setForm] = useState<Form>(() => formOf(view));
-  const [dirtyVersion, setDirtyVersion] = useState(version);
+  const [form, setForm] = useState<Form>(() => formOf(view.draft));
   const [busy, setBusy] = useState<"save" | "confirm" | "verify" | null>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
 
-  // 内容变化（Agent 重写或自己保存）时以服务端内容为准，丢弃未保存的本地编辑。
+  // 只在内容版本变化时同步表单；执行状态刷新不能覆盖用户尚未保存的修改。
   useEffect(() => {
-    if (dirtyVersion !== version) {
-      setForm(formOf(view));
-      setDirtyVersion(version);
-    }
-  }, [version, dirtyVersion, view]);
+    setForm(formOf(view.draft));
+  }, [version]);
 
+  const saved = formOf(view.draft);
+  const dirty = form.to !== saved.to || form.subject !== saved.subject || form.body !== saved.body;
   const recipients = form.to
-    .split(/[,，;；\s]+/)
+    .split(/\r?\n/)
     .map((item) => item.trim())
     .filter((item) => item !== "");
 
@@ -77,12 +75,14 @@ function OperationEditor({ taskId, view, onChanged }: CardProps) {
       await onChanged();
     } catch (error) {
       setFailure(error instanceof ApiError ? error : new ApiError("offline", String(error), 0));
+      await onChanged();
     } finally {
       setBusy(null);
     }
   };
 
   const confirm = async () => {
+    if (dirty || !editable || busy !== null) return;
     setBusy("confirm");
     setFailure(null);
     try {
@@ -125,11 +125,12 @@ function OperationEditor({ taskId, view, onChanged }: CardProps) {
         <div className="fields">
           <div className="field">
             <span className="k">收件人</span>
-            <input
+            <textarea
               className={`input${fieldError(failure?.fieldErrors, "to") ? " invalid" : ""}`}
               value={form.to}
-              disabled={!editable}
+              disabled={!editable || busy !== null}
               aria-label="收件人"
+              placeholder="每行一个收件人"
               onChange={(event) => setForm({ ...form, to: event.target.value })}
             />
             {fieldError(failure?.fieldErrors, "to") !== undefined && (
@@ -141,7 +142,7 @@ function OperationEditor({ taskId, view, onChanged }: CardProps) {
             <input
               className={`input${fieldError(failure?.fieldErrors, "subject") ? " invalid" : ""}`}
               value={form.subject}
-              disabled={!editable}
+              disabled={!editable || busy !== null}
               aria-label="主题"
               onChange={(event) => setForm({ ...form, subject: event.target.value })}
             />
@@ -154,7 +155,7 @@ function OperationEditor({ taskId, view, onChanged }: CardProps) {
             <textarea
               className={`input body${fieldError(failure?.fieldErrors, "body") ? " invalid" : ""}`}
               value={form.body}
-              disabled={!editable}
+              disabled={!editable || busy !== null}
               aria-label="正文"
               onChange={(event) => setForm({ ...form, body: event.target.value })}
             />
@@ -218,14 +219,14 @@ function OperationEditor({ taskId, view, onChanged }: CardProps) {
       )}
 
       <div className="op-foot">
-        <button type="button" className="btn" onClick={() => void confirm()} disabled={!editable || busy !== null}>
+        <button type="button" className="btn" onClick={() => void confirm()} disabled={!editable || dirty || busy !== null}>
           {busy === "confirm" ? "确认中…" : "确认发送"}
         </button>
         <button
           type="button"
           className="btn-secondary"
           onClick={() => void save()}
-          disabled={!editable || busy !== null}
+          disabled={!editable || !dirty || busy !== null}
         >
           {busy === "save" ? "保存中…" : "保存修改"}
         </button>
@@ -240,7 +241,7 @@ function OperationEditor({ taskId, view, onChanged }: CardProps) {
           </button>
         )}
         <span className="note">
-          {status === "pending" && "确认前仍可编辑；保存修改后，之前的确认不再生效。"}
+          {status === "pending" && (dirty ? "请先保存修改，再确认发送。" : "确认前仍可编辑；修改后请先保存。")}
           {status === "sending" && "正在发送，内容已锁定。"}
           {status === "sent" && "已发送。重复确认返回已有状态，不会再次发送。"}
           {status === "failed" && "明确失败。不自动重试，也不沿用旧确认自动重发。"}
@@ -320,11 +321,16 @@ export default function ConfirmPage() {
           </div>
         )}
 
-        {views.map((view) => (
+        {views.map((view) => view.draft === null ? (
+          <Notice key={view.summary.operation_id} tone="danger" title="草稿读取失败"
+            actions={<button type="button" className="btn-secondary" onClick={() => void reloadViews()}>重新读取</button>}>
+            无法展示完整内容，暂不能确认发送。
+          </Notice>
+        ) : (
           <OperationEditor
             key={view.summary.operation_id}
             taskId={taskId}
-            view={view}
+            view={{ ...view, draft: view.draft }}
             onChanged={onChanged}
           />
         ))}

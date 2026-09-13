@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { ApiError, confirmOperation, type Execution } from "../api";
+import { ApiError, type Execution } from "../api";
 import AppShell from "../components/AppShell";
 import MessageFeed from "../components/MessageFeed";
 import Notice from "../components/Notice";
@@ -9,7 +9,6 @@ import OperationCard from "../components/OperationCard";
 import StatusBadge from "../components/StatusBadge";
 import { effectiveStatus, useOperationViews, useTaskDetail, type OperationView } from "../hooks";
 import { operationBadge, resultSummary, shortTime, taskBadge } from "../status";
-import { useTasks } from "../tasks";
 
 const BACK_ICON = (
   <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -87,12 +86,10 @@ export default function TaskPage() {
   const { taskId = "" } = useParams();
   const navigate = useNavigate();
   const detail = useTaskDetail(taskId);
-  const { views, reload: reloadViews } = useOperationViews(detail.operations, detail.draftRevision);
-  const tasks = useTasks();
+  const { views } = useOperationViews(detail.operations, detail.draftRevision);
 
   const [message, setMessage] = useState("");
   const [actionError, setActionError] = useState<ApiError | null>(null);
-  const [confirming, setConfirming] = useState<string | null>(null);
 
   const pending = views.filter((view) => effectiveStatus(view) === "pending");
   const executed = views.filter((view) => view.execution?.confirmation != null);
@@ -106,23 +103,6 @@ export default function TaskPage() {
       setActionError(null);
     } else {
       setActionError(failure);
-    }
-  };
-
-  const confirm = async (view: OperationView) => {
-    const version = view.execution?.version ?? view.summary.version;
-    setConfirming(view.summary.operation_id);
-    setActionError(null);
-    try {
-      await confirmOperation(taskId, view.summary.operation_id, version);
-    } catch (failure) {
-      setActionError(failure instanceof ApiError ? failure : new ApiError("offline", String(failure), 0));
-    } finally {
-      setConfirming(null);
-      await reloadViews();
-      await detail.reload();
-      // 侧栏与入口的待确认计数读自任务列表，确认后立即重读，不等下一次轮询。
-      void tasks.reload();
     }
   };
 
@@ -179,25 +159,15 @@ export default function TaskPage() {
                 key={view.summary.operation_id}
                 taskId={taskId}
                 view={view}
-                confirming={confirming === view.summary.operation_id}
-                onConfirm={() => void confirm(view)}
               />
             ))}
 
             {actionError !== null && (
               <Notice
                 tone={actionError.unavailable ? "muted" : "danger"}
-                title={
-                  actionError.code === "version_conflict"
-                    ? "确认被拒绝：内容已更新"
-                    : actionError.unavailable
-                      ? "功能暂未开放"
-                      : "操作失败"
-                }
+                title={actionError.unavailable ? "功能暂未开放" : "操作失败"}
               >
-                {actionError.code === "version_conflict"
-                  ? "草稿已被更新。内容变化后旧确认不再适用，请查看最新内容后重新确认；这次操作没有发出任何邮件。"
-                  : actionError.message}
+                {actionError.message}
               </Notice>
             )}
 

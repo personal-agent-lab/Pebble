@@ -14,15 +14,13 @@ const MAIL_ICON = (
 type Props = {
   taskId: string;
   view: OperationView;
-  confirming: boolean;
-  onConfirm: () => void;
 };
 
 /**
  * 对话内的待确认卡片。内容来自已保存草稿，刷新或重新进入后原样恢复；
- * 副作用写在卡片内，确认始终绑定卡片当前展示的内容（版本号是内部实现，不展示）。
+ * 卡片只显示摘要，完整审阅、编辑与确认统一在确认页完成。
  */
-export default function OperationCard({ taskId, view, confirming, onConfirm }: Props) {
+export default function OperationCard({ taskId, view }: Props) {
   const status = effectiveStatus(view);
   const draft = view.draft;
 
@@ -46,14 +44,11 @@ export default function OperationCard({ taskId, view, confirming, onConfirm }: P
             <span className="val clip">{draft.body}</span>
           </div>
         )}
-        副作用：确认后将以你的 Gmail 账号向上述收件人发送，内容与你确认时看到的逐字段一致。
+        请查看完整草稿后确认发送。
       </div>
       <div className="op-actions">
-        <button type="button" className="btn" onClick={onConfirm} disabled={status !== "pending" || confirming}>
-          {confirming ? "确认中…" : "确认发送"}
-        </button>
-        <Link className="btn-secondary" to={`/tasks/${taskId}/confirm`}>
-          编辑草稿
+        <Link className="btn" to={`/tasks/${taskId}/confirm`}>
+          审阅与确认
         </Link>
       </div>
     </div>
