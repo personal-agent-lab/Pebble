@@ -66,6 +66,11 @@ def operations(client: TestClient, task_id: str) -> list[dict]:
 
 
 def test_seven_steps(client: TestClient, settings: Settings) -> None:
+    health = client.get("/api/health")
+    assert health.status_code == 200
+    assert health.json()["status"] == "ok"
+    assert health.json()["mail_source_error"] is None
+
     # 1. 后台检测到新邮件并建任务；同一封邮件重复投递不重复建。
     deliver(settings, "invite")
     tasks = wait_for(lambda: client.get("/api/tasks").json(), "新邮件任务出现")

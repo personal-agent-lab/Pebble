@@ -4,7 +4,7 @@
 去重仍由服务端的持久关联保证，所以同一封邮件反复扫描不会重复建任务。
 发现的邮件同步进 `self.client`（MockGmailClient），替身 Agent 与真实工具走同一套
 `BaseGmailClient` 读取接口；json 里的摘要、建议等字段只是替身脚本素材，不是邮件内容。
-真实 Gmail 检测由 B 实现同一套 `MailSource` 启停接口，本模块不进入默认装配。
+真实 Gmail 检测实现同一套 `MailSource` 启停接口，本模块不进入默认装配。
 """
 
 import asyncio
@@ -62,6 +62,7 @@ class MockMailbox:
     def __init__(self, directory: Path, *, interval: float = POLL_SECONDS):
         self.directory = Path(directory)
         self.interval = interval
+        self.error: str | None = None
         self.client = MockGmailClient()
         # 替身客户端自带一封演示种子邮件；目录邮箱的内容以邮件文件为准，不混入种子。
         self.client.messages.clear()
@@ -131,9 +132,11 @@ class MockMailbox:
         while True:
             try:
                 self.deliver_once(agent)
+                self.error = None
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as error:
                 # 检测失败不该停掉整个邮箱：记下来，下一轮继续。
+                self.error = f"模拟邮箱检测失败（{type(error).__name__}）"
                 logger.exception("邮件检测失败，下一轮重试")
             await asyncio.sleep(self.interval)
