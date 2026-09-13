@@ -37,6 +37,8 @@ class ToolDefinition:
     parameters_schema: dict[str, Any] = field(default_factory=dict)
     # 声明了仅关键字 task_id 参数的工具由网关在每轮调用时注入任务身份，不进入模型 schema。
     needs_task_id: bool = False
+    # 保存成功后需要通知页面可读取草稿的工具；网关在调用成功后据此发 draft_saved 事件。
+    emits_draft_saved: bool = False
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.func(*args, **kwargs)
@@ -55,6 +57,7 @@ class ToolRegistry:
         name: str | None = None,
         description: str | None = None,
         side_effect: SideEffect = SideEffect.READONLY,
+        emits_draft_saved: bool = False,
     ) -> Any:
         """注册工具。可作为普通函数调用，也可作为装饰器使用。"""
 
@@ -75,6 +78,7 @@ class ToolRegistry:
                 side_effect=side_effect,
                 parameters_schema=schema,
                 needs_task_id=needs_task_id,
+                emits_draft_saved=emits_draft_saved,
             )
 
             # 附加元数据到原函数
@@ -156,8 +160,13 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     side_effect: SideEffect = SideEffect.READONLY,
+    emits_draft_saved: bool = False,
 ) -> Any:
     """快捷 @tool 装饰器，向全局默认工具注册表注册。"""
     return default_registry.register(
-        func, name=name, description=description, side_effect=side_effect
+        func,
+        name=name,
+        description=description,
+        side_effect=side_effect,
+        emits_draft_saved=emits_draft_saved,
     )

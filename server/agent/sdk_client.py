@@ -34,9 +34,6 @@ from server.tools.registry import SideEffect, ToolDefinition
 
 UNEXPECTED_ERROR_TEXT = "工具执行失败，未确认保存成功，请检查输入或服务配置"
 
-# 保存成功后需要通知页面可读取草稿的工具；按名称判断，绑定依赖后的定义不是同一对象。
-DRAFT_TOOL_NAMES = {"gmail_prepare_reply", "gmail_update_reply_draft"}
-
 
 def tool_result(payload: object, *, failed: bool = False) -> dict:
     """工具返回值收敛为 MCP 结果；失败结果保留结构化原因，未知失败只给固定文案。"""
@@ -85,10 +82,10 @@ def build_options(
                     result = await asyncio.to_thread(definition, **values)
                     if (
                         draft_events is not None
+                        and definition.emits_draft_saved
                         and isinstance(result, dict)
                         and result.get("operation_id")
                         and result.get("version")
-                        and definition.name in DRAFT_TOOL_NAMES
                     ):
                         draft_events.append(
                             {

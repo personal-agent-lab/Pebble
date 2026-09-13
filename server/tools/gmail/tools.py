@@ -162,6 +162,7 @@ def get_email_detail(
         "真实发送必须在用户通过界面明确确认后，由系统执行。"
     ),
     side_effect=SideEffect.LOCAL_WRITE,
+    emits_draft_saved=True,
 )
 def prepare_reply(
     source_message_id: str,
@@ -225,7 +226,7 @@ def read_reply_draft(
     return drafts.get_reply_draft(operation_id)
 
 
-@tool(name="gmail_update_reply_draft", side_effect=SideEffect.LOCAL_WRITE)
+@tool(name="gmail_update_reply_draft", side_effect=SideEffect.LOCAL_WRITE, emits_draft_saved=True)
 def update_reply_draft(
     operation_id: str,
     expected_version: int,
