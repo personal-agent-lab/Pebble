@@ -11,6 +11,7 @@ import pytest
 
 from server.db import SCHEMA_VERSION, init_db, session, write
 from server.errors import (
+    DraftValidationError,
     NotEditableError,
     NotFoundError,
     SessionConflictError,
@@ -18,7 +19,7 @@ from server.errors import (
 )
 from server.sessions.service import SessionStore
 from server.tools.gmail import repository as mail_repo
-from server.tools.gmail.service import DraftValidationError, ReplyDraftStore
+from server.tools.gmail.service import ReplyDraftStore
 
 CONTENT = {
     "to": ["甲@example.com", "b@example.com"],

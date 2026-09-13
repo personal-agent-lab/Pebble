@@ -3,6 +3,8 @@
 草稿存储用真实 SQLite：工具与 HTTP 共用同一实现，去重和版本由数据库唯一约束保证。
 """
 
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 from server.db import init_db
@@ -157,3 +159,24 @@ def test_prepare_reply_reuse_precedes_validation(drafts, task_id) -> None:
     assert reused["version"] == 1
     assert reused["status"] == "pending"
     assert drafts.get_reply_draft(first["operation_id"])["body"] == "第一次准备回复。"
+
+
+def test_parallel_preparation_creates_one_operation(drafts, task_id) -> None:
+    """并发准备同一封原邮件只产生一个操作；读出的草稿是副本，改动不回写存储。"""
+    fields = dict(
+        task_id=task_id,
+        source_message_id="msg_invite_001",
+        thread_id="thread_invite_001",
+        to=["alice@example.com"],
+        subject="Re: 邀请",
+        body="确认内容\n保留空格  ",
+    )
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: drafts.save_reply_draft(**fields), range(50)))
+
+    assert len({result["operation_id"] for result in results}) == 1
+    assert {result["version"] for result in results} == {1}
+    operation_id = results[0]["operation_id"]
+    draft = drafts.get_reply_draft(operation_id)
+    draft["to"].append("intruder@example.com")
+    assert drafts.get_reply_draft(operation_id)["to"] == fields["to"]

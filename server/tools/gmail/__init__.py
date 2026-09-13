@@ -1,45 +1,4 @@
-"""Gmail 工具包：认证、协议客户端、查询、校验与草稿准备。"""
+"""Gmail 工具包：认证与协议客户端、查询与草稿工具、业务校验、草稿存储与确认后发送。
 
-from server.tools.gmail.client import (
-    BaseGmailClient,
-    GmailMessage,
-    GoogleApiGmailClient,
-    MockGmailClient,
-    SendReplyResult,
-    create_gmail_client,
-)
-from server.tools.gmail.service import ReplyDraftStore
-from server.tools.gmail.tools import (
-    format_thread_transcript,
-    get_email_detail,
-    get_email_thread,
-    prepare_reply,
-    query_emails,
-    read_reply_draft,
-    update_reply_draft,
-)
-from server.tools.gmail.validator import (
-    ValidationError,
-    ValidationResult,
-    validate_reply_draft,
-)
-
-__all__ = [
-    "BaseGmailClient",
-    "GmailMessage",
-    "GoogleApiGmailClient",
-    "MockGmailClient",
-    "ReplyDraftStore",
-    "SendReplyResult",
-    "ValidationError",
-    "ValidationResult",
-    "format_thread_transcript",
-    "get_email_detail",
-    "get_email_thread",
-    "create_gmail_client",
-    "prepare_reply",
-    "query_emails",
-    "read_reply_draft",
-    "update_reply_draft",
-    "validate_reply_draft",
-]
+不在此再导出子模块名称：调用方直接从对应子模块导入，避免多一层没有职责的转发。
+"""
