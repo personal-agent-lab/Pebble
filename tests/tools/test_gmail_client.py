@@ -11,9 +11,9 @@ from server.tools.gmail.client import (
     BaseGmailClient,
     GoogleApiGmailClient,
     MimeParser,
-    MockGmailClient,
     create_gmail_client,
 )
+from tests.support.gmail_double import MockGmailClient
 
 
 def test_mock_client_get_message_and_thread() -> None:

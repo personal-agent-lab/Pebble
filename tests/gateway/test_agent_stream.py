@@ -11,9 +11,9 @@ from server.agent.toolset import build_tools
 from server.config import Settings
 from server.db import init_db
 from server.sessions.service import SessionStore
-from server.tools.gmail.client import MockGmailClient
 from server.tools.gmail.service import ReplyDraftStore
 from server.tools.gmail.tools import prepare_reply
+from tests.support.gmail_double import MockGmailClient
 
 
 async def collect(stream):

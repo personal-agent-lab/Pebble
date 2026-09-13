@@ -4,8 +4,8 @@ import pytest
 from googleapiclient.errors import HttpError
 from httplib2 import Response
 
-from server.tools.gmail.client import MockGmailClient
 from server.tools.gmail.sender import send_reply, verify_reply_status
+from tests.support.gmail_double import MockGmailClient
 
 FIELDS = dict(
     operation_id="op1",

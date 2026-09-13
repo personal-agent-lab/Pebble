@@ -1,6 +1,5 @@
 """tests/test_gmail_tools.py: 测试 Gmail 只读查询工具与注册属性。"""
 
-from server.tools.gmail.client import MockGmailClient
 from server.tools.gmail.tools import (
     format_thread_transcript,
     get_email_detail,
@@ -8,6 +7,7 @@ from server.tools.gmail.tools import (
     query_emails,
 )
 from server.tools.registry import SideEffect, default_registry
+from tests.support.gmail_double import MockGmailClient
 
 
 def test_gmail_tools_registered_as_readonly() -> None:

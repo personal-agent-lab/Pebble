@@ -18,10 +18,10 @@ from server.config import Settings
 from server.db import init_db
 from server.main import create_app
 from server.sessions.service import SessionStore
-from server.tools.gmail.client import MockGmailClient
 from server.tools.gmail.sender import send_reply
 from server.tools.gmail.service import ReplyDraftStore
 from server.tools.registry import SideEffect, ToolRegistry
+from tests.support.gmail_double import MockGmailClient
 
 
 def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
