@@ -119,9 +119,9 @@ npm run build
 
 初始化数据库后使用 `server.sessions.service.SessionStore`、
 `server.tools.gmail.service.ReplyDraftStore` 和 `server.approval.service.ConfirmationService`。
-三者默认使用实例数据库，也可显式传入 `path=Path(...)`。`ReplyDraftStore` 必须传入 B 的同步
-`validate_reply_draft` 函数，`ConfirmationService` 必须传入 B 的同步发送函数；生产代码没有
-默认放行校验器或默认成功的发送函数。输入输出字段及错误含义见
+三者默认使用实例数据库，也可显式传入 `path=Path(...)`。草稿校验由 `server/tools/gmail/service.py`
+的纯函数在存储内完成；`ConfirmationService` 必须传入 B 的同步发送函数，生产代码没有
+默认成功的发送函数。输入输出字段及错误含义见
 [邮件接口字段契约](docs/v1-mail-flow-contract.md)。
 
 任务保存用户目标与 SDK 会话关联；操作管理版本与状态；邮件字段和原邮件去重留在邮件能力内。
@@ -216,7 +216,7 @@ SSE 收到事件后主动断开，后端仍完成工作。数据库与发送参�
 使用替身。历史对话由 B 接口读取，当前替身仅存内存，不能据此宣称真实 SDK 历史跨进程恢复通过。
 网页操作、真实邮箱投递与真实 Agent 判断仍待接入。
 
-供 B 装配的入口为 `create_app(gateway=..., validate_reply_draft=..., send_reply=...)`。
+供 B 装配的入口为 `create_app(gateway=..., send_reply=..., verify_reply=..., mail_source=...)`。
 后台邮件检测在应用事件循环中调用 `app.state.agent.accept_new_mail(source_message_id, thread_id)`；
 每封新邮件一个任务，同一邮件重复检测不重复启动，同线程不同邮件创建不同任务。
 
