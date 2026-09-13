@@ -174,3 +174,28 @@ async def confirm(
 @router.get("/operations/{operation_id}/execution", tags=["approvals"])
 def execution(operation_id: str, confirmations: Confirmations) -> dict:
     return confirmations.get_execution(operation_id)
+
+
+class CalendarEdit(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_version: int = Field(ge=1)
+    title: str = Field(min_length=1)
+    start: str
+    end: str
+    timezone: str
+    location: str = ""
+    description: str = ""
+
+
+@router.get("/operations/{operation_id}/calendar-draft", tags=["approvals"])
+def read_calendar_draft(operation_id: str, version: int | None = None) -> dict:
+    from server.tools.calendar.service import CalendarDraftStore
+
+    return CalendarDraftStore().get(operation_id, version)
+
+
+@router.patch("/operations/{operation_id}/calendar-draft", tags=["approvals"])
+def edit_calendar_draft(operation_id: str, body: CalendarEdit) -> dict:
+    from server.tools.calendar.service import CalendarDraftStore
+
+    return CalendarDraftStore().update(operation_id, **body.model_dump())

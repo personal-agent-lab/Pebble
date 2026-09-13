@@ -7,6 +7,7 @@ HTTP 入口只接受确认（accept_confirmation：写事务内检查版本、�
 执行结果保存与待回传调用记录在同一事务内登记，重复确认不新增回传。
 """
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Protocol
@@ -14,13 +15,19 @@ from uuid import uuid4
 
 from server.approval import repository as repo
 from server.db import session, write
-from server.errors import DependencyUnavailableError, NotEditableError, VersionConflictError
+from server.errors import (
+    DependencyUnavailableError,
+    NotEditableError,
+    NotFoundError,
+    VersionConflictError,
+)
 from server.sessions import repository as operations
 from server.sessions import runs as agent_runs
 from server.sessions.service import timestamp
+from server.tools.calendar import service as calendar
 from server.tools.gmail import repository as mail
 
-RECOVERED_REASON = "发送调用未完成即中断，结果待核实"
+RECOVERED_REASON = "执行调用未完成即中断，结果待核实"
 
 
 class ReplySender(Protocol):
@@ -51,6 +58,8 @@ def checked_result(returned: object) -> dict:
 def result_response(row: dict) -> dict | None:
     if row["completed_at"] is None:
         return None
+    if row.get("result_json") is not None:
+        return json.loads(row["result_json"])
     if row["message_id"] is not None:
         return {"status": "sent", "message_id": row["message_id"]}
     return {"status": row["status"], "reason": row["reason"]}
@@ -116,8 +125,11 @@ def recover_interrupted_executions(path: Path | None = None) -> list[str]:
 
 
 class ConfirmationService:
-    def __init__(self, send_reply: ReplySender | None, path: Path | None = None):
+    def __init__(
+        self, send_reply: ReplySender | None, path: Path | None = None, *, create_event=None
+    ):
         self.send_reply = send_reply
+        self.create_event = create_event
         self.path = path
 
     def accept_confirmation(self, task_id: str, operation_id: str, version: int) -> dict:
@@ -171,17 +183,28 @@ class ConfirmationService:
         with session(self.path) as conn, write(conn):
             operations.task(conn, task_id)
             row = repo.view(conn, operation_id)
+            if not conn.execute(
+                "SELECT 1 FROM task_operations WHERE task_id=? AND operation_id=?",
+                (task_id, operation_id),
+            ).fetchone():
+                raise NotFoundError(operation_id)
             if row["version"] != version:
                 raise VersionConflictError(row["version"])
             if row["execution_task_id"] is not None:
                 return False
             if row["status"] != "pending":
                 raise NotEditableError(row["status"])
-            if self.send_reply is None:
-                raise DependencyUnavailableError("邮件发送尚未接入")
+            executor = self.create_event if row["type"] == "calendar_create" else self.send_reply
+            if executor is None:
+                raise DependencyUnavailableError("操作执行尚未接入")
             now = timestamp()
             repo.insert(conn, operation_id, task_id, version, now)
-            operations.update_status(conn, operation_id, "sending", now)
+            operations.update_status(
+                conn,
+                operation_id,
+                "creating" if row["type"] == "calendar_create" else "sending",
+                now,
+            )
             return True
 
     def _start(self, operation_id: str) -> tuple[int, dict] | None:
@@ -193,9 +216,33 @@ class ConfirmationService:
             if not repo.start(conn, operation_id, timestamp()):
                 return None
             version = row["confirmed_version"]
-            return version, mail.draft(conn, operation_id, version)
+            return version, (
+                calendar.draft(conn, operation_id, version)
+                if row["type"] == "calendar_create"
+                else mail.draft(conn, operation_id, version)
+            )
 
     def _send(self, operation_id: str, version: int, draft: dict) -> dict:
+        if draft.get("type") == "calendar_create":
+            try:
+                returned = self.create_event(
+                    operation_id=operation_id, version=version, draft=draft
+                )
+                if isinstance(returned, dict):
+                    if (
+                        returned.get("status") == "created"
+                        and returned.get("uid") == draft["uid"]
+                        and isinstance(returned.get("resource_url"), str)
+                        and returned["resource_url"]
+                    ):
+                        return {key: returned[key] for key in ("status", "uid", "resource_url")}
+                    if returned.get("status") in {"failed", "unknown"} and isinstance(
+                        returned.get("reason"), str
+                    ):
+                        return {key: returned[key] for key in ("status", "reason")}
+            except Exception:
+                pass
+            return {"status": "unknown", "reason": "日程创建结果待核实，不会自动再次创建"}
         try:
             returned = self.send_reply(
                 operation_id=operation_id,
@@ -219,8 +266,49 @@ class ConfirmationService:
                 conn,
                 operation_id,
                 message_id=result.get("message_id"),
-                reason=result.get("reason"),
+                reason=result.get("reason")
+                or ("日程已创建" if result["status"] == "created" else None),
                 completed_at=now,
             )
+            if row["type"] == "calendar_create":
+                conn.execute(
+                    "UPDATE approval_executions SET result_json=? WHERE operation_id=?",
+                    (json.dumps(result), operation_id),
+                )
             operations.update_status(conn, operation_id, result["status"], now)
             register_delivery(conn, operation_id, row["execution_task_id"], now)
+
+    def verify_calendar(self, operation_id: str) -> dict:
+        """服务端只读核实入口；只允许 unknown，绝不重新执行创建。"""
+        from server.tools.calendar.client import verify_event
+
+        with session(self.path) as conn:
+            row = repo.view(conn, operation_id)
+            if row["type"] != "calendar_create" or row["status"] != "unknown":
+                raise NotEditableError(row["status"])
+            saved = calendar.draft(conn, operation_id, row["confirmed_version"])
+        result = verify_event(draft=saved)
+        if result["status"] == "created":
+            with session(self.path) as conn, write(conn):
+                row = repo.view(conn, operation_id)
+                if row["status"] == "unknown":
+                    now = timestamp()
+                    repo.complete(
+                        conn, operation_id, message_id=None, reason="日程已创建", completed_at=now
+                    )
+                    conn.execute(
+                        "UPDATE approval_executions SET result_json=? WHERE operation_id=?",
+                        (json.dumps(result), operation_id),
+                    )
+                    operations.update_status(conn, operation_id, "created", now)
+                    # Deliver verification once without replaying creation.
+                    agent_runs.insert(
+                        conn,
+                        str(uuid4()),
+                        row["execution_task_id"],
+                        agent_runs.KIND_EXECUTION_RESULT,
+                        {"operation_id": operation_id},
+                        operation_id + ":verified",
+                        now,
+                    )
+        return self.get_execution(operation_id)

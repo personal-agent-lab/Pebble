@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -36,7 +36,8 @@ SCHEMA_V1 = (
 # 执行中 completed_at 为空；操作状态仍保存在 operations.status。
 SCHEMA_V2 = (
     "CREATE TABLE approval_executions (operation_id TEXT PRIMARY KEY "
-    "REFERENCES operations(operation_id), task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "REFERENCES operations(operation_id), "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
     "version INTEGER NOT NULL CHECK(version >= 1), confirmed_at TEXT NOT NULL, "
     "message_id TEXT, reason TEXT, completed_at TEXT, "
     "CHECK ((completed_at IS NULL) = (message_id IS NULL AND reason IS NULL)))",
@@ -61,7 +62,31 @@ SCHEMA_V3 = (
     "ALTER TABLE approval_executions ADD COLUMN started_at TEXT",
 )
 
-SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {1: SCHEMA_V1, 2: SCHEMA_V2, 3: SCHEMA_V3}
+SCHEMA_V4 = (
+    SCHEMA_V1[1]
+    .replace("CREATE TABLE operations", "CREATE TABLE operations_new")
+    .replace("'sending','sent'", "'sending','sent','creating','created'"),
+    "INSERT INTO operations_new SELECT * FROM operations",
+    "DROP TABLE operations",
+    "ALTER TABLE operations_new RENAME TO operations",
+    "ALTER TABLE approval_executions ADD COLUMN result_json TEXT",
+    "CREATE TABLE calendar_drafts (operation_id TEXT PRIMARY KEY "
+    "REFERENCES operations(operation_id), "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "request_id TEXT NOT NULL, uid TEXT NOT NULL UNIQUE, "
+    "account TEXT NOT NULL, calendar_url TEXT NOT NULL, "
+    "UNIQUE(task_id, request_id))",
+    "CREATE TABLE calendar_versions (operation_id TEXT NOT NULL "
+    "REFERENCES calendar_drafts(operation_id), version INTEGER NOT NULL CHECK(version >= 1), "
+    "fields TEXT NOT NULL, PRIMARY KEY(operation_id, version))",
+)
+
+SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
+    1: SCHEMA_V1,
+    2: SCHEMA_V2,
+    3: SCHEMA_V3,
+    4: SCHEMA_V4,
+}
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 
@@ -117,6 +142,8 @@ def init_db(path: Path | None = None) -> int:
     target = path or get_settings().db_path
     target.parent.mkdir(parents=True, exist_ok=True)
     with session(target) as conn:
+        # SQLite table rebuild: disable FK enforcement before the transaction, then verify.
+        conn.execute("PRAGMA foreign_keys=OFF")
         with write(conn):
             conn.execute("CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL)")
             if conn.execute("SELECT COUNT(*) AS n FROM schema_meta").fetchone()["n"] == 0:
@@ -127,6 +154,8 @@ def init_db(path: Path | None = None) -> int:
             for version in range(current + 1, SCHEMA_VERSION + 1):
                 for statement in SCHEMA_MIGRATIONS[version]:
                     conn.execute(statement)
+            if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise RuntimeError("Migration foreign key check failed")
             if current != SCHEMA_VERSION:
                 conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
         return schema_version(conn)

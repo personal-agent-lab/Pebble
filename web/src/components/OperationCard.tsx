@@ -25,16 +25,26 @@ type Props = {
 export default function OperationCard({ taskId, view, confirming, onConfirm }: Props) {
   const status = effectiveStatus(view);
   const draft = view.draft;
+  const calendar = view.calendarDraft;
+  const isCalendar = view.summary.type === "calendar_create";
 
   return (
     <div className="op-card" data-component="PendingOpCard">
       <div className="op-head">
         {MAIL_ICON}
-        <span className="t">回复邮件草稿</span>
+        <span className="t">{isCalendar ? "日程预览" : "回复邮件草稿"}</span>
         <StatusBadge badge={operationBadge(status)} />
       </div>
       <div className="op-body">
-        {draft === null ? (
+        {isCalendar ? (calendar ? <div className="fld">
+          <span className="k">标题</span><span className="val">{calendar.title}</span>
+          <span className="k">开始</span><span className="val">{calendar.start}</span>
+          <span className="k">结束</span><span className="val">{calendar.end}</span>
+          <span className="k">时区</span><span className="val">{calendar.timezone}</span>
+          <span className="k">日历</span><span className="val" style={{overflowWrap: "anywhere"}}>{calendar.calendar_url}</span>
+          <span className="k">地点</span><span className="val">{calendar.location || "无"}</span>
+          <span className="k">备注</span><span className="val" style={{whiteSpace: "pre-wrap"}}>{calendar.description || "无"}</span>
+        </div> : <div>预览读取失败，请刷新重试。</div>) : draft === null ? (
           <div>草稿内容读取失败，刷新后重试。</div>
         ) : (
           <div className="fld">
@@ -46,11 +56,11 @@ export default function OperationCard({ taskId, view, confirming, onConfirm }: P
             <span className="val clip">{draft.body}</span>
           </div>
         )}
-        副作用：确认后将以你的 Gmail 账号向上述收件人发送，内容与你确认时看到的逐字段一致。
+        {isCalendar ? "确认后在上述 iCloud 日历创建日程。未检查日历冲突；不会发送邀请或邮件。" : "副作用：确认后将以你的 Gmail 账号向上述收件人发送，内容与你确认时看到的逐字段一致。"}
       </div>
       <div className="op-actions">
-        <button type="button" className="btn" onClick={onConfirm} disabled={status !== "pending" || confirming}>
-          {confirming ? "确认中…" : "确认发送"}
+        <button type="button" className="btn" onClick={onConfirm} disabled={status !== "pending" || confirming || (isCalendar ? !calendar : !draft)}>
+          {confirming ? "确认中…" : isCalendar ? "确认创建" : "确认发送"}
         </button>
         <Link className="btn-secondary" to={`/tasks/${taskId}/confirm`}>
           编辑草稿

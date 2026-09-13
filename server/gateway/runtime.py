@@ -205,7 +205,10 @@ class GatewayRuntime:
             return True
         if self.confirmations is None or row["reference_id"] is None:
             return False
-        return self.confirmations.get_agent_result(row["reference_id"]) is not None
+        return (
+            self.confirmations.get_agent_result(json.loads(row["input"])["operation_id"])
+            is not None
+        )
 
     async def _execute(self, run_id: str) -> None:
         row = self._row(run_id)
@@ -239,7 +242,7 @@ class GatewayRuntime:
                 task_id=task_id, sdk_session_id=sdk_session_id, message=payload["message"]
             )
         delivery = (
-            self.confirmations.get_agent_result(row["reference_id"])
+            self.confirmations.get_agent_result(json.loads(row["input"])["operation_id"])
             if self.confirmations is not None
             else None
         )

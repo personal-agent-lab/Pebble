@@ -24,11 +24,12 @@ def create_app(
     gateway=None,
     validate_reply_draft=None,
     send_reply=None,
+    create_event=None,
     mail_source: MailSource | None = None,
 ) -> FastAPI:
     tasks = SessionStore()
     drafts = ReplyDraftStore(validate_reply_draft)
-    confirmations = ConfirmationService(send_reply)
+    confirmations = ConfirmationService(send_reply, create_event=create_event)
     agent = GatewayRuntime(gateway, confirmations=confirmations)
 
     @asynccontextmanager
@@ -63,6 +64,7 @@ def create_production_app() -> FastAPI:
     from server.agent.sdk_client import QoderGateway
     from server.background import GmailSource
     from server.config import get_settings
+    from server.tools.calendar.client import create_event
     from server.tools.gmail.client import GoogleApiGmailClient
     from server.tools.gmail.protocol import set_draft_storage
     from server.tools.gmail.sender import send_reply
@@ -79,6 +81,7 @@ def create_production_app() -> FastAPI:
         gateway=QoderGateway(),
         validate_reply_draft=validate_reply_draft,
         send_reply=send_reply,
+        create_event=create_event,
         mail_source=source,
     )
 

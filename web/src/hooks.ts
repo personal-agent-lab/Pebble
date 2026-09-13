@@ -11,6 +11,8 @@ import {
   ApiError,
   type AgentEvent,
   type Draft,
+  type CalendarDraft,
+  getCalendarDraft,
   type Execution,
   type HistoryMessage,
   type OperationStatus,
@@ -302,6 +304,7 @@ export function useTaskDetail(taskId: string) {
 export type OperationView = {
   summary: OperationSummary;
   draft: Draft | null;
+  calendarDraft: CalendarDraft | null;
   execution: Execution | null;
 };
 
@@ -323,11 +326,12 @@ export function useOperationViews(operations: OperationSummary[], revision: numb
   const reload = useCallback(async () => {
     const loaded = await Promise.all(
       latest.current.map(async (summary): Promise<OperationView> => {
-        const [draft, execution] = await Promise.all([
-          getDraft(summary.operation_id).catch(() => null),
+        const [draft, execution, calendarDraft] = await Promise.all([
+          summary.type === "calendar_create" ? Promise.resolve(null) : getDraft(summary.operation_id).catch(() => null),
           getExecution(summary.operation_id).catch(() => null),
+          summary.type === "calendar_create" ? getCalendarDraft(summary.operation_id).catch(() => null) : Promise.resolve(null),
         ]);
-        return { summary, draft, execution };
+        return { summary, draft, execution, calendarDraft };
       }),
     );
     setViews(loaded);
@@ -337,7 +341,7 @@ export function useOperationViews(operations: OperationSummary[], revision: numb
     void reload();
   }, [reload, revision, key]);
 
-  const executing = views.some((view) => effectiveStatus(view) === "sending");
+  const executing = views.some((view) => ["sending", "creating"].includes(effectiveStatus(view)));
   usePolling(() => void reload(), EXECUTION_POLL_MS, executing);
 
   return { views, reload };

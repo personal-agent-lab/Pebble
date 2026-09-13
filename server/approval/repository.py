@@ -5,9 +5,9 @@ import sqlite3
 from server.errors import NotFoundError
 
 VIEW_SQL = (
-    "SELECT o.operation_id, o.version, o.status, e.task_id AS execution_task_id, "
+    "SELECT o.operation_id, o.type, o.version, o.status, e.task_id AS execution_task_id, "
     "e.version AS confirmed_version, e.confirmed_at, e.message_id, e.reason, e.completed_at, "
-    "e.started_at, t.sdk_session_id FROM operations o "
+    "e.started_at, e.result_json, t.sdk_session_id FROM operations o "
     "LEFT JOIN approval_executions e ON e.operation_id = o.operation_id "
     "LEFT JOIN tasks t ON t.task_id = e.task_id WHERE o.operation_id = ?"
 )

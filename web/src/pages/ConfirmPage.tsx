@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { ApiError, confirmOperation, editDraft, type FieldError } from "../api";
 import AppShell from "../components/AppShell";
 import Notice from "../components/Notice";
+import CalendarEditor from "../components/CalendarEditor";
 import StatusBadge from "../components/StatusBadge";
 import { effectiveStatus, useOperationViews, useTaskDetail, type OperationView } from "../hooks";
 import { operationBadge, shortTime } from "../status";
@@ -44,7 +45,7 @@ type CardProps = {
  */
 function OperationEditor({ taskId, view, onChanged }: CardProps) {
   const status = effectiveStatus(view);
-  const version = view.execution?.version ?? view.summary.version;
+  const version = view.draft?.version ?? view.summary.version;
   const editable = status === "pending";
 
   const [form, setForm] = useState<Form>(() => formOf(view));
@@ -169,7 +170,7 @@ function OperationEditor({ taskId, view, onChanged }: CardProps) {
                   <span className="id">
                     {result.status === "sent" ? "已发送" : result.status === "failed" ? "发送失败" : "待核实"}
                   </span>
-                  <span>{result.status === "sent" ? "" : result.reason}</span>
+                  <span>{"reason" in result ? result.reason : ""}</span>
                 </div>
               )}
             </div>
@@ -205,7 +206,7 @@ function OperationEditor({ taskId, view, onChanged }: CardProps) {
       )}
 
       <div className="op-foot">
-        <button type="button" className="btn" onClick={() => void confirm()} disabled={!editable || busy !== null}>
+        <button type="button" className="btn" onClick={() => void confirm()} disabled={!editable || busy !== null || view.draft === null || JSON.stringify(form) !== JSON.stringify(formOf(view))}>
           {busy === "confirm" ? "确认中…" : "确认发送"}
         </button>
         <button
@@ -298,7 +299,7 @@ export default function ConfirmPage() {
         )}
 
         {views.map((view) => (
-          <OperationEditor
+          view.summary.type === "calendar_create" ? <CalendarEditor key={view.summary.operation_id} taskId={taskId} view={view} onChanged={onChanged} /> : <OperationEditor
             key={view.summary.operation_id}
             taskId={taskId}
             view={view}

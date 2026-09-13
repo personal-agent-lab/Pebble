@@ -14,6 +14,8 @@ export type Badge = { tone: BadgeTone; label: string };
 export const OPERATION_BADGES: Record<OperationStatus, Badge> = {
   pending: { tone: "wait", label: "待确认" },
   sending: { tone: "run", label: "执行中" },
+  creating: { tone: "run", label: "创建中" },
+  created: { tone: "ok", label: "已创建" },
   sent: { tone: "ok", label: "已发送" },
   failed: { tone: "err", label: "已失败" },
   unknown: { tone: "unk", label: "待核实" },
@@ -34,7 +36,7 @@ export function taskBadge(latestRun: Run | null, operations: OperationSummary[])
   if (latestRun !== null && (latestRun.status === "pending" || latestRun.status === "running")) {
     return { tone: "run", label: "处理中" };
   }
-  if (operations.some((operation) => operation.status === "sending")) {
+  if (operations.some((operation) => ["sending", "creating"].includes(operation.status))) {
     return { tone: "run", label: "执行中" };
   }
   if (operations.some((operation) => operation.status === "unknown")) {
@@ -62,13 +64,13 @@ export function taskHint(latestRun: Run | null, operations: OperationSummary[]):
   if (latestRun?.status === "running") return "Agent 正在处理";
   if (latestRun?.status === "pending") return "已接受输入，等待开始";
   if (latestRun?.error) return latestRun.error;
-  if (operations.some((operation) => operation.status === "sending")) return "已确认，正在执行";
+  if (operations.some((operation) => ["sending", "creating"].includes(operation.status))) return "已确认，正在执行";
   if (operations.some((operation) => operation.status === "unknown")) {
-    return "发送结果待核实，未核实前不会再次发送";
+    return "执行结果待核实，未核实前不会再次执行";
   }
   if (operations.length > 0) {
-    const sent = operations.filter((operation) => operation.status === "sent").length;
-    return `${operations.length} 项操作，${sent} 项已发送`;
+    const sent = operations.filter((operation) => ["sent", "created"].includes(operation.status)).length;
+    return `${operations.length} 项操作，${sent} 项已完成`;
   }
   return "尚无操作";
 }
@@ -83,7 +85,7 @@ export function resultSummary(
   executions: Execution[],
 ): { lead: string; counts: string; caveat: string | null } {
   const total = executions.length;
-  const done = executions.filter((execution) => execution.result?.status === "sent").length;
+  const done = executions.filter((execution) => ["sent", "created"].includes(execution.result?.status ?? "")).length;
   const failed = executions.filter((execution) => execution.result?.status === "failed").length;
   const unknown = executions.filter((execution) => execution.result?.status === "unknown").length;
 
@@ -93,7 +95,7 @@ export function resultSummary(
 
   return {
     lead: done === total ? "全部完成" : "部分完成",
-    counts: [`${done} / ${total} 已发送`, ...rest].join("、"),
+    counts: [`${done} / ${total} 已完成`, ...rest].join("、"),
     caveat:
       done === total ? null : "各项结果独立记录，失败或待核实不影响已成功项。",
   };

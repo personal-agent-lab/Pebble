@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     model_api_key: SecretStr | None = None
     model_base_url: str | None = None
 
+    icloud_account: str | None = None
+    icloud_password_path: Path | None = None
+    icloud_calendar_url: str | None = None
+    icloud_timezone: str = "Australia/Adelaide"
+
     gmail_credentials_path: Path | None = None
     gmail_token_path: Path | None = None
 

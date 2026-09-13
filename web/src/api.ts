@@ -7,7 +7,7 @@
 
 export type RunStatus = "pending" | "running" | "done" | "error" | "interrupted";
 
-export type OperationStatus = "pending" | "sending" | "sent" | "failed" | "unknown";
+export type OperationStatus = "pending" | "sending" | "sent" | "creating" | "created" | "failed" | "unknown";
 
 export type Run = {
   run_id: string;
@@ -49,6 +49,7 @@ export type Draft = {
 
 export type SendResult =
   | { status: "sent"; message_id: string }
+  | { status: "created"; uid: string; resource_url: string }
   | { status: "failed" | "unknown"; reason: string };
 
 export type Execution = {
@@ -214,3 +215,19 @@ export function subscribeEvents(
 
   return () => source.close();
 }
+
+
+export type CalendarFields = {
+  title: string; start: string; end: string; timezone: string;
+  location: string; description: string;
+};
+export type CalendarDraft = CalendarFields & {
+  operation_id: string; version: number; status: OperationStatus;
+  calendar_url: string; uid: string;
+};
+export const getCalendarDraft = (id: string, version?: number) =>
+  request<CalendarDraft>(`/operations/${id}/calendar-draft${version === undefined ? "" : `?version=${version}`}`);
+export const editCalendarDraft = (id: string, expected_version: number, fields: CalendarFields) =>
+  request<CalendarDraft>(`/operations/${id}/calendar-draft`, {
+    method: "PATCH", body: JSON.stringify({ expected_version, ...fields }),
+  });

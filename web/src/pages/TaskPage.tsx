@@ -41,13 +41,13 @@ const ERR_ICON = (
 function ResultRow({ view, execution }: { view: OperationView; execution: Execution }) {
   const result = execution.result;
   const status = effectiveStatus(view);
-  const tone = result?.status === "sent" ? "ok" : result?.status === "failed" ? "err" : "";
+  const tone = (result?.status === "sent" || result?.status === "created") ? "ok" : result?.status === "failed" ? "err" : "";
 
   return (
     <div className="res-row">
-      <div className={`res-ic ${tone}`}>{result?.status === "sent" ? OK_ICON : ERR_ICON}</div>
+      <div className={`res-ic ${tone}`}>{(result?.status === "sent" || result?.status === "created") ? OK_ICON : ERR_ICON}</div>
       <div className="res-body">
-        <div className="res-title">回复邮件草稿</div>
+        <div className="res-title">{view.summary.type === "calendar_create" ? "日程创建" : "回复邮件草稿"}</div>
         <div className="res-detail">
           {result === null && "已确认，正在执行。执行中内容不能原地修改。"}
           {result?.status === "sent" && (
@@ -55,16 +55,17 @@ function ResultRow({ view, execution }: { view: OperationView; execution: Execut
               已发送至 <b>{view.draft?.to.join("、") ?? "已确认的收件人"}</b>，内容与你确认的逐字段一致。
             </>
           )}
+          {result?.status === "created" && <span>日程已创建：{view.calendarDraft?.title}。事件 UID：{result.uid}</span>}
           {result?.status === "failed" && (
             <>
-              <b>发送失败：</b>
-              {result.reason}。系统不会自动重试，也不会沿用旧确认自动重发。
+              <b>执行失败：</b>
+              {result.reason}。系统不会自动重试，也不会沿用旧确认自动执行。
             </>
           )}
           {result?.status === "unknown" && (
             <>
               <b>结果待核实：</b>
-              {result.reason}。<b>未核实前不能再次发送</b>——查不到一次不等于未发送；重复确认只返回已有状态，不触发发送。
+              {result.reason}。<b>未核实前不能再次执行</b>——查不到一次不等于未执行；重复确认只返回已有状态，不触发执行。
             </>
           )}
         </div>
@@ -110,7 +111,8 @@ export default function TaskPage() {
   };
 
   const confirm = async (view: OperationView) => {
-    const version = view.execution?.version ?? view.summary.version;
+    const version = view.calendarDraft?.version ?? view.draft?.version;
+    if (version === undefined) return;
     setConfirming(view.summary.operation_id);
     setActionError(null);
     try {
@@ -196,7 +198,7 @@ export default function TaskPage() {
                 }
               >
                 {actionError.code === "version_conflict"
-                  ? "草稿已被更新。内容变化后旧确认不再适用，请查看最新内容后重新确认；这次操作没有发出任何邮件。"
+                  ? "草稿已被更新。内容变化后旧确认不再适用，请查看最新内容后重新确认；这次操作没有执行外部写入。"
                   : actionError.message}
               </Notice>
             )}

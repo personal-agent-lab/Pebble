@@ -59,5 +59,5 @@ def install_error_handlers(app: FastAPI) -> None:
     async def invalid_draft(request: Request, error: DraftValidationError) -> JSONResponse:
         return JSONResponse(
             status_code=422,
-            content=error_body("invalid_draft", "邮件草稿未通过校验", errors=error.errors),
+            content=error_body("invalid_draft", "预览内容未通过校验", errors=error.errors),
         )
