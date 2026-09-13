@@ -274,7 +274,7 @@ PYTHONPATH=. PEBBLE_DATA_DIR=/tmp/pebble-manual uv run --project server python -
 重启后新任务不会捡到旧任务的历史。
 
 新邮件来源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/mail_source.py` 的
-`MailSource`（`start` / `stop`）。真实 Gmail 检测由 `server/background.py` 实现同一接口，生产工厂统一装配。`tests/support/` 下的模拟邮箱与替身 Agent 只用于测试和人工验收。
+`MailSource`（`start` / `stop`）。真实 Gmail 检测由 `server/tools/gmail/sync.py` 实现同一接口，生产工厂统一装配。`tests/support/` 下的模拟邮箱与替身 Agent 只用于测试和人工验收。
 
 ### 手动验收记录（2026-09-12）
 

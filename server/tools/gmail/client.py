@@ -77,6 +77,14 @@ class BaseGmailClient(Protocol):
         """按搜索词查询邮件列表。"""
         ...
 
+    def get_profile(self) -> dict:
+        """邮箱账号与当前位置：emailAddress、historyId；增量检测据此建立同步游标。"""
+        ...
+
+    def list_added_messages(self, history_id: str, page_token: str | None = None) -> dict:
+        """指定游标之后的 messageAdded 历史页：history、nextPageToken、historyId。"""
+        ...
+
 
 class MimeParser:
     """可复用的 MIME 邮件解析与清洗工具类。"""
@@ -292,6 +300,23 @@ class GoogleApiGmailClient(BaseGmailClient):
             .execute(num_retries=0)
         )
         return SendReplyResult(result.get("id", ""), result.get("threadId", thread_id))
+
+    def get_profile(self) -> dict:
+        return self.get_service().users().getProfile(userId="me").execute()
+
+    def list_added_messages(self, history_id: str, page_token: str | None = None) -> dict:
+        return (
+            self.get_service()
+            .users()
+            .history()
+            .list(
+                userId="me",
+                startHistoryId=history_id,
+                historyTypes=["messageAdded"],
+                pageToken=page_token,
+            )
+            .execute()
+        )
 
 
 def create_gmail_client(settings: Settings | None = None) -> GoogleApiGmailClient:

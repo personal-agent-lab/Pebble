@@ -41,7 +41,7 @@ flowchart TD
 | Skills | 保存可复用流程，管理草稿、审核、生效版本及 Git 历史 | `server/skills/` |
 | Tools | 集中注册、校验和调用工具；每个实现负责自己的认证、协议和业务校验 | `server/tools/` |
 | Session Store | 保存会话关联、任务目标和运行状态、待确认内容及版本、确认记录和逐项执行结果 | `server/sessions/`、`server/approval/` |
-| Background Task | 定时检查新邮件并交给 Gateway 触发 Agent | `server/background.py` |
+| Background Task | 定时检查新邮件并交给 Gateway 触发 Agent | `server/tools/gmail/sync.py` |
 
 PC 与手机共用 `web/` 中的页面组件和交互逻辑，按屏幕尺寸调整布局；两端提供规格要求的完整功能，使用同一套 API、任务状态和确认流程。此处明确双端交付范围，避免仅以手机界面作为实现和验收目标。
 
@@ -375,7 +375,7 @@ Agent 历史由 B 的 read_history 返回；A 不保存另一份模型对话历�
 
 新邮件来源是装配插孔：`gateway/runtime.py` 的 `MailSource` 只有 `start` / `stop` 与 `error`，
 由 `create_app(mail_source=...)` 传入，应用在恢复中断调用之后启动、关闭前停止。检测逻辑不在
-其中，真实 Gmail 检测（`background.py`）实现同一接口；默认装配没有邮件来源，不伪造邮件。
+其中，真实 Gmail 检测（`tools/gmail/sync.py`）实现同一接口；默认装配没有邮件来源，不伪造邮件。
 
 ### 工具装配当前实现
 

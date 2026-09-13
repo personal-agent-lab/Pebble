@@ -1,4 +1,8 @@
-"""Gmail 增量检测：先交给任务入口，再推进游标；回复发送不在此执行。"""
+"""Gmail 增量检测：先交给任务入口，再推进游标；回复发送不在此执行。
+
+实现 `server/gateway/runtime.py` 的 `MailSource` 启停接口，依赖 `BaseGmailClient`
+协议，不直接接触 Google API 资源对象。
+"""
 
 import asyncio
 import json
@@ -9,13 +13,13 @@ from pathlib import Path
 from googleapiclient.errors import HttpError
 
 from server.config import get_settings
-from server.tools.gmail.client import GoogleApiGmailClient
+from server.tools.gmail.client import BaseGmailClient
 
 logger = logging.getLogger(__name__)
 
 
 class GmailSource:
-    def __init__(self, client: GoogleApiGmailClient, path: Path | None = None, interval=10):
+    def __init__(self, client: BaseGmailClient, path: Path | None = None, interval=10):
         self.client = client
         self.path = path or get_settings().data_dir / "gmail_sync.json"
         self.interval = interval
@@ -32,9 +36,7 @@ class GmailSource:
 
     async def start(self, agent):
         self.agent = agent
-        profile = await asyncio.to_thread(
-            lambda: self.client.get_service().users().getProfile(userId="me").execute()
-        )
+        profile = await asyncio.to_thread(self.client.get_profile)
         if self.path.exists():
             self.state = json.loads(self.path.read_text())
             if self.state["email"] != profile["emailAddress"]:
@@ -47,22 +49,9 @@ class GmailSource:
     async def poll(self):
         token = None
         while True:
-
-            def fetch(page_token=token):
-                return (
-                    self.client.get_service()
-                    .users()
-                    .history()
-                    .list(
-                        userId="me",
-                        startHistoryId=self.state["history_id"],
-                        historyTypes=["messageAdded"],
-                        pageToken=page_token,
-                    )
-                    .execute()
-                )
-
-            page = await asyncio.to_thread(fetch)
+            page = await asyncio.to_thread(
+                self.client.list_added_messages, self.state["history_id"], token
+            )
             for change in page.get("history", []):
                 for added in change.get("messagesAdded", []):
                     message = added["message"]

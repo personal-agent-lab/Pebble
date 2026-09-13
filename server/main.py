@@ -69,10 +69,10 @@ def create_production_app() -> FastAPI:
 
     from server.agent.sdk_client import QoderGateway
     from server.agent.toolset import build_tools
-    from server.background import GmailSource
     from server.config import get_settings
     from server.tools.gmail.client import create_gmail_client
     from server.tools.gmail.sender import send_reply, verify_reply
+    from server.tools.gmail.sync import GmailSource
 
     settings = get_settings()
     os.environ["QODERCN_CONFIG_DIR"] = str(settings.data_dir / "agent" / "config-cn")

@@ -13,13 +13,13 @@ from qodercn_agent_sdk import ResultMessage, SystemMessage
 
 from server.agent import sdk_client
 from server.agent.toolset import build_tools
-from server.background import GmailSource
 from server.config import Settings
 from server.db import init_db
 from server.main import create_app
 from server.sessions.service import SessionStore
 from server.tools.gmail.sender import send_reply
 from server.tools.gmail.service import ReplyDraftStore
+from server.tools.gmail.sync import GmailSource
 from server.tools.registry import SideEffect, ToolRegistry
 from tests.support.gmail_double import MockGmailClient
 
@@ -185,22 +185,11 @@ def test_gmail_cursor_only_advances_after_acceptance(settings):
         ],
     }
 
-    class Service:
-        def users(self):
-            return self
-
-        def history(self):
-            return self
-
-        def list(self, **kwargs):
-            return self
-
-        def execute(self):
+    class Client:
+        def list_added_messages(self, history_id, page_token=None):
             return page
 
-    source = GmailSource(
-        SimpleNamespace(get_service=lambda: Service()), path=settings.data_dir / "sync.json"
-    )
+    source = GmailSource(Client(), path=settings.data_dir / "sync.json")
     source._save({"email": "test@example.com", "history_id": "10"})
     source.agent = SimpleNamespace(
         accept_new_mail=lambda *args: (_ for _ in ()).throw(RuntimeError("db"))
