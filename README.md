@@ -71,7 +71,7 @@ npm run dev
 
 `web/` 是 TypeScript + React + Vite 单页应用，路由为 `/tasks`（任务列表）、
 `/tasks/:taskId`（对话、待确认内容与逐项执行结果）、`/tasks/:taskId/confirm`（草稿编辑与确认）。
-视觉沿用 `qwenwork/` 下的设计稿与设计系统 token（`src/styles/tokens.css`）。
+视觉设计系统 token 见 `src/styles/tokens.css`。
 断点 900px：以上为侧栏布局，以下折叠为底部 tab，两端功能一致。
 
 任务列表没有列表级事件流，按 5 秒轮询刷新（页面不可见时暂停），新邮件自动触发的任务无需手动刷新；
