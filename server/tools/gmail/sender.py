@@ -15,7 +15,11 @@ from typing import Any
 from google.auth.exceptions import RefreshError
 from googleapiclient.errors import HttpError
 
-from server.tools.gmail.client import BaseGmailClient, get_gmail_client
+from server.tools.gmail.client import (
+    BaseGmailClient,
+    get_gmail_client,
+    recipients_match_reply_target,
+)
 from server.tools.gmail.validator import validate_reply_draft
 
 
@@ -83,6 +87,8 @@ def send_reply(
         source = active.get_message(source_message_id)
         if source.thread_id != thread_id or not source.rfc_message_id:
             return {"status": "failed", "reason": "原邮件线程不匹配或缺少 Message-ID"}
+        if not recipients_match_reply_target(to, source):
+            return {"status": "failed", "reason": "已确认草稿的收件人不是原邮件回复地址"}
         mime = EmailMessage(policy=SMTP)
         mime["To"] = ", ".join(to)
         mime["Subject"] = subject

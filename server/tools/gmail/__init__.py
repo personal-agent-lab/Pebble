@@ -6,7 +6,9 @@ from server.tools.gmail.client import (
     GoogleApiGmailClient,
     MockGmailClient,
     SendReplyResult,
+    effective_reply_recipients,
     get_gmail_client,
+    recipients_match_reply_target,
 )
 from server.tools.gmail.protocol import (
     DraftSaveResult,
@@ -39,6 +41,7 @@ __all__ = [
     "SendReplyResult",
     "ValidationError",
     "ValidationResult",
+    "effective_reply_recipients",
     "format_thread_transcript",
     "get_draft_storage",
     "get_email_detail",
@@ -46,6 +49,7 @@ __all__ = [
     "get_gmail_client",
     "prepare_reply",
     "query_emails",
+    "recipients_match_reply_target",
     "set_draft_storage",
     "validate_reply_draft",
 ]

@@ -68,9 +68,13 @@ def test_old_subject_match_is_not_proof():
     )
 
 
-def test_wrong_thread_and_header_injection_never_send():
+def test_wrong_thread_recipient_and_header_injection_never_send():
     client = MockGmailClient()
-    for change in ({"thread_id": "wrong"}, {"subject": "test\nBcc: other@example.com"}):
+    for change in (
+        {"thread_id": "wrong"},
+        {"to": ["other@example.com"]},
+        {"subject": "test\nBcc: other@example.com"},
+    ):
         assert send_reply(**(FIELDS | change), client=client)["status"] == "failed"
     assert not client.sent_log
 

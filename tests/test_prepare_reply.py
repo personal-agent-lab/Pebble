@@ -1,5 +1,6 @@
 """tests/test_prepare_reply.py: 测试 prepare_reply 工具、业务校验门禁与草稿去重。"""
 
+from server.tools.gmail.client import MockGmailClient
 from server.tools.gmail.protocol import InMemoryDraftStorage
 from server.tools.gmail.tools import prepare_reply
 from server.tools.registry import SideEffect, default_registry
@@ -98,3 +99,54 @@ def test_prepare_reply_deduplication_reuses_existing_operation() -> None:
     # 核心去重断言：复用已有 operation_id，底层存储依然只有一份草稿
     assert op1 == op2
     assert len(storage.drafts) == 1
+
+
+def test_prepare_reply_rejects_recipient_other_than_source_sender() -> None:
+    storage = InMemoryDraftStorage()
+    res = prepare_reply(
+        task_id="task_001",
+        source_message_id="msg_invite_001",
+        thread_id="thread_invite_001",
+        to=["user@example.com"],
+        subject="Re: 邀请",
+        body="我会参加。",
+        storage=storage,
+        client=MockGmailClient(),
+    )
+
+    assert res["success"] is False
+    assert res["validation_errors"][0]["field"] == "to"
+    assert not storage.drafts
+
+
+def test_prepare_reply_prefers_reply_to_over_from() -> None:
+    storage = InMemoryDraftStorage()
+    client = MockGmailClient()
+    source = client.messages["msg_invite_001"]
+    client.messages[source.id] = source.__class__(
+        **{**source.__dict__, "reply_to_addrs": ["events@example.net"]}
+    )
+
+    rejected = prepare_reply(
+        task_id="task_001",
+        source_message_id=source.id,
+        thread_id=source.thread_id,
+        to=["alice@example.com"],
+        subject="Re: 邀请",
+        body="我会参加。",
+        storage=storage,
+        client=client,
+    )
+    accepted = prepare_reply(
+        task_id="task_001",
+        source_message_id=source.id,
+        thread_id=source.thread_id,
+        to=["events@example.net"],
+        subject="Re: 邀请",
+        body="我会参加。",
+        storage=storage,
+        client=client,
+    )
+
+    assert rejected["success"] is False
+    assert accepted["success"] is True

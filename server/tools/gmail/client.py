@@ -50,6 +50,7 @@ class GmailMessage:
     body_html: str = ""
     internal_date_ms: int = 0
     labels: list[str] = field(default_factory=list)
+    reply_to_addrs: list[str] = field(default_factory=list)
     in_reply_to: str = ""
     references: str = ""
 
@@ -191,6 +192,24 @@ class MimeParser:
         return plain_body, html_body
 
 
+def effective_reply_recipients(message: GmailMessage) -> list[str]:
+    """Return RFC reply targets: Reply-To when present, otherwise From."""
+    if message.reply_to_addrs:
+        return list(message.reply_to_addrs)
+    return MimeParser.parse_address_list(message.from_addr)
+
+
+def recipients_match_reply_target(recipients: list[str], message: GmailMessage) -> bool:
+    """Compare mailbox addresses while allowing display-name differences."""
+
+    def normalized(values: list[str]) -> list[str]:
+        addresses = MimeParser.parse_address_list(", ".join(values))
+        return sorted(address.casefold() for address in addresses)
+
+    expected = normalized(effective_reply_recipients(message))
+    return bool(expected) and normalized(recipients) == expected
+
+
 class GoogleApiGmailClient(BaseGmailClient):
     """使用真实 Google API Client 与 OAuth2 认证的 Gmail 实现。"""
 
@@ -248,6 +267,7 @@ class GoogleApiGmailClient(BaseGmailClient):
         from_addr = headers.get("from", "")
         to_addrs = MimeParser.parse_address_list(headers.get("to", ""))
         cc_addrs = MimeParser.parse_address_list(headers.get("cc", ""))
+        reply_to_addrs = MimeParser.parse_address_list(headers.get("reply-to", ""))
         subject = headers.get("subject", "")
         date = headers.get("date", "")
 
@@ -269,6 +289,7 @@ class GoogleApiGmailClient(BaseGmailClient):
             body_html=body_html,
             internal_date_ms=internal_date_ms,
             labels=labels,
+            reply_to_addrs=reply_to_addrs,
             in_reply_to=headers.get("in-reply-to", ""),
             references=headers.get("references", ""),
         )

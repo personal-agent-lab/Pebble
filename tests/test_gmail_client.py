@@ -120,6 +120,7 @@ def test_google_api_client_parsing_and_mime() -> None:
             "headers": [
                 {"name": "Message-ID", "value": "<test-18f001@mail.gmail.com>"},
                 {"name": "From", "value": "sender@example.com"},
+                {"name": "Reply-To", "value": "replies@example.net"},
                 {"name": "To", "value": "recipient1@example.com, recipient2@example.com"},
                 {"name": "Cc", "value": "manager@example.com"},
                 {"name": "Subject", "value": "=?utf-8?B?6L+b5bqm5ZCM5q2l?="},
@@ -138,6 +139,7 @@ def test_google_api_client_parsing_and_mime() -> None:
     assert msg.thread_id == "thread_18f001"
     assert msg.rfc_message_id == "<test-18f001@mail.gmail.com>"
     assert msg.from_addr == "sender@example.com"
+    assert msg.reply_to_addrs == ["replies@example.net"]
     assert msg.to_addrs == ["recipient1@example.com", "recipient2@example.com"]
     assert msg.cc_addrs == ["manager@example.com"]
     assert msg.subject == "进度同步"  # 验证 RFC 2047 解码成功

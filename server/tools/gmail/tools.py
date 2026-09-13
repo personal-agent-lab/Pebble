@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from server.tools.gmail.client import BaseGmailClient, get_gmail_client
+from server.tools.gmail.client import (
+    BaseGmailClient,
+    effective_reply_recipients,
+    get_gmail_client,
+    recipients_match_reply_target,
+)
 from server.tools.gmail.protocol import DraftStorageProtocol, get_draft_storage
 from server.tools.gmail.validator import validate_reply_draft
 from server.tools.registry import SideEffect, tool
@@ -42,6 +47,7 @@ def query_emails(
                     "id": msg.id,
                     "thread_id": msg.thread_id,
                     "from": msg.from_addr,
+                    "reply_to": effective_reply_recipients(msg),
                     "to": msg.to_addrs,
                     "subject": msg.subject,
                     "snippet": msg.snippet,
@@ -70,6 +76,7 @@ def format_thread_transcript(messages: list[Any]) -> str:
     for idx, m in enumerate(messages, start=1):
         lines.append(f"\n【第 {idx} 封往来 | 时间: {m.date or '未知'}】")
         lines.append(f"• 发件人: {m.from_addr}")
+        lines.append(f"• 回复地址: {', '.join(effective_reply_recipients(m))}")
         lines.append(f"• 收件人: {', '.join(m.to_addrs)}")
         if m.cc_addrs:
             lines.append(f"• 抄送: {', '.join(m.cc_addrs)}")
@@ -106,6 +113,7 @@ def get_email_thread(
             "thread_id": m.thread_id,
             "rfc_message_id": m.rfc_message_id,
             "from": m.from_addr,
+            "reply_to": effective_reply_recipients(m),
             "to": m.to_addrs,
             "cc": m.cc_addrs,
             "subject": m.subject,
@@ -141,6 +149,7 @@ def get_email_detail(
         "thread_id": msg.thread_id,
         "rfc_message_id": msg.rfc_message_id,
         "from": msg.from_addr,
+        "reply_to": effective_reply_recipients(msg),
         "to": msg.to_addrs,
         "cc": msg.cc_addrs,
         "subject": msg.subject,
@@ -167,6 +176,7 @@ def prepare_reply(
     subject: str,
     body: str,
     storage: DraftStorageProtocol | None = None,
+    client: BaseGmailClient | None = None,
 ) -> dict[str, Any]:
     """拟定邮件回复草稿，经过业务规则校验后持久化，返回操作标识与审阅状态。"""
     # 1. 核心复用：调用纯函数业务规则校验
@@ -182,6 +192,39 @@ def prepare_reply(
             "success": False,
             "error": "回复草稿校验失败，请检查并修正字段后重试",
             "validation_errors": val_res["errors"],
+        }
+
+    # The model supplies `to`, but the program verifies it against the source
+    # message. This blocks prompt-injected or accidentally copied recipients.
+    try:
+        source = (client or get_gmail_client()).get_message(source_message_id)
+    except Exception:
+        return {
+            "success": False,
+            "error": "无法读取原邮件，回复草稿未保存",
+            "validation_errors": [
+                {"field": "source_message_id", "message": "原邮件不存在或暂时无法读取"}
+            ],
+        }
+    if source.thread_id != thread_id:
+        return {
+            "success": False,
+            "error": "原邮件与邮件线程不匹配，回复草稿未保存",
+            "validation_errors": [
+                {"field": "thread_id", "message": "thread_id 不属于指定的原邮件"}
+            ],
+        }
+    if not recipients_match_reply_target(to, source):
+        expected = effective_reply_recipients(source)
+        return {
+            "success": False,
+            "error": "收件人不是原邮件的回复地址，回复草稿未保存",
+            "validation_errors": [
+                {
+                    "field": "to",
+                    "message": f"收件人必须为原邮件的回复地址: {', '.join(expected)}",
+                }
+            ],
         }
 
     # 2. 校验通过，调用持久化协议保存草稿（由 A 提供，自带去重机制）
