@@ -1,11 +1,11 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from types import SimpleNamespace
 
 import pytest
-from qoder_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, SystemMessage, TextBlock
+from qodercn_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, SystemMessage, TextBlock
 
 from server.agent import sdk_client
+from server.config import Settings
 from server.tools.gmail.client import MockGmailClient
 from server.tools.gmail.protocol import InMemoryDraftStorage
 from server.tools.gmail.sender import send_reply, verify_reply_status
@@ -127,7 +127,11 @@ def result(error=False):
 
 def test_stream_resume_delta_and_no_duplicate(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        sdk_client, "get_settings", lambda: SimpleNamespace(data_dir=tmp_path, qoder_model=None)
+        sdk_client,
+        "get_settings",
+        lambda: Settings(
+            data_dir=tmp_path, QODERCN_PERSONAL_ACCESS_TOKEN="test-token", _env_file=None
+        ),
     )
     captured = install_sdk_stub(
         monkeypatch,
@@ -153,7 +157,11 @@ def test_stream_resume_delta_and_no_duplicate(monkeypatch, tmp_path):
 @pytest.mark.parametrize("ending", [[], [result(True)]])
 def test_stream_abnormal_end(monkeypatch, tmp_path, ending):
     monkeypatch.setattr(
-        sdk_client, "get_settings", lambda: SimpleNamespace(data_dir=tmp_path, qoder_model=None)
+        sdk_client,
+        "get_settings",
+        lambda: Settings(
+            data_dir=tmp_path, QODERCN_PERSONAL_ACCESS_TOKEN="test-token", _env_file=None
+        ),
     )
     install_sdk_stub(monkeypatch, [SystemMessage("init", {"session_id": "session1"}), *ending])
     events = asyncio.run(collect(sdk_client.stream_agent_turn("task", "回复")))
@@ -163,7 +171,11 @@ def test_stream_abnormal_end(monkeypatch, tmp_path, ending):
 @pytest.mark.parametrize("status", ["sent", "failed", "unknown"])
 def test_result_returns_to_original_session(monkeypatch, tmp_path, status):
     monkeypatch.setattr(
-        sdk_client, "get_settings", lambda: SimpleNamespace(data_dir=tmp_path, qoder_model=None)
+        sdk_client,
+        "get_settings",
+        lambda: Settings(
+            data_dir=tmp_path, QODERCN_PERSONAL_ACCESS_TOKEN="test-token", _env_file=None
+        ),
     )
     captured = install_sdk_stub(
         monkeypatch, [SystemMessage("init", {"session_id": "session1"}), result()]

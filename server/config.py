@@ -1,12 +1,9 @@
-"""服务端配置：实例持久目录与服务监听地址。
-
-只定义骨架自身需要的键。SDK 模型解析、qodercli 工作目录与 Gmail 凭证的配置项
-待第一阶段验证有实测结果后再补，避免现在猜名字导致后续重写。
-"""
+"""服务端配置：凭证只从环境或本机 .env 读取，不进入模型上下文。"""
 
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +22,12 @@ class Settings(BaseSettings):
     port: int = 8000
 
     qoder_model: str | None = None
+    qoder_token: SecretStr | None = Field(
+        default=None, validation_alias="QODERCN_PERSONAL_ACCESS_TOKEN"
+    )
+    model_provider: str | None = None
+    model_api_key: SecretStr | None = None
+    model_base_url: str | None = None
 
     gmail_credentials_path: Path | None = None
     gmail_token_path: Path | None = None

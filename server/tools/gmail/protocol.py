@@ -1,8 +1,8 @@
-"""Gmail 草稿持久化接口协议与内存桩。
+"""Gmail 草稿持久化接口协议与显式测试桩。
 
 遵循 docs/v1-mail-flow-contract.md §4 约定：
 - 解耦 A 的 SQLite 会话持久化；
-- 在 A 尚未合入数据库前，提供 InMemoryDraftStorage 供 B 独立测试与运行；
+- 生产装配使用 A 的 SQLite，InMemoryDraftStorage 仅供显式测试注入；
 - 遵循幂等去重规则：同一 source_message_id 复用已有 operation_id，不重复创建。
 """
 
@@ -101,12 +101,14 @@ class InMemoryDraftStorage(DraftStorageProtocol):
             self.source_to_op.clear()
 
 
-# 全局默认存储实例（后续由 A 的真实 SQLite 实现注入替换）
-_default_storage: DraftStorageProtocol = InMemoryDraftStorage()
+# 单实例应用在启动时显式装配 SQLite 存储
+_default_storage: DraftStorageProtocol | None = None
 
 
 def get_draft_storage() -> DraftStorageProtocol:
     """获取当前配置的草稿存储提供者。"""
+    if _default_storage is None:
+        raise RuntimeError("草稿存储尚未装配")
     return _default_storage
 
 

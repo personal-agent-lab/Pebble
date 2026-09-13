@@ -3,12 +3,10 @@
 持续运行的个人 Agent。一个常驻 Python 服务，由单个 Agent 按用户目标组合工具（Gmail、iCloud Calendar、个人资料库）完成真实事务，
 程序负责保证确认、持久化与去重。单用户单实例部署，PC 和手机浏览器都能发起任务、编辑草稿和确认操作；任务不依赖浏览器页面保持开启。
 
-当前状态：任务、草稿版本、确认执行与 Gateway 后端已实现，SQLite schema 为 3。
-支持新邮件内部入口、任务及历史查询、消息提交、SSE、草稿编辑、确认与结果查询。
-Agent、邮件校验和发送通过显式参数接入；真实 SDK/Gmail 尚未接入，相关写请求返回 503，
-不会默认装配测试替身。网页已实现任务列表、任务对话、草稿编辑与确认、逐项执行结果四个界面，
-PC 与手机共用同一套页面组件；规则 Memory、Skill 审阅与个人资料 KB 尚无服务端接口，
-导航入口置灰标注未接入。
+当前状态：A/B 分支已合并，任务、草稿版本、确认执行、Gateway、网页与 Qoder CN/Gmail
+生产装配已连接，SQLite schema 为 3。支持新邮件增量检测、任务历史、SSE、Agent 草稿修改、
+网页编辑及最终版本确认。生产入口不使用模拟邮箱或内存草稿；真实账号七步验收仍在进行，
+本地测试通过不代表真实邮件已发送。Memory、Skill、KB 和认证部署仍未完成。
 
 ## 文档
 
@@ -18,7 +16,7 @@ PC 与手机共用同一套页面组件；规则 Memory、Skill 审阅与个人�
 
 设计文档第 2 节的组件表是目标结构，`server/sessions/`、`server/tools/gmail/` 与 `server/approval/`
 已实现本地存储；HTTP 接口位于 `server/api/`，A 的调用管理位于 `server/gateway/`，调用记录位于 `server/sessions/`，
-`server/agent/` 保留给 B 的 SDK 装配，当前不含实现文件。
+`server/agent/` 装配 Qoder CN SDK，会话历史直接读取 SDK 持久化记录。
 
 ## 前置依赖
 
@@ -34,10 +32,15 @@ PC 与手机共用同一套页面组件；规则 Memory、Skill 审阅与个人�
 cp .env.example .env
 ```
 
-`.env` 不进 Git。骨架阶段只有实例数据目录、监听地址和前端代理目标三个键；
-SDK 模型与 Gmail 凭证的配置待第一阶段验证有实测结果后再补。
+`.env` 不进 Git。Qoder CN 使用 `QODERCN_PERSONAL_ACCESS_TOKEN`。
+Gmail 使用 `PEBBLE_GMAIL_CREDENTIALS_PATH` 指向 OAuth 桌面应用 JSON；首次启动在浏览器授权
+读取和发送权限，授权结果保存到实例目录的 `gmail_token.json`。
+自定义模型使用 `PEBBLE_MODEL_PROVIDER`、`PEBBLE_QODER_MODEL`、`PEBBLE_MODEL_API_KEY`，
+可选 `PEBBLE_MODEL_BASE_URL`；provider 必须匹配账号的 BYOK 目录。Key 仅交给 SDK 的模型配置，
+不进入系统提示或工具结果。Qoder CN 与国际版的 SDK、Token 和配置目录不能混用。
 
-不创建 `.env` 也能启动，此时使用代码内默认值（数据目录为 `<仓库根>/.data`，监听 `127.0.0.1:8000`）。
+默认数据目录为 `<仓库根>/.data`，监听 `127.0.0.1:8000`。生产运行需要有效的 Qoder CN
+和 Gmail 凭证；仅测试使用不装配真实依赖的 `create_app()`。
 
 ## 启动
 
@@ -280,8 +283,7 @@ PYTHONPATH=. PEBBLE_DATA_DIR=/tmp/pebble-manual uv run --project server python -
 重启后新任务不会捡到旧任务的历史。
 
 新邮件来源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/mail_source.py` 的
-`MailSource`（`start` / `stop`）。真实 Gmail 检测由 B 实现同一接口；默认装配没有邮件来源，
-不伪造邮件。`tests/support/` 下的模拟邮箱与替身 Agent 只用于测试和人工验收。
+`MailSource`（`start` / `stop`）。真实 Gmail 检测由 `server/background.py` 实现同一接口，生产工厂统一装配。`tests/support/` 下的模拟邮箱与替身 Agent 只用于测试和人工验收。
 
 ### 手动验收记录（2026-09-12）
 
@@ -322,3 +324,21 @@ A 使用真实 HTTP、SQLite、任务会话、版本和确认执行服务，终�
 ```bash
 uv run --project server pytest -c server/pyproject.toml
 ```
+
+## A/B 生产集成（2026-09-13）
+
+生产入口为 `server.main:create_production_app`（Uvicorn factory），上面的 `python -m server.main`
+已使用该入口。`create_app()` 保留为显式依赖注入的应用构造函数，供测试使用。
+
+Gmail 首次启动记录当前 historyId，随后每 10 秒检测新增的收件箱邮件；首次启动前的旧邮件
+不会批量触发。跨进程游标保存在 `.data/gmail_sync.json`。邮件成功交给 A 的持久化任务入口后
+才推进游标，重复通知由 A 去重。游标失效明确停止检测，health 显示原因，需要核对后重新建立
+同步位置，不静默跳过缺口。常规检测错误保留游标，在下一轮重新查询。
+
+新邮件轮次仅开放邮件读取工具。用户要求起草后，SDK 才可调用准备、读取及更新草稿工具；
+更新使用当前已保存版本，直接编辑与 Agent 修改共用 A 的版本控制。草稿保存事件交给网页。
+发送函数仅由 Confirmation 调用，执行结果回到确认任务的原 SDK 会话。
+
+联合测试 `tests/gateway/test_integrated_mail.py` 覆盖实际 A/B 模块衔接、Agent 修改与手动编辑、
+旧版本拒绝、最终内容一致性、重复确认、结果会话关联、游标推进、SDK 历史读取与 BYOK 配置。
+其中 SDK 模型响应和 Gmail 投递仍为测试边界替身；真实验收结果需另行记录。

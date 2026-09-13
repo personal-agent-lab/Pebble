@@ -2,11 +2,11 @@ from fastapi.testclient import TestClient
 
 from server.config import Settings
 from server.db import SCHEMA_VERSION
-from server.main import app
+from server.main import create_app
 
 
 def test_health_reports_data_dir_and_wal(settings: Settings) -> None:
-    with TestClient(app) as client:
+    with TestClient(create_app()) as client:
         response = client.get("/api/health")
 
     assert response.status_code == 200

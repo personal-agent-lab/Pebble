@@ -306,10 +306,13 @@ def test_google_api_client_raw_send_reply_headers() -> None:
     assert "收到，准时参加。" in parsed_msg.get_content()
 
 
-def test_get_gmail_client_factory_fallback(tmp_path, settings: Settings) -> None:
-    # 临时目录下无凭证文件时，应回退至 MockGmailClient
-    client = get_gmail_client(settings)
-    assert isinstance(client, MockGmailClient)
+def test_get_gmail_client_requires_credentials(tmp_path, settings: Settings) -> None:
+    # 缺少凭证时明确拒绝，测试替身只能显式注入
+    import pytest
+
+    missing = Settings(data_dir=tmp_path, _env_file=None)
+    with pytest.raises(RuntimeError, match="未配置"):
+        get_gmail_client(missing)
 
     # 写入伪造凭证文件，验证加载真实客户端
     fake_creds = tmp_path / "credentials.json"

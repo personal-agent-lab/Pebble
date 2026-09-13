@@ -48,13 +48,14 @@ router = APIRouter()
 
 
 @router.get("/health", tags=["health"])
-def health() -> dict[str, object]:
+def health(request: Request) -> dict[str, object]:
     settings = get_settings()
     with session() as conn:
         version = schema_version(conn)
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()["journal_mode"]
     return {
-        "status": "ok",
+        "status": "degraded" if getattr(request.app.state.mail_source, "error", None) else "ok",
+        "mail_source_error": getattr(request.app.state.mail_source, "error", None),
         "data_dir": str(settings.data_dir),
         "schema_version": version,
         "journal_mode": journal_mode,

@@ -15,7 +15,7 @@ from server.approval import repository as approval_repo
 from server.approval.service import ConfirmationService, recover_interrupted_executions
 from server.db import SCHEMA_VERSION, init_db, session, write
 from server.errors import NotEditableError, NotFoundError, VersionConflictError
-from server.main import app
+from server.main import create_app
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import ReplyDraftStore
 
@@ -417,7 +417,7 @@ def test_startup_lifespan_recovers_interrupted_execution(stores):
         conn.execute("UPDATE operations SET status = 'sending'")
     sender = Sender()
 
-    with TestClient(app) as client:
+    with TestClient(create_app()) as client:
         assert client.get("/api/health").status_code == 200
 
     execution = ConfirmationService(sender).get_execution(operation["operation_id"])

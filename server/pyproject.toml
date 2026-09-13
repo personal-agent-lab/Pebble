@@ -11,7 +11,7 @@ dependencies = [
     "google-auth>=2.36.0",
     "google-auth-oauthlib>=1.2.0",
     "google-auth-httplib2>=0.2.0",
-    "qoder-agent-sdk==1.0.14",
+    "qodercn-agent-sdk==1.0.14",
 ]
 
 [dependency-groups]

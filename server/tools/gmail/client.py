@@ -487,7 +487,7 @@ class MockGmailClient(BaseGmailClient):
 
 
 def get_gmail_client(settings: Settings | None = None) -> BaseGmailClient:
-    """根据凭证文件是否存在，自动返回真实 Google API 客户端或模拟客户端。"""
+    """生产调用只使用真实 Gmail；测试须显式注入客户端。"""
     active_settings = settings or get_settings()
     has_creds = (
         active_settings.gmail_credentials_file.exists() or active_settings.gmail_token_file.exists()
@@ -503,5 +503,4 @@ def get_gmail_client(settings: Settings | None = None) -> BaseGmailClient:
             token_path=active_settings.gmail_token_file,
         )
 
-    logger.info("未检测到真实 Gmail 凭证，回退至 MockGmailClient")
-    return MockGmailClient()
+    raise RuntimeError("未配置 Gmail OAuth 凭证")

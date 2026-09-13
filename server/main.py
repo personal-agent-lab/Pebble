@@ -57,7 +57,30 @@ def create_app(
     return app
 
 
-app = create_app()
+def create_production_app() -> FastAPI:
+    import os
+
+    from server.agent.sdk_client import QoderGateway
+    from server.background import GmailSource
+    from server.config import get_settings
+    from server.tools.gmail.client import GoogleApiGmailClient
+    from server.tools.gmail.protocol import set_draft_storage
+    from server.tools.gmail.sender import send_reply
+    from server.tools.gmail.validator import validate_reply_draft
+
+    settings = get_settings()
+    os.environ["QODERCN_CONFIG_DIR"] = str(settings.data_dir / "agent" / "config-cn")
+    set_draft_storage(ReplyDraftStore(validate_reply_draft))
+    # 检测客户端仅在自己的顺序轮询中使用；工具与发送各自创建客户端，避免共享 HTTP 连接。
+    source = GmailSource(
+        GoogleApiGmailClient(settings.gmail_credentials_file, settings.gmail_token_file)
+    )
+    return create_app(
+        gateway=QoderGateway(),
+        validate_reply_draft=validate_reply_draft,
+        send_reply=send_reply,
+        mail_source=source,
+    )
 
 
 if __name__ == "__main__":
@@ -66,4 +89,10 @@ if __name__ == "__main__":
     from server.config import get_settings
 
     settings = get_settings()
-    uvicorn.run("server.main:app", host=settings.host, port=settings.port, reload=True)
+    uvicorn.run(
+        "server.main:create_production_app",
+        factory=True,
+        host=settings.host,
+        port=settings.port,
+        reload=True,
+    )
