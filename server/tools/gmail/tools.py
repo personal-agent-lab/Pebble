@@ -59,24 +59,47 @@ def query_emails(
     return email_summaries
 
 
+def format_thread_transcript(messages: list[Any]) -> str:
+    """将按时间排序的往来邮件整理为清晰易懂的对话文本，注入模型上下文。"""
+    if not messages:
+        return "该线程内暂无历史邮件。"
+
+    lines = [f"=== 邮件往来历史（共 {len(messages)} 封，按时间先后正序排列）==="]
+    for idx, m in enumerate(messages, start=1):
+        lines.append(f"\n【第 {idx} 封往来 | 时间: {m.date or '未知'}】")
+        lines.append(f"• 发件人: {m.from_addr}")
+        lines.append(f"• 收件人: {', '.join(m.to_addrs)}")
+        if m.cc_addrs:
+            lines.append(f"• 抄送: {', '.join(m.cc_addrs)}")
+        lines.append(f"• 主题: {m.subject}")
+        lines.append(f"• Message-ID: {m.rfc_message_id}")
+        lines.append(f"• 内部ID: {m.id}")
+        lines.append("• 正文内容:")
+        body = m.body_text.strip() if m.body_text else m.snippet.strip()
+        lines.append(body)
+        lines.append("-" * 40)
+    return "\n".join(lines)
+
+
 @tool(
     name="gmail_get_thread",
     description=(
-        "获取指定邮件线程（Thread）内的所有历史邮件，按时间先后顺序排列。"
-        "用于关联同一会话上下文，补充当前邮件缺失的往来信息。"
+        "获取指定邮件线程（Thread）内的所有历史往来邮件，按时间先后顺序排列。"
+        "返回结构化列表与排版清晰的时间线文本（transcript），注入模型上下文以补充背景。"
     ),
     side_effect=SideEffect.READONLY,
 )
 def get_email_thread(
     thread_id: str,
     client: BaseGmailClient | None = None,
-) -> list[dict[str, Any]]:
-    """获取线程内全部往来邮件详情。"""
+) -> dict[str, Any]:
+    """获取线程内全部往来邮件详情，生成时间线对话记录注入模型上下文。"""
     active_client = client or get_gmail_client()
     messages = active_client.get_thread(thread_id)
 
-    return [
+    structured_messages = [
         {
+            "sequence": idx + 1,
             "id": m.id,
             "thread_id": m.thread_id,
             "rfc_message_id": m.rfc_message_id,
@@ -87,8 +110,15 @@ def get_email_thread(
             "body": m.body_text,
             "date": m.date,
         }
-        for m in messages
+        for idx, m in enumerate(messages)
     ]
+
+    return {
+        "thread_id": thread_id,
+        "total_messages": len(messages),
+        "transcript": format_thread_transcript(messages),
+        "messages": structured_messages,
+    }
 
 
 @tool(

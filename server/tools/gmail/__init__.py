@@ -9,6 +9,7 @@ from server.tools.gmail.client import (
     get_gmail_client,
 )
 from server.tools.gmail.tools import (
+    format_thread_transcript,
     get_email_detail,
     get_email_thread,
     query_emails,
@@ -20,6 +21,7 @@ __all__ = [
     "GoogleApiGmailClient",
     "MockGmailClient",
     "SendReplyResult",
+    "format_thread_transcript",
     "get_email_detail",
     "get_email_thread",
     "get_gmail_client",
