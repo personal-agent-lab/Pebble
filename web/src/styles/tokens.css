@@ -5,11 +5,12 @@
  */
 :root {
   /* Seed */
-  --seed-bg: oklch(99% 0.002 240);
+  --seed-bg: oklch(96.5% 0.003 250);
   --seed-surface: oklch(100% 0 0);
   --seed-fg: oklch(18% 0.012 250);
   --seed-muted: oklch(54% 0.012 250);
-  --seed-border: oklch(92% 0.005 250);
+  --seed-border: oklch(88% 0.005 250);
+  --seed-border-subtle: oklch(93.5% 0.004 250);
   --seed-primary: oklch(58% 0.18 255);
   --seed-on-primary: oklch(100% 0 0);
   --seed-radius: 8px;
@@ -21,6 +22,7 @@
   --primitive-color-fg: var(--seed-fg);
   --primitive-color-muted: var(--seed-muted);
   --primitive-color-border: var(--seed-border);
+  --primitive-color-border-subtle: var(--seed-border-subtle);
   --primitive-color-accent: var(--seed-primary);
   --primitive-color-accent-foreground: var(--seed-on-primary);
   --primitive-color-danger: #dc2626;
@@ -48,6 +50,7 @@
   --color-fg: var(--primitive-color-fg);
   --color-muted: var(--primitive-color-muted);
   --color-border: var(--primitive-color-border);
+  --color-border-subtle: var(--primitive-color-border-subtle);
   --color-accent: var(--primitive-color-accent);
   --color-accent-contrast: var(--primitive-color-accent-foreground);
   --color-danger: var(--primitive-color-danger);
@@ -58,6 +61,16 @@
   --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
   --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   --font-mono: "SF Mono", ui-monospace, Menlo, monospace;
+
+  /* 字号只有五级，界面不出现级外尺寸：xs 元信息、sm 辅助说明、md 正文、lg 区块标题、xl 页面标题。
+     正文一律 md——同一条信息流里气泡与卡片是同等内容，不因为容器不同而变小。 */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --leading-body: 1.75;
+  --leading-ui: 1.5;
 
   --spacing-xs: var(--primitive-space-1);
   --spacing-sm: var(--primitive-space-2);
@@ -86,10 +99,9 @@
 
   --card-bg: var(--color-surface);
   --card-fg: var(--color-fg);
-  --card-border: var(--color-border);
   --card-padding: var(--spacing-lg);
   --card-radius: var(--radius-lg);
-  --card-shadow: var(--shadow-sm);
+  --overlay-shadow: var(--shadow-md);
 
   --input-bg: var(--color-surface);
   --input-fg: var(--color-fg);

@@ -20,19 +20,17 @@ type Props = {
 
 /**
  * 对话内的待确认卡片。内容来自已保存草稿，刷新或重新进入后原样恢复；
- * 副作用与绑定版本写在卡片内，确认按钮始终标出所确认的版本。
+ * 副作用写在卡片内，确认始终绑定卡片当前展示的内容（版本号是内部实现，不展示）。
  */
 export default function OperationCard({ taskId, view, confirming, onConfirm }: Props) {
   const status = effectiveStatus(view);
   const draft = view.draft;
-  const version = view.execution?.version ?? view.summary.version;
 
   return (
     <div className="op-card" data-component="PendingOpCard">
       <div className="op-head">
         {MAIL_ICON}
         <span className="t">回复邮件草稿</span>
-        <span className="v">草稿 v{version}</span>
         <StatusBadge badge={operationBadge(status)} />
       </div>
       <div className="op-body">
@@ -40,19 +38,19 @@ export default function OperationCard({ taskId, view, confirming, onConfirm }: P
           <div>草稿内容读取失败，刷新后重试。</div>
         ) : (
           <div className="fld">
-            <span className="k">to</span>
+            <span className="k">收件人</span>
             <span className="val">{draft.to.join("、")}</span>
-            <span className="k">subject</span>
+            <span className="k">主题</span>
             <span className="val">{draft.subject}</span>
-            <span className="k">body</span>
+            <span className="k">正文</span>
             <span className="val clip">{draft.body}</span>
           </div>
         )}
-        副作用：确认后将以你的 Gmail 账号向上述收件人发送，内容与所确认的 v{version} 逐字段一致。
+        副作用：确认后将以你的 Gmail 账号向上述收件人发送，内容与你确认时看到的逐字段一致。
       </div>
       <div className="op-actions">
         <button type="button" className="btn" onClick={onConfirm} disabled={status !== "pending" || confirming}>
-          {confirming ? "确认中…" : `确认发送（v${version}）`}
+          {confirming ? "确认中…" : "确认发送"}
         </button>
         <Link className="btn-secondary" to={`/tasks/${taskId}/confirm`}>
           编辑草稿

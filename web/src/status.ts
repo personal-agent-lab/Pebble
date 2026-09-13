@@ -12,11 +12,11 @@ export type BadgeTone = "neutral" | "wait" | "run" | "ok" | "err" | "unk";
 export type Badge = { tone: BadgeTone; label: string };
 
 export const OPERATION_BADGES: Record<OperationStatus, Badge> = {
-  pending: { tone: "wait", label: "pending · 待确认" },
-  sending: { tone: "run", label: "sending · 执行中" },
-  sent: { tone: "ok", label: "sent · 已发送" },
-  failed: { tone: "err", label: "failed · 已失败" },
-  unknown: { tone: "unk", label: "unknown · 待核实" },
+  pending: { tone: "wait", label: "待确认" },
+  sending: { tone: "run", label: "执行中" },
+  sent: { tone: "ok", label: "已发送" },
+  failed: { tone: "err", label: "已失败" },
+  unknown: { tone: "unk", label: "待核实" },
 };
 
 export function operationBadge(status: OperationStatus): Badge {
@@ -29,30 +29,30 @@ export function operationBadge(status: OperationStatus): Badge {
  */
 export function taskBadge(latestRun: Run | null, operations: OperationSummary[]): Badge {
   const pending = operations.filter((operation) => operation.status === "pending").length;
-  if (pending > 0) return { tone: "wait", label: `waiting · ${pending} 项待确认` };
+  if (pending > 0) return { tone: "wait", label: `${pending} 项待确认` };
 
   if (latestRun !== null && (latestRun.status === "pending" || latestRun.status === "running")) {
-    return { tone: "run", label: "running" };
+    return { tone: "run", label: "处理中" };
   }
   if (operations.some((operation) => operation.status === "sending")) {
-    return { tone: "run", label: "sending" };
+    return { tone: "run", label: "执行中" };
   }
   if (operations.some((operation) => operation.status === "unknown")) {
-    return { tone: "unk", label: "unknown · 待核实" };
+    return { tone: "unk", label: "待核实" };
   }
   if (operations.some((operation) => operation.status === "failed")) {
-    return { tone: "err", label: "failed" };
+    return { tone: "err", label: "已失败" };
   }
   if (latestRun !== null && latestRun.status === "error") {
-    return { tone: "err", label: "error · 调用失败" };
+    return { tone: "err", label: "处理失败" };
   }
   if (latestRun !== null && latestRun.status === "interrupted") {
-    return { tone: "unk", label: "interrupted · 调用中断" };
+    return { tone: "unk", label: "已中断" };
   }
   if (latestRun === null && operations.length === 0) {
-    return { tone: "neutral", label: "new · 待开始" };
+    return { tone: "neutral", label: "待开始" };
   }
-  return { tone: "ok", label: "done" };
+  return { tone: "ok", label: "已完成" };
 }
 
 /** 任务行的补充说明，只用已读到的数据，不猜测 Agent 进展。 */
@@ -73,25 +73,29 @@ export function taskHint(latestRun: Run | null, operations: OperationSummary[]):
   return "尚无操作";
 }
 
-/** 逐项结果汇总；部分成功如实写成 N / M，不报告为整体成功。 */
+/**
+ * 逐项结果汇总；部分成功如实写成 N / M，不报告为整体成功。
+ *
+ * 汇总是结果卡的一行注记，不是独立版块：全部成功时没有需要提醒的分歧，
+ * caveat 留空；有失败或待核实才说明各项互不影响。
+ */
 export function resultSummary(
   executions: Execution[],
-): { done: number; total: number; lead: string; detail: string } {
+): { lead: string; counts: string; caveat: string | null } {
   const total = executions.length;
   const done = executions.filter((execution) => execution.result?.status === "sent").length;
   const failed = executions.filter((execution) => execution.result?.status === "failed").length;
   const unknown = executions.filter((execution) => execution.result?.status === "unknown").length;
 
-  const parts: string[] = [];
-  if (done > 0) parts.push(`${done} 项已发送`);
-  if (failed > 0) parts.push(`${failed} 项失败`);
-  if (unknown > 0) parts.push(`${unknown} 项待核实`);
+  const rest: string[] = [];
+  if (failed > 0) rest.push(`${failed} 项失败`);
+  if (unknown > 0) rest.push(`${unknown} 项待核实`);
 
   return {
-    done,
-    total,
-    lead: done === total ? "全部完成。" : "部分完成。",
-    detail: `${parts.join("、")}。各项结果独立记录，失败或待核实不影响已成功项。`,
+    lead: done === total ? "全部完成" : "部分完成",
+    counts: [`${done} / ${total} 已发送`, ...rest].join("、"),
+    caveat:
+      done === total ? null : "各项结果独立记录，失败或待核实不影响已成功项。",
   };
 }
 

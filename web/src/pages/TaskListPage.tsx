@@ -5,8 +5,8 @@ import { ApiError, createTask, sendMessage } from "../api";
 import AppShell from "../components/AppShell";
 import Notice from "../components/Notice";
 import StatusBadge from "../components/StatusBadge";
-import { useTaskList } from "../hooks";
 import { shortTime, taskBadge, taskHint } from "../status";
+import { pendingTotal, useTasks } from "../tasks";
 
 const TASK_ICON = (
   <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -18,20 +18,16 @@ const TASK_ICON = (
 /**
  * 任务总览与新任务入口。自动触发的任务与手动发起的任务统一呈现，
  * 待确认任务最突出；列表按固定间隔轮询，新邮件到达后无需手动刷新。
+ * 输入框固定在页面底部，列表再长也不必回到顶部才能发起任务。
  */
 export default function TaskListPage() {
   const navigate = useNavigate();
-  const { entries, error, reload } = useTaskList();
+  const { entries, error, reload } = useTasks();
   const [goal, setGoal] = useState("");
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<ApiError | null>(null);
 
-  const pendingCount =
-    entries?.reduce(
-      (total, entry) =>
-        total + entry.operations.filter((operation) => operation.status === "pending").length,
-      0,
-    ) ?? 0;
+  const pendingCount = pendingTotal(entries);
 
   const start = async () => {
     const text = goal.trim();
@@ -48,6 +44,7 @@ export default function TaskListPage() {
         setStartError(failure);
       }
       setGoal("");
+      void reload();
       navigate(`/tasks/${task.task_id}`);
     } catch (failure) {
       setStartError(failure instanceof ApiError ? failure : new ApiError("offline", String(failure), 0));
@@ -57,7 +54,7 @@ export default function TaskListPage() {
   };
 
   return (
-    <AppShell pendingCount={pendingCount} serviceError={error}>
+    <AppShell serviceError={error}>
       <div className="topbar">
         <h2>任务</h2>
         <span className="sub">
@@ -70,35 +67,6 @@ export default function TaskListPage() {
       </div>
 
       <div className="content">
-        <div className="composer">
-          <input
-            className="composer-input"
-            value={goal}
-            placeholder="输入目标开始任务…"
-            aria-label="新任务目标"
-            onChange={(event) => setGoal(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void start();
-            }}
-          />
-          <button type="button" className="btn" onClick={() => void start()} disabled={goal.trim() === "" || starting}>
-            {starting ? "发起中…" : "发起任务"}
-          </button>
-        </div>
-        <p className="composer-hint">
-          例如 <span className="mono">帮我处理这封活动邀请</span> 或{" "}
-          <span className="mono">查一下本周的日程安排</span>
-        </p>
-
-        {startError !== null && (
-          <div style={{ marginBottom: 16 }}>
-            <Notice tone={startError.unavailable ? "muted" : "danger"} title={startError.unavailable ? "Agent 尚未接入" : "发起失败"}>
-              {startError.message}
-              {startError.unavailable && "。任务已创建，接入后可继续。"}
-            </Notice>
-          </div>
-        )}
-
         {error !== null && (
           <div style={{ marginBottom: 16 }}>
             <Notice
@@ -124,7 +92,7 @@ export default function TaskListPage() {
             <div className="empty">
               <div className="empty-title">还没有任务</div>
               <div className="empty-sub">
-                在上方输入目标发起第一个任务；新邮件到达后会自动出现在这里，无需主动刷新。
+                在输入框写下目标发起第一个任务；新邮件到达后会自动出现在这里，无需主动刷新。
               </div>
             </div>
           </div>
@@ -134,7 +102,7 @@ export default function TaskListPage() {
           <div className="list-card">
             <div className="list-head">
               任务列表 · 按创建时间
-              <span className="count mono">{entries.length} tasks</span>
+              <span className="count">共 {entries.length} 个任务</span>
             </div>
             {entries.map((entry) => {
               const badge = taskBadge(entry.latestRun, entry.operations);
@@ -161,6 +129,36 @@ export default function TaskListPage() {
             })}
           </div>
         )}
+      </div>
+
+      <div className="dock">
+        <div className="dock-inner">
+          {startError !== null && (
+            <Notice
+              tone={startError.unavailable ? "muted" : "danger"}
+              title={startError.unavailable ? "Agent 暂未开放" : "发起失败"}
+            >
+              {startError.message}
+              {startError.unavailable && "。任务已创建，开放后可继续。"}
+            </Notice>
+          )}
+
+          <div className="composer">
+            <input
+              className="composer-input"
+              value={goal}
+              placeholder="输入目标开始任务…"
+              aria-label="新任务目标"
+              onChange={(event) => setGoal(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void start();
+              }}
+            />
+            <button type="button" className="btn" onClick={() => void start()} disabled={goal.trim() === "" || starting}>
+              {starting ? "发起中…" : "发起任务"}
+            </button>
+          </div>
+        </div>
       </div>
     </AppShell>
   );

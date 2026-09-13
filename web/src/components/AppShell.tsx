@@ -1,10 +1,11 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 
 import type { ApiError } from "../api";
+import { taskBadge } from "../status";
+import { pendingTotal, useTasks } from "../tasks";
 
 type Props = {
-  pendingCount?: number;
   serviceError?: ApiError | null;
   children: ReactNode;
 };
@@ -13,6 +14,12 @@ const TASKS_ICON = (
   <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
     <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+  </svg>
+);
+
+const CHEVRON_ICON = (
+  <svg className="i chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="9 18 15 12 9 6" />
   </svg>
 );
 
@@ -43,36 +50,110 @@ const PLACEHOLDERS = [
   { label: "Skill", icon: SKILL_ICON },
 ];
 
-function Nav({ pendingCount }: { pendingCount?: number }) {
+const OPEN_KEY = "pebble.nav.tasks";
+
+/** 展开状态跨页面、跨刷新保留；本地存储不可用时只是记不住，不影响使用。 */
+function readOpen(): boolean {
+  try {
+    return window.localStorage.getItem(OPEN_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function writeOpen(open: boolean): void {
+  try {
+    window.localStorage.setItem(OPEN_KEY, open ? "1" : "0");
+  } catch {
+    /* 无痕模式等场景下写入被拒绝，忽略即可 */
+  }
+}
+
+/** 侧栏内任务列表自己标出所处任务，入口只在总览页高亮；底部 tab 没有子项，整个分区都算在内。 */
+function TasksLink({ pending, exact }: { pending: number; exact?: boolean }) {
+  return (
+    <NavLink to="/tasks" end={exact} className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
+      {TASKS_ICON}
+      任务
+      {pending > 0 && <span className="nav-count">{pending} 待确认</span>}
+    </NavLink>
+  );
+}
+
+function Placeholders() {
   return (
     <>
-      <NavLink to="/tasks" className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
-        {TASKS_ICON}
-        任务
-        {pendingCount !== undefined && pendingCount > 0 && (
-          <span className="nav-count">{pendingCount} 待确认</span>
-        )}
-      </NavLink>
       {PLACEHOLDERS.map((item) => (
-        <button
-          key={item.label}
-          type="button"
-          className="nav-item disabled"
-          disabled
-          title="尚未接入，本阶段不提供"
-        >
+        <button key={item.label} type="button" className="nav-item disabled" disabled title="暂未开放">
           {item.icon}
           {item.label}
-          <span className="nav-count">未接入</span>
+          <span className="nav-count">暂未开放</span>
         </button>
       ))}
     </>
   );
 }
 
+/**
+ * 侧栏任务区：入口可展开为任务列表，收起后只剩一行入口。
+ * 列表项直接进入对应任务，待确认的任务带强调点，无需先回到总览页。
+ */
+function SidebarTasks() {
+  const { entries } = useTasks();
+  const [open, setOpen] = useState(readOpen);
+  const pending = pendingTotal(entries);
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    writeOpen(next);
+  };
+
+  return (
+    <div className="nav-group">
+      <div className="nav-row">
+        <TasksLink pending={pending} exact />
+        <button
+          type="button"
+          className={`nav-disc${open ? " open" : ""}`}
+          aria-expanded={open}
+          aria-controls="nav-task-list"
+          aria-label={open ? "收起任务列表" : "展开任务列表"}
+          onClick={toggle}
+        >
+          {CHEVRON_ICON}
+        </button>
+      </div>
+
+      {open && (
+        <div className="nav-list" id="nav-task-list">
+          {entries === null && <div className="nav-note">读取中…</div>}
+          {entries !== null && entries.length === 0 && <div className="nav-note">还没有任务</div>}
+          {entries?.map((entry) => {
+            const badge = taskBadge(entry.latestRun, entry.operations);
+            return (
+              <NavLink
+                key={entry.task.task_id}
+                to={`/tasks/${entry.task.task_id}`}
+                title={`${entry.task.goal} · ${badge.label}`}
+                className={({ isActive }) => `nav-task${isActive ? " active" : ""}`}
+              >
+                <span className={`nav-dot ${badge.tone}`} aria-hidden />
+                <span className="t">{entry.task.goal}</span>
+                <span className="sr-only">{badge.label}</span>
+              </NavLink>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** PC 侧栏 / 手机底部 tab 共用同一组导航项，两端功能一致。 */
-export default function AppShell({ pendingCount, serviceError, children }: Props) {
-  const offline = serviceError?.offline === true;
+export default function AppShell({ serviceError, children }: Props) {
+  const { entries, error } = useTasks();
+  const offline = serviceError?.offline === true || error?.offline === true;
 
   return (
     <div className="app">
@@ -84,28 +165,24 @@ export default function AppShell({ pendingCount, serviceError, children }: Props
             <div className="brand-sub">personal agent</div>
           </div>
         </div>
-        <nav>
-          <Nav pendingCount={pendingCount} />
+        <nav className="sidebar-nav">
+          <SidebarTasks />
+          <Placeholders />
         </nav>
-        <div className="sidebar-foot">
-          <div className="health">
-            {offline ? (
+        {offline && (
+          <div className="sidebar-foot">
+            <div className="health">
               <span className="off">服务未连接</span>
-            ) : (
-              <>
-                <span className="k">服务运行中</span>
-                <br />
-                任务不依赖页面保持打开
-              </>
-            )}
+            </div>
           </div>
-        </div>
+        )}
       </aside>
 
       <div className="main">{children}</div>
 
       <nav className="tabbar">
-        <Nav pendingCount={pendingCount} />
+        <TasksLink pending={pendingTotal(entries)} />
+        <Placeholders />
       </nav>
     </div>
   );
