@@ -113,7 +113,6 @@ export function useTaskList() {
 
 export type FeedItem =
   | { kind: "message"; id: string; role: "user" | "assistant"; text: string; streaming: boolean }
-  | { kind: "system"; id: string; text: string }
   | { kind: "failure"; id: string; text: string };
 
 type LiveItem = FeedItem & { runId: string | null; keep: boolean };

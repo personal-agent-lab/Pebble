@@ -17,7 +17,6 @@ body {
 }
 
 a { color: inherit; text-decoration: none; }
-.mono { font-family: var(--font-mono); }
 /* 只读给读屏器：视觉上由位置区分说话人，语义上仍要说清楚。 */
 .sr-only {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
@@ -90,7 +89,7 @@ svg.i { width: 16px; height: 16px; flex: none; }
 }
 
 textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-body); }
-.input:disabled, .input.locked { background: var(--color-bg); color: var(--color-muted); cursor: not-allowed; }
+.input:disabled { background: var(--color-bg); color: var(--color-muted); cursor: not-allowed; }
 .input.invalid { border-color: color-mix(in srgb, var(--color-danger) 55%, var(--color-border)); }
 
 /* ===== 应用外壳 ===== */
@@ -216,8 +215,6 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   border-color: var(--input-focus-ring);
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--input-focus-ring) 20%, transparent);
 }
-.composer-hint { font-size: var(--text-xs); color: var(--color-muted); margin: 0; padding: 0 4px; }
-.composer-hint .eg { color: var(--color-fg); }
 
 /* ===== 任务列表 ===== */
 .list-card { border-radius: var(--radius-lg); background: var(--color-surface); }
@@ -275,16 +272,10 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .badge.unk { background: none; box-shadow: inset 0 0 0 1px var(--color-border); border-radius: 999px; }
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-@keyframes spin { to { transform: rotate(360deg); } }
 
-.spinner {
-  width: 12px; height: 12px; flex: none; border-radius: 50%;
-  border: 1.5px solid var(--color-border); border-top-color: var(--color-muted);
-  animation: spin 0.8s linear infinite;
-}
 
 @media (prefers-reduced-motion: reduce) {
-  .spinner, .badge.run .dot { animation: none; }
+  .badge.run .dot { animation: none; }
 }
 
 /* ===== 对话 ===== */
@@ -335,12 +326,6 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 /* 消息正文之外的块（操作卡、结果、提示）同样让出头像栏，右边仍到栏宽。 */
 .flow-block { display: flex; flex-direction: column; gap: 16px; padding-left: 36px; }
 
-.tool-row {
-  display: flex; align-items: center; gap: 10px;
-  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-muted);
-  border-radius: var(--radius-md);
-  background: var(--color-surface); padding: 8px 12px; width: fit-content; max-width: 100%;
-}
 
 .typing { display: inline-flex; gap: 4px; align-items: center; padding: 4px 0; vertical-align: -1px; }
 .typing span { width: 5px; height: 5px; border-radius: 50%; background: var(--color-muted); opacity: 0.5; animation: pulse 1.2s ease-in-out infinite; }
