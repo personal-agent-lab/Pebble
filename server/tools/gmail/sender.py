@@ -15,7 +15,7 @@ from typing import Any
 from google.auth.exceptions import RefreshError
 from googleapiclient.errors import HttpError
 
-from server.tools.gmail.client import BaseGmailClient, get_gmail_client
+from server.tools.gmail.client import BaseGmailClient
 from server.tools.gmail.validator import validate_reply_draft
 
 
@@ -29,14 +29,13 @@ def verify_reply_status(
     thread_id: str,
     source_message_id: str,
     *,
-    client: BaseGmailClient | None = None,
+    client: BaseGmailClient,
     expected: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """匹配系统生成的 Message-ID、SENT 标签和原邮件关联，绝不以主题猜测成功。"""
     try:
-        active = client or get_gmail_client()
-        source = active.get_message(source_message_id)
-        for message in reversed(active.get_thread(thread_id)):
+        source = client.get_message(source_message_id)
+        for message in reversed(client.get_thread(thread_id)):
             if (
                 message.thread_id != thread_id
                 or "SENT" not in message.labels
@@ -67,20 +66,14 @@ def send_reply(
     subject: str,
     body: str,
     *,
-    client: BaseGmailClient | None = None,
+    client: BaseGmailClient,
 ) -> dict[str, Any]:
     """直接发送 A 已确认的持久化字段；不经过 LLM，不在此推断用户确认。"""
     validation = validate_reply_draft(source_message_id, thread_id, to, subject, body)
     if not operation_id or type(version) is not int or version < 1 or not validation["valid"]:
         return {"status": "failed", "reason": "已确认草稿字段不合法"}
     try:
-        active = client or get_gmail_client()
-        # 无凭证时不可把模拟结果当成真实发送成功；测试显式注入 Stub。
-        from server.tools.gmail.client import MockGmailClient
-
-        if client is None and isinstance(active, MockGmailClient):
-            return {"status": "failed", "reason": "未配置 Gmail 凭证"}
-        source = active.get_message(source_message_id)
+        source = client.get_message(source_message_id)
         if source.thread_id != thread_id or not source.rfc_message_id:
             return {"status": "failed", "reason": "原邮件线程不匹配或缺少 Message-ID"}
         mime = EmailMessage(policy=SMTP)
@@ -100,7 +93,7 @@ def send_reply(
     except Exception:
         return {"status": "failed", "reason": "构建邮件失败或无法读取原邮件"}
     try:
-        result = active.send_raw_message(raw, thread_id)
+        result = client.send_raw_message(raw, thread_id)
         if result.message_id:
             return {"status": "sent", "message_id": result.message_id}
     except RefreshError:
@@ -113,6 +106,6 @@ def send_reply(
     return verify_reply_status(
         thread_id,
         source_message_id,
-        client=active,
+        client=client,
         expected={"to": to, "subject": subject, "body": body},
     )

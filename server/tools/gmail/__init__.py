@@ -6,7 +6,7 @@ from server.tools.gmail.client import (
     GoogleApiGmailClient,
     MockGmailClient,
     SendReplyResult,
-    get_gmail_client,
+    create_gmail_client,
 )
 from server.tools.gmail.service import ReplyDraftStore
 from server.tools.gmail.tools import (
@@ -36,7 +36,7 @@ __all__ = [
     "format_thread_transcript",
     "get_email_detail",
     "get_email_thread",
-    "get_gmail_client",
+    "create_gmail_client",
     "prepare_reply",
     "query_emails",
     "read_reply_draft",

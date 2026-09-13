@@ -8,10 +8,11 @@ import pytest
 
 from server.config import Settings
 from server.tools.gmail.client import (
+    BaseGmailClient,
     GoogleApiGmailClient,
     MimeParser,
     MockGmailClient,
-    get_gmail_client,
+    create_gmail_client,
 )
 
 
@@ -266,7 +267,8 @@ def test_google_api_client_nested_multipart_parsing() -> None:
     assert msg.body_text == "嵌套纯文本正文"
 
 
-def test_google_api_client_raw_send_reply_headers() -> None:
+def test_google_api_client_send_raw_message_passes_thread_and_raw() -> None:
+    """真实客户端只投递 sender 构建好的报文，不自行拼装邮件头。"""
     mock_service = MagicMock()
     client = GoogleApiGmailClient(
         credentials_path=MagicMock(),
@@ -279,40 +281,35 @@ def test_google_api_client_raw_send_reply_headers() -> None:
         "threadId": "thread_orig_123",
     }
 
-    res = client.raw_send_reply(
-        to=["target@example.com", "cc@example.com"],
-        subject="Re: 会议确认",
-        body="收到，准时参加。",
-        thread_id="thread_orig_123",
-        in_reply_to_rfc_id="<orig-rfc-id@example.com>",
-    )
+    mime = email.message.EmailMessage()
+    mime["To"] = "target@example.com"
+    mime["Subject"] = "Re: 会议确认"
+    mime.set_content("收到，准时参加。")
+    raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
 
-    assert res.message_id == "sent_999"
-    assert res.thread_id == "thread_orig_123"
+    res = client.send_raw_message(raw, "thread_orig_123")
 
-    send_call = mock_service.users().messages().send.call_args
-    assert send_call is not None
-    body_sent = send_call.kwargs["body"]
-    assert body_sent["threadId"] == "thread_orig_123"
-
-    # 解码 raw 验证 RFC 2822 邮件头
-    raw_bytes = base64.urlsafe_b64decode(body_sent["raw"].encode("ascii"))
-    parsed_msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
-
-    assert parsed_msg["To"] == "target@example.com, cc@example.com"
-    assert parsed_msg["Subject"] == "Re: 会议确认"
-    assert parsed_msg["In-Reply-To"] == "<orig-rfc-id@example.com>"
-    assert parsed_msg["References"] == "<orig-rfc-id@example.com>"
-    assert "收到，准时参加。" in parsed_msg.get_content()
+    assert (res.message_id, res.thread_id) == ("sent_999", "thread_orig_123")
+    body_sent = mock_service.users().messages().send.call_args.kwargs["body"]
+    assert body_sent == {"raw": raw, "threadId": "thread_orig_123"}
+    # 不自动重试：重复投递可能造成重复发送，结果不确定时由 sender 只读核实。
+    assert mock_service.users().messages().send().execute.call_args.kwargs["num_retries"] == 0
 
 
-def test_get_gmail_client_requires_credentials(tmp_path, settings: Settings) -> None:
+def test_client_protocol_excludes_unconfirmed_send_paths() -> None:
+    """生产客户端不提供绕开确认内容的发送入口，也不按主题猜测发送结果。"""
+    for name in ("raw_send_reply", "verify_message_sent"):
+        assert not hasattr(GoogleApiGmailClient, name)
+        assert name not in BaseGmailClient.__protocol_attrs__
+
+
+def test_create_gmail_client_requires_credentials(tmp_path, settings: Settings) -> None:
     # 缺少凭证时明确拒绝，测试替身只能显式注入
     import pytest
 
     missing = Settings(data_dir=tmp_path, _env_file=None)
     with pytest.raises(RuntimeError, match="未配置"):
-        get_gmail_client(missing)
+        create_gmail_client(missing)
 
     # 写入伪造凭证文件，验证加载真实客户端
     fake_creds = tmp_path / "credentials.json"
@@ -322,6 +319,6 @@ def test_get_gmail_client_requires_credentials(tmp_path, settings: Settings) -> 
         data_dir=tmp_path,
         gmail_credentials_path=fake_creds,
     )
-    custom_client = get_gmail_client(custom_settings)
+    custom_client = create_gmail_client(custom_settings)
     assert isinstance(custom_client, GoogleApiGmailClient)
     assert custom_client.credentials_path == fake_creds

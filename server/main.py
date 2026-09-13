@@ -66,12 +66,13 @@ def create_app(
 
 def create_production_app() -> FastAPI:
     import os
+    from functools import partial
 
     from server.agent.sdk_client import QoderGateway
     from server.agent.toolset import build_tools
     from server.background import GmailSource
     from server.config import get_settings
-    from server.tools.gmail.client import GoogleApiGmailClient
+    from server.tools.gmail.client import create_gmail_client
     from server.tools.gmail.sender import send_reply
     from server.tools.gmail.validator import validate_reply_draft
 
@@ -79,20 +80,14 @@ def create_production_app() -> FastAPI:
     os.environ["QODERCN_CONFIG_DIR"] = str(settings.data_dir / "agent" / "config-cn")
     tasks = SessionStore()
     drafts = ReplyDraftStore(validate_reply_draft)
-    # 检测客户端仅在自己的顺序轮询中使用；工具与发送各自创建客户端，避免共享 HTTP 连接。
-    tools = build_tools(
-        drafts=drafts,
-        tasks=tasks,
-        gmail=GoogleApiGmailClient(settings.gmail_credentials_file, settings.gmail_token_file),
-    )
-    source = GmailSource(
-        GoogleApiGmailClient(settings.gmail_credentials_file, settings.gmail_token_file)
-    )
+    # 三处用途各自构造客户端：检测在自己的顺序轮询里，工具随模型并发调用，发送由
+    # Confirmation 串行调用；不共享 HTTP 连接，凭证缺失在这里就失败，不进入运行期。
+    tools = build_tools(drafts=drafts, tasks=tasks, gmail=create_gmail_client(settings))
     return create_app(
         gateway=QoderGateway(tools),
         validate_reply_draft=validate_reply_draft,
-        send_reply=send_reply,
-        mail_source=source,
+        send_reply=partial(send_reply, client=create_gmail_client(settings)),
+        mail_source=GmailSource(create_gmail_client(settings)),
         tasks=tasks,
         drafts=drafts,
     )

@@ -13,7 +13,6 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from email.header import decode_header, make_header
-from email.message import EmailMessage
 from email.utils import getaddresses
 from pathlib import Path
 from typing import Any, Protocol
@@ -77,21 +76,6 @@ class BaseGmailClient(Protocol):
 
     def search_messages(self, query: str, max_results: int = 10) -> list[dict[str, str]]:
         """按搜索词查询邮件列表。"""
-        ...
-
-    def raw_send_reply(
-        self,
-        to: list[str],
-        subject: str,
-        body: str,
-        thread_id: str,
-        in_reply_to_rfc_id: str | None = None,
-    ) -> SendReplyResult:
-        """构建 RFC 2822 邮件报文并发送回复。"""
-        ...
-
-    def verify_message_sent(self, thread_id: str, subject_keyword: str) -> bool:
-        """检查特定线程中是否已存在已发送的匹配邮件，用于超时状态核实。"""
         ...
 
 
@@ -310,50 +294,6 @@ class GoogleApiGmailClient(BaseGmailClient):
         )
         return SendReplyResult(result.get("id", ""), result.get("threadId", thread_id))
 
-    def raw_send_reply(
-        self,
-        to: list[str],
-        subject: str,
-        body: str,
-        thread_id: str,
-        in_reply_to_rfc_id: str | None = None,
-    ) -> SendReplyResult:
-        mime_msg = EmailMessage()
-        mime_msg["To"] = ", ".join(to)
-        mime_msg["Subject"] = subject
-        mime_msg.set_content(body)
-
-        if in_reply_to_rfc_id:
-            mime_msg["In-Reply-To"] = in_reply_to_rfc_id
-            mime_msg["References"] = in_reply_to_rfc_id
-
-        raw_bytes = mime_msg.as_bytes()
-        raw_b64 = base64.urlsafe_b64encode(raw_bytes).decode("ascii")
-
-        body_payload = {
-            "raw": raw_b64,
-            "threadId": thread_id,
-        }
-
-        service = self.get_service()
-        sent_res = service.users().messages().send(userId="me", body=body_payload).execute()
-        sent_id = sent_res.get("id", "")
-        sent_thread_id = sent_res.get("threadId", thread_id)
-        return SendReplyResult(message_id=sent_id, thread_id=sent_thread_id)
-
-    def verify_message_sent(self, thread_id: str, subject_keyword: str) -> bool:
-        try:
-            messages = self.get_thread(thread_id)
-            normalized_keyword = subject_keyword.replace("Re: ", "").strip().lower()
-            for msg in reversed(messages):
-                msg_subject_norm = msg.subject.replace("Re: ", "").strip().lower()
-                if normalized_keyword and normalized_keyword in msg_subject_norm:
-                    return True
-            return False
-        except Exception as exc:
-            logger.warning("核实邮件发送状态时异常: %s", exc)
-            return False
-
 
 @dataclass
 class MockGmailClient(BaseGmailClient):
@@ -486,8 +426,8 @@ class MockGmailClient(BaseGmailClient):
         return False
 
 
-def get_gmail_client(settings: Settings | None = None) -> BaseGmailClient:
-    """生产调用只使用真实 Gmail；测试须显式注入客户端。"""
+def create_gmail_client(settings: Settings | None = None) -> GoogleApiGmailClient:
+    """装配期构造真实 Gmail 客户端；测试须显式注入客户端，不在调用点回退。"""
     active_settings = settings or get_settings()
     has_creds = (
         active_settings.gmail_credentials_file.exists() or active_settings.gmail_token_file.exists()
