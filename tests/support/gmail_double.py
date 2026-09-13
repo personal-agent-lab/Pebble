@@ -1,4 +1,4 @@
-"""Gmail 的测试替身：校验只拒空正文，发送把参数写进 sent.jsonl，不连接真实邮箱。
+"""Gmail 的发送替身：把参数写进 sent.jsonl，不连接真实邮箱。校验用真实纯函数，不设替身。
 
 发送结果由 `PEBBLE_TEST_SEND_STATUS` 指定（`sent`、`failed`、`unknown`），
 `PEBBLE_TEST_SEND_DELAY` 给发送加秒级延时，便于在页面上看到 sending 中间态。
@@ -14,12 +14,6 @@ from server.config import get_settings
 
 def sent_log() -> Path:
     return get_settings().data_dir / "sent.jsonl"
-
-
-def validate(**fields):
-    if not fields["body"]:
-        return {"valid": False, "errors": [{"field": "body", "message": "正文不能为空"}]}
-    return {"valid": True, "errors": []}
 
 
 def send(**fields):

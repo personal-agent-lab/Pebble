@@ -20,16 +20,12 @@ from server.sessions.service import SessionStore
 from server.tools.gmail.service import ReplyDraftStore
 
 FINAL = {
-    "to": ["甲@example.com", "b@example.com", "c@example.com"],
+    "to": ["alice@example.com", "b@example.com", "c@example.com"],
     "subject": " 回复：活动邀请 ",
     "body": "你好，\n\n我参加。\n\n谢谢！\n",
 }
 
 _SENT = object()
-
-
-def valid(**kwargs):
-    return {"valid": True, "errors": []}
 
 
 class Sender:
@@ -52,7 +48,7 @@ class Sender:
 @pytest.fixture
 def stores(settings):
     init_db()
-    return SessionStore(), ReplyDraftStore(valid)
+    return SessionStore(), ReplyDraftStore()
 
 
 def prepare(stores, source="m1"):
@@ -75,7 +71,7 @@ def test_confirm_sends_exact_confirmed_version(stores):
         operation["operation_id"], 1, **{**FINAL, "subject": "回复：活动邀请"}
     )
     final = {
-        "to": ["乙@example.com", "甲@example.com", "c@example.com"],
+        "to": ["zoe@example.com", "alice@example.com", "c@example.com"],
         "subject": "回复：活动邀请（确认）",
         "body": "  最终版：\n\n我参加。\n",
     }
@@ -505,7 +501,7 @@ def test_upgrade_from_v1_preserves_records(settings):
             )
 
     assert init_db() == SCHEMA_VERSION
-    tasks, drafts = SessionStore(), ReplyDraftStore(valid)
+    tasks, drafts = SessionStore(), ReplyDraftStore()
     assert tasks.get_task("t1")["sdk_session_id"] == "sdk-old"
     assert drafts.get_reply_draft("o1", 1)["body"] == "第一版"
     assert drafts.get_reply_draft("o1", 2)["body"] == "第二版"

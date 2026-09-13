@@ -1,20 +1,13 @@
 """本地回复草稿；不调用模型、不发送邮件。"""
 
 from pathlib import Path
-from typing import Protocol
 
 from server.db import session, write
-from server.errors import DependencyUnavailableError, DraftValidationError
+from server.errors import DraftValidationError
 from server.sessions import repository as operations
 from server.sessions.service import check_editable, create_operation, next_version, timestamp
 from server.tools.gmail import repository as repo
-from server.tools.gmail.validator import ValidationResult
-
-
-class ReplyValidator(Protocol):
-    def __call__(
-        self, *, source_message_id: str, thread_id: str, to: list[str], subject: str, body: str
-    ) -> ValidationResult: ...
+from server.tools.gmail.validator import validate_reply_draft
 
 
 def summary(operation: dict) -> dict:
@@ -22,15 +15,12 @@ def summary(operation: dict) -> dict:
 
 
 class ReplyDraftStore:
-    def __init__(self, validate_reply_draft: ReplyValidator | None, path: Path | None = None):
-        self.validate = validate_reply_draft
+    def __init__(self, path: Path | None = None):
         self.path = path
 
     def _validate(self, source: str, thread: str, to: list[str], subject: str, body: str) -> None:
         # 独立列表避免业务校验意外修改待保存的收件人。
-        if self.validate is None:
-            raise DependencyUnavailableError("邮件校验尚未接入")
-        result = self.validate(
+        result = validate_reply_draft(
             source_message_id=source, thread_id=thread, to=list(to), subject=subject, body=body
         )
         if not result["valid"]:

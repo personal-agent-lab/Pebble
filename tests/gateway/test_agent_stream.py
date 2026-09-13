@@ -14,7 +14,6 @@ from server.sessions.service import SessionStore
 from server.tools.gmail.client import MockGmailClient
 from server.tools.gmail.service import ReplyDraftStore
 from server.tools.gmail.tools import prepare_reply
-from server.tools.gmail.validator import validate_reply_draft
 
 
 async def collect(stream):
@@ -23,7 +22,7 @@ async def collect(stream):
 
 def gateway() -> sdk_client.QoderGateway:
     """装配一套只用于事件流断言的网关；本组测试不调用工具，依赖不接触数据库。"""
-    return sdk_client.QoderGateway(build_tools(drafts=ReplyDraftStore(None), tasks=SessionStore()))
+    return sdk_client.QoderGateway(build_tools(drafts=ReplyDraftStore(), tasks=SessionStore()))
 
 
 def install_sdk_stub(monkeypatch, messages):
@@ -133,7 +132,7 @@ def test_schema_hides_injected_dependencies_and_types_recipients():
     schema = prepare_reply.parameters_schema
     assert "drafts" not in schema["properties"]
     assert schema["properties"]["to"] == {"type": "array", "items": {"type": "string"}}
-    for definition in build_tools(drafts=ReplyDraftStore(None), tasks=SessionStore()):
+    for definition in build_tools(drafts=ReplyDraftStore(), tasks=SessionStore()):
         assert not {"client", "drafts", "tasks"} & set(definition.parameters_schema["properties"])
 
 
@@ -171,7 +170,7 @@ def test_tool_boundary_returns_structured_business_errors(settings, monkeypatch)
     )
     init_db()
     tasks = SessionStore()
-    drafts = ReplyDraftStore(validate_reply_draft)
+    drafts = ReplyDraftStore()
     tools = build_tools(drafts=drafts, tasks=tasks, gmail=MockGmailClient())
     task_id = tasks.create_task("处理新收到的邮件")["task_id"]
     other_task = tasks.create_task("另一个任务")["task_id"]
@@ -242,7 +241,7 @@ def test_tool_boundary_hides_unexpected_failure_detail(settings, monkeypatch):
         def get_message(self, message_id):
             raise RuntimeError("secret must not leak")
 
-    tools = build_tools(drafts=ReplyDraftStore(None), tasks=SessionStore(), gmail=Exploding())
+    tools = build_tools(drafts=ReplyDraftStore(), tasks=SessionStore(), gmail=Exploding())
     call = capture_tool_handlers(monkeypatch, tools, "task")
     failed, payload = asyncio.run(call("gmail_get_message", {"message_id": "msg_invite_001"}))
     assert failed is True

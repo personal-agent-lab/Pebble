@@ -7,10 +7,10 @@ from contextlib import asynccontextmanager
 
 from server.main import create_app
 from tests.support.agent_double import FakeAgentGateway
-from tests.support.gmail_double import send, validate
+from tests.support.gmail_double import send
 
 gateway = FakeAgentGateway()
-app = create_app(gateway=gateway, validate_reply_draft=validate, send_reply=send)
+app = create_app(gateway=gateway, send_reply=send)
 
 
 async def reply(*, task_id, sdk_session_id, message):

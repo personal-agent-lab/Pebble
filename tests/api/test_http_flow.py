@@ -239,7 +239,7 @@ def test_missing_dependencies_reject_before_mutation(settings):
         assert (
             client.post(f"/api/tasks/{tid}/messages", json={"message": "你好"}).status_code == 503
         )
-        drafts = ReplyDraftStore(lambda **fields: {"valid": True, "errors": []})
+        drafts = ReplyDraftStore()
         op = drafts.save_reply_draft(tid, "m", "thread", ["a@example.com"], "主题", "正文")
         assert (
             client.post(

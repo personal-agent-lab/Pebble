@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from server.config import get_settings
 from server.main import create_app
-from tests.support.gmail_double import send, validate
+from tests.support.gmail_double import send
 from tests.support.mailbox import MockMailbox, inbox_dir
 from tests.support.mock_agent import MockAgent
 
@@ -20,7 +20,6 @@ def build_app() -> FastAPI:
     gateway = MockAgent(mailbox, state_dir=get_settings().data_dir)
     application = create_app(
         gateway=gateway,
-        validate_reply_draft=validate,
         send_reply=send,
         mail_source=mailbox,
     )

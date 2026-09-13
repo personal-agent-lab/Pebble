@@ -31,14 +31,10 @@ async def drain(service):
 
 
 DRAFT = {
-    "to": ["甲@example.com"],
+    "to": ["alice@example.com"],
     "subject": "回复：活动邀请",
     "body": "你好，\n\n我参加。\n",
 }
-
-
-def valid(**kwargs):
-    return {"valid": True, "errors": []}
 
 
 class Sender:
@@ -85,7 +81,7 @@ async def flow(settings):
             confirmations=confirmations,
             sender=sender,
             tasks=SessionStore(),
-            drafts=ReplyDraftStore(valid),
+            drafts=ReplyDraftStore(),
         )
     finally:
         await service.close()

@@ -19,10 +19,11 @@ from server.errors import (
 )
 from server.sessions.service import SessionStore
 from server.tools.gmail import repository as mail_repo
+from server.tools.gmail import service as mail_service
 from server.tools.gmail.service import ReplyDraftStore
 
 CONTENT = {
-    "to": ["甲@example.com", "b@example.com"],
+    "to": ["alice@example.com", "b@example.com"],
     "subject": " 回复：活动 ",
     "body": "你好\n\n谢谢！\n",
 }
@@ -32,10 +33,15 @@ def valid(**kwargs):
     return {"valid": True, "errors": []}
 
 
+def use_validator(monkeypatch, replacement):
+    """替换校验纯函数本身；生产装配不提供替换入口，测试用它控制校验时机与结果。"""
+    monkeypatch.setattr(mail_service, "validate_reply_draft", replacement)
+
+
 @pytest.fixture
 def stores(settings):
     init_db()
-    return SessionStore(), ReplyDraftStore(valid)
+    return SessionStore(), ReplyDraftStore()
 
 
 def prepare(stores, source="m1"):
@@ -92,7 +98,7 @@ def test_versions_reuse_and_sessions(stores):
     assert len(tasks.list_task_operations(task["task_id"])) == 2
 
 
-def test_validation_failure_and_reuse(stores):
+def test_validation_failure_and_reuse(stores, monkeypatch):
     task, op = prepare(stores)
     errors = [{"field": "to", "message": "不合法"}]
     calls = []
@@ -101,7 +107,8 @@ def test_validation_failure_and_reuse(stores):
         calls.append(kwargs)
         return {"valid": False, "errors": errors}
 
-    drafts = ReplyDraftStore(invalid)
+    use_validator(monkeypatch, invalid)
+    drafts = stores[1]
     assert drafts.save_reply_draft(task["task_id"], "m1", "ignored", **CONTENT) == op
     assert calls == []
     with pytest.raises(DraftValidationError) as error:
@@ -125,7 +132,7 @@ def test_noneditable(stores, status):
     assert drafts.save_reply_draft(task["task_id"], "m1", "thread1", **CONTENT)["status"] == status
 
 
-def test_concurrent_edits(stores):
+def test_concurrent_edits(stores, monkeypatch):
     _, op = prepare(stores)
     barrier = Barrier(2)
 
@@ -133,7 +140,8 @@ def test_concurrent_edits(stores):
         barrier.wait(timeout=5)
         return valid()
 
-    drafts = ReplyDraftStore(validate)
+    use_validator(monkeypatch, validate)
+    drafts = stores[1]
 
     def edit(body):
         try:
@@ -150,8 +158,8 @@ def test_concurrent_edits(stores):
     assert drafts.get_reply_draft(op["operation_id"])["version"] == 2
 
 
-def test_concurrent_creation(stores):
-    tasks, _ = stores
+def test_concurrent_creation(stores, monkeypatch):
+    tasks, drafts = stores
     ids = [tasks.create_task(goal)["task_id"] for goal in ("first", "second")]
     barrier = Barrier(2)
 
@@ -159,7 +167,7 @@ def test_concurrent_creation(stores):
         barrier.wait(timeout=5)
         return valid()
 
-    drafts = ReplyDraftStore(validate)
+    use_validator(monkeypatch, validate)
     with ThreadPoolExecutor(2) as pool:
         results = list(
             pool.map(lambda task_id: drafts.save_reply_draft(task_id, "m1", "t1", **CONTENT), ids)
@@ -194,7 +202,7 @@ def test_rollback(stores, monkeypatch, editing):
             assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1
 
 
-def test_recheck_status_after_validation(stores):
+def test_recheck_status_after_validation(stores, monkeypatch):
     _, op = prepare(stores)
 
     def validate(**kwargs):
@@ -202,8 +210,9 @@ def test_recheck_status_after_validation(stores):
             conn.execute("UPDATE operations SET status = 'sending'")
         return valid()
 
+    use_validator(monkeypatch, validate)
     with pytest.raises(NotEditableError):
-        ReplyDraftStore(validate).update_reply_draft(op["operation_id"], 1, **CONTENT)
+        stores[1].update_reply_draft(op["operation_id"], 1, **CONTENT)
     assert stores[1].get_reply_draft(op["operation_id"])["version"] == 1
 
 
@@ -230,15 +239,15 @@ from server.sessions.service import SessionStore
 from server.tools.gmail.service import ReplyDraftStore
 init_db()
 tasks = SessionStore()
-drafts = ReplyDraftStore(lambda **kw: {"valid": True, "errors": []})
+drafts = ReplyDraftStore()
 """
     writer = (
         common
         + """
 t = tasks.create_task("跨进程目标")
 tasks.bind_sdk_session(t["task_id"], "sdk-persisted")
-o = drafts.save_reply_draft(t["task_id"], "m1", "thread1", ["a@x", "b@x"], "主题", "第一版")
-drafts.update_reply_draft(o["operation_id"], 1, ["a@x", "b@x"], "主题", "第二版\\n正文")
+o = drafts.save_reply_draft(t["task_id"], "m1", "thread1", ["a@x.com", "b@x.com"], "主题", "第一版")
+drafts.update_reply_draft(o["operation_id"], 1, ["a@x.com", "b@x.com"], "主题", "第二版\\n正文")
 result = {"task": tasks.get_task(t["task_id"]),
           "draft": drafts.get_reply_draft(o["operation_id"]),
           "ops": tasks.list_task_operations(t["task_id"])}
@@ -286,14 +295,14 @@ def test_upgrade_zero_atomic(settings, monkeypatch):
     assert init_db() == SCHEMA_VERSION
 
 
-def test_validator_cannot_rewrite_recipients(stores):
-    tasks, _ = stores
+def test_validator_cannot_rewrite_recipients(stores, monkeypatch):
+    tasks, drafts = stores
 
     def validate(**kwargs):
         kwargs["to"].clear()
         return valid()
 
-    drafts = ReplyDraftStore(validate)
+    use_validator(monkeypatch, validate)
     task = tasks.create_task("目标")
     op = drafts.save_reply_draft(task["task_id"], "m1", "t1", **CONTENT)
     assert drafts.get_reply_draft(op["operation_id"])["to"] == CONTENT["to"]

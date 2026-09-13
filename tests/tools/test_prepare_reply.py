@@ -12,14 +12,13 @@ from server.errors import DraftValidationError, NotFoundError
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import ReplyDraftStore
 from server.tools.gmail.tools import prepare_reply
-from server.tools.gmail.validator import validate_reply_draft
 from server.tools.registry import SideEffect, default_registry
 
 
 @pytest.fixture
 def drafts(settings) -> ReplyDraftStore:
     init_db()
-    return ReplyDraftStore(validate_reply_draft)
+    return ReplyDraftStore()
 
 
 @pytest.fixture

@@ -21,14 +21,13 @@ from server.sessions.service import SessionStore
 from server.tools.gmail.client import MockGmailClient
 from server.tools.gmail.sender import send_reply
 from server.tools.gmail.service import ReplyDraftStore
-from server.tools.gmail.validator import validate_reply_draft
 from server.tools.registry import SideEffect, ToolRegistry
 
 
 def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
     init_db()
     tasks = SessionStore()
-    drafts = ReplyDraftStore(validate_reply_draft)
+    drafts = ReplyDraftStore()
     gmail = MockGmailClient()
     tools = build_tools(drafts=drafts, tasks=tasks, gmail=gmail)
     monkeypatch.setattr(
@@ -114,7 +113,6 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
     monkeypatch.setattr(sdk_client, "QoderSDKClient", SDK)
     app = create_app(
         gateway=sdk_client.QoderGateway(tools),
-        validate_reply_draft=validate_reply_draft,
         send_reply=partial(send_reply, client=gmail),
         tasks=tasks,
         drafts=drafts,
@@ -253,7 +251,7 @@ def test_sdk_history_reads_its_persisted_transcript(settings, monkeypatch):
     (project / f"{sid}.jsonl").write_text("\n".join(json.dumps(e) for e in entries))
     history = asyncio.run(
         sdk_client.QoderGateway(
-            build_tools(drafts=ReplyDraftStore(None), tasks=SessionStore())
+            build_tools(drafts=ReplyDraftStore(), tasks=SessionStore())
         ).read_history(task_id="task", sdk_session_id=sid)
     )
     assert history == [
@@ -272,7 +270,7 @@ def test_custom_model_and_new_mail_permissions(settings, monkeypatch):
         _env_file=None,
     )
     monkeypatch.setattr(sdk_client, "get_settings", lambda: configured)
-    tools = build_tools(drafts=ReplyDraftStore(None), tasks=SessionStore())
+    tools = build_tools(drafts=ReplyDraftStore(), tasks=SessionStore())
     options = sdk_client.build_options(tools, "task", allow_drafts=False)
     assert options.resolve_model(None)["model"] == {
         "provider": "test-provider",
@@ -312,7 +310,7 @@ def test_external_write_tools_are_never_exposed_to_the_model(settings, monkeypat
         """真实发送邮件；绝不注册给模型。"""
         raise AssertionError("模型不应当能调用外部写工具")
 
-    tools = [*build_tools(drafts=ReplyDraftStore(None), tasks=SessionStore()), send_now]
+    tools = [*build_tools(drafts=ReplyDraftStore(), tasks=SessionStore()), send_now]
     for allow_drafts in (True, False):
         options = sdk_client.build_options(tools, "task", allow_drafts=allow_drafts)
         assert not any("send" in name for name in options.allowed_tools)
@@ -328,7 +326,7 @@ def test_tools_bind_assembled_dependencies_without_global_state(settings, tmp_pa
         path = tmp_path / f"{name}.db"
         init_db(path)
         tasks = SessionStore(path)
-        drafts = ReplyDraftStore(validate_reply_draft, path)
+        drafts = ReplyDraftStore(path)
         task_id = tasks.create_task(f"{name} 的任务")["task_id"]
         tools = {
             definition.name: definition
@@ -357,7 +355,7 @@ def test_tools_bind_assembled_dependencies_without_global_state(settings, tmp_pa
     # 未接入 Gmail 时工具清单不变，调用按依赖未接入拒绝，不退回模拟邮箱。
     unassembled = {
         definition.name: definition
-        for definition in build_tools(drafts=ReplyDraftStore(None), tasks=SessionStore())
+        for definition in build_tools(drafts=ReplyDraftStore(), tasks=SessionStore())
     }
     assert unassembled.keys() == toolsets[0][3].keys()
     with pytest.raises(DependencyUnavailableError):
