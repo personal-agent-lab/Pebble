@@ -369,6 +369,10 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 回传共用事务。Confirmation 依赖 sessions 的调用记录存取，不依赖 SDK 或 api 实现。
 Agent 历史由 B 的 read_history 返回；A 不保存另一份模型对话历史。
 
+新邮件来源是装配插孔：`gateway/mail_source.py` 的 `MailSource` 只有 `start` / `stop`，
+由 `create_app(mail_source=...)` 传入，应用在恢复中断调用之后启动、关闭前停止。检测逻辑不在
+其中，真实 Gmail 检测（`background.py`）实现同一接口；默认装配没有邮件来源，不伪造邮件。
+
 未接入 Agent、校验或发送依赖时，相关新工作在写入前拒绝。只读任务、草稿及执行查询仍可用。
 生产默认装配不使用替身；测试替身和可启动验收应用均位于 tests。认证部署不属于本地后端
 验收的交付范围；当前服务仅按本机测试使用，正式 Web 接入仍须完成既定身份和来源检查。
