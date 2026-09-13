@@ -8,6 +8,11 @@ from server.tools.gmail.client import (
     SendReplyResult,
     get_gmail_client,
 )
+from server.tools.gmail.tools import (
+    get_email_detail,
+    get_email_thread,
+    query_emails,
+)
 
 __all__ = [
     "BaseGmailClient",
@@ -15,5 +20,8 @@ __all__ = [
     "GoogleApiGmailClient",
     "MockGmailClient",
     "SendReplyResult",
+    "get_email_detail",
+    "get_email_thread",
     "get_gmail_client",
+    "query_emails",
 ]
