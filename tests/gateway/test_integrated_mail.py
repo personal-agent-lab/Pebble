@@ -22,6 +22,7 @@ from server.tools.gmail.client import MockGmailClient
 from server.tools.gmail.sender import send_reply
 from server.tools.gmail.service import ReplyDraftStore
 from server.tools.gmail.validator import validate_reply_draft
+from server.tools.registry import SideEffect, ToolRegistry
 
 
 def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
@@ -280,7 +281,42 @@ def test_custom_model_and_new_mail_permissions(settings, monkeypatch):
         "style": "openai",
     }
     assert "test-key" not in options.system_prompt
-    assert not any("reply" in name for name in options.allowed_tools)
+
+    # 新邮件轮只分析不起草：按副作用声明排除所有写工具，只读工具照常可用。
+    def names(definitions):
+        return {f"mcp__pebble__{definition.name}" for definition in definitions}
+
+    readonly = [t for t in tools if t.side_effect is SideEffect.READONLY]
+    local_write = [t for t in tools if t.side_effect is SideEffect.LOCAL_WRITE]
+    assert local_write, "用例前提：工具集里有本地写工具"
+    assert set(options.allowed_tools) == names(readonly)
+    assert not names(local_write) & set(options.allowed_tools)
+    assert set(sdk_client.build_options(tools, "task").allowed_tools) == names(
+        readonly + local_write
+    )
+
+
+def test_external_write_tools_are_never_exposed_to_the_model(settings, monkeypatch):
+    """外部写工具即使注册进工具集也不会进入模型可见范围；发送只由 Confirmation 调用。"""
+    monkeypatch.setattr(
+        sdk_client,
+        "get_settings",
+        lambda: Settings(
+            data_dir=settings.data_dir, QODERCN_PERSONAL_ACCESS_TOKEN="test", _env_file=None
+        ),
+    )
+    registry = ToolRegistry()
+
+    @registry.register(name="gmail_send_reply", side_effect=SideEffect.EXTERNAL_WRITE)
+    def send_now(operation_id: str) -> dict:
+        """真实发送邮件；绝不注册给模型。"""
+        raise AssertionError("模型不应当能调用外部写工具")
+
+    tools = [*build_tools(drafts=ReplyDraftStore(None), tasks=SessionStore()), send_now]
+    for allow_drafts in (True, False):
+        options = sdk_client.build_options(tools, "task", allow_drafts=allow_drafts)
+        assert not any("send" in name for name in options.allowed_tools)
+    assert send_now not in sdk_client.exposed_tools(tools, allow_drafts=True)
 
 
 def test_tools_bind_assembled_dependencies_without_global_state(settings, tmp_path):

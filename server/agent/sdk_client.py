@@ -30,7 +30,7 @@ from qodercn_agent_sdk import (
 from server.agent.prompt import SYSTEM_PROMPT
 from server.config import get_settings
 from server.errors import error_details
-from server.tools.registry import ToolDefinition
+from server.tools.registry import SideEffect, ToolDefinition
 
 UNEXPECTED_ERROR_TEXT = "工具执行失败，未确认保存成功，请检查输入或服务配置"
 
@@ -48,6 +48,18 @@ def tool_result(payload: object, *, failed: bool = False) -> dict:
     }
 
 
+def exposed_tools(tools: list[ToolDefinition], *, allow_drafts: bool) -> list[ToolDefinition]:
+    """按注册时的副作用声明决定模型可见的工具。
+
+    EXTERNAL_WRITE 不属于任何一轮的允许集合：真实发送由 Confirmation 直接调用发送函数，
+    永远不注册给模型。新邮件轮只分析不起草，再排除 LOCAL_WRITE。
+    """
+    allowed = {SideEffect.READONLY}
+    if allow_drafts:
+        allowed.add(SideEffect.LOCAL_WRITE)
+    return [definition for definition in tools if definition.side_effect in allowed]
+
+
 def build_options(
     tools: list[ToolDefinition],
     task_id: str,
@@ -56,8 +68,8 @@ def build_options(
     draft_events: list[dict] | None = None,
     allow_drafts: bool = True,
 ) -> QoderAgentOptions:
-    """显式限定邮件查询与本地草稿工具；任务身份由网关绑定，不信任模型参数。"""
-    definitions = tools[:3] if not allow_drafts else list(tools)
+    """按副作用声明限定本轮工具；任务身份由网关绑定，不信任模型参数。"""
+    definitions = exposed_tools(tools, allow_drafts=allow_drafts)
     sdk_tools = []
     for definition in definitions:
         schema = deepcopy(definition.parameters_schema)

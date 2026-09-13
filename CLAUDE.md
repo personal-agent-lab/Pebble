@@ -30,5 +30,5 @@
 ## Git
 
 - 直接提交到当前分支，不自动推送。
-- commit message：`[模块] 功能描述`，使用英文，例如 `[Gmail] Support email thread association`。
+- commit message：`[模块] 功能描述`，使用简短的英文一句话描述，例如 `[Gmail] Support email thread association`。
 - 不加 `co-authored-by`，除非对方明确要求。
