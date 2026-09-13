@@ -1,0 +1,12 @@
+{
+  "message_id": "mail-reschedule-002",
+  "thread_id": "thread-reschedule-002",
+  "from": "pm@example.com",
+  "to": ["me@example.com"],
+  "subject": "周一评审能否改到周二上午",
+  "received_at": "2026-09-12T10:05:00+08:00",
+  "body": "你好，\n\n周一下午我这边临时有冲突，评审想改到周二上午 10 点，你方便吗？\n\n多谢",
+  "summary": "对方希望把周一下午的评审改到周二上午 10 点，问你是否方便。",
+  "suggestion": "建议回复确认改期，并说明周二上午的时间安排。",
+  "reply_body": "您好，\n\n周二上午 10 点我可以，评审改到这个时间没有问题。\n\n谢谢！"
+}

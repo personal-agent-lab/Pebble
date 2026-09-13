@@ -1,0 +1,11 @@
+{
+  "message_id": "mail-newsletter-003",
+  "thread_id": "thread-newsletter-003",
+  "from": "news@example.com",
+  "to": ["me@example.com"],
+  "subject": "本周产品动态",
+  "received_at": "2026-09-12T08:00:00+08:00",
+  "body": "本周更新：搜索速度优化、导出支持 CSV。无需回复。",
+  "summary": "一封产品动态通知，列了搜索优化和 CSV 导出两项更新。",
+  "suggestion": "这封不需要回复，看一眼即可；要回信也可以直接告诉我。"
+}

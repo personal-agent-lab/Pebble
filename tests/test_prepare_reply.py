@@ -27,6 +27,7 @@ def test_prepare_reply_validation_failure_blocks_saving() -> None:
         subject="  ",
         body="这是测试正文",
         storage=storage,
+        client=MockGmailClient(),
     )
 
     assert res["success"] is False
@@ -50,6 +51,7 @@ def test_prepare_reply_success_creates_draft_pending_review() -> None:
         subject="Re: 项目进展评审与架构讨论邀请",
         body="已收到会议邀请，我将准时出席。",
         storage=storage,
+        client=MockGmailClient(),
     )
 
     assert res["success"] is True
@@ -79,6 +81,7 @@ def test_prepare_reply_deduplication_reuses_existing_operation() -> None:
         subject="Re: 邀请",
         body="第一次准备回复。",
         storage=storage,
+        client=MockGmailClient(),
     )
     assert res1["success"] is True
     op1 = res1["operation_id"]
@@ -92,6 +95,7 @@ def test_prepare_reply_deduplication_reuses_existing_operation() -> None:
         subject="Re: 邀请",
         body="第二次准备回复。",
         storage=storage,
+        client=MockGmailClient(),
     )
     assert res2["success"] is True
     op2 = res2["operation_id"]

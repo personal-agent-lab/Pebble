@@ -1,0 +1,12 @@
+{
+  "message_id": "mail-invite-001",
+  "thread_id": "thread-invite-001",
+  "from": "organizer@example.com",
+  "to": ["me@example.com"],
+  "subject": "周五项目交流会邀请",
+  "received_at": "2026-09-12T09:20:00+08:00",
+  "body": "你好，\n\n邀请你本周五下午 3 点参加线上项目交流会，议题是下一阶段的排期。\n请回复是否参加。\n\n组织者",
+  "summary": "对方邀请你本周五下午 3 点参加线上项目交流会，议题是下一阶段的排期。",
+  "suggestion": "建议回复确认参加，并顺便问一下会议链接。",
+  "reply_body": "您好，\n\n感谢邀请，我确认参加本周五下午 3 点的项目交流会。\n\n谢谢！"
+}

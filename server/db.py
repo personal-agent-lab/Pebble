@@ -1,8 +1,4 @@
-"""SQLite 连接与 schema 版本。
-
-业务表（任务、草稿、确认记录）待接口与状态含义确定后在此追加，并同步提升
-SCHEMA_VERSION；当前只提供连接纪律与版本记录。
-"""
+"""SQLite 连接、事务及 schema 初始化。"""
 
 from __future__ import annotations
 
@@ -13,7 +9,59 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 0
+SCHEMA_VERSION = 3
+
+SCHEMA_V1 = (
+    "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
+    "sdk_session_id TEXT, created_at TEXT NOT NULL)",
+    "CREATE TABLE operations (operation_id TEXT PRIMARY KEY, type TEXT NOT NULL, "
+    "created_task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "version INTEGER NOT NULL CHECK(version >= 1), "
+    "status TEXT NOT NULL CHECK(status IN ('pending','sending','sent','failed','unknown')), "
+    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    "CREATE TABLE task_operations (task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "operation_id TEXT NOT NULL REFERENCES operations(operation_id), "
+    "PRIMARY KEY(task_id, operation_id))",
+    "CREATE TABLE mail_reply_drafts (operation_id TEXT PRIMARY KEY "
+    "REFERENCES operations(operation_id), "
+    "source_message_id TEXT NOT NULL UNIQUE, thread_id TEXT NOT NULL)",
+    "CREATE TABLE mail_reply_versions (operation_id TEXT NOT NULL "
+    "REFERENCES mail_reply_drafts(operation_id), version INTEGER NOT NULL CHECK(version >= 1), "
+    "recipients TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL, "
+    "created_at TEXT NOT NULL, "
+    "PRIMARY KEY(operation_id, version))",
+)
+
+# 确认执行记录：主键即操作标识，同一操作至多一份。结果字段只在执行结束时一起写入，
+# 执行中 completed_at 为空；操作状态仍保存在 operations.status。
+SCHEMA_V2 = (
+    "CREATE TABLE approval_executions (operation_id TEXT PRIMARY KEY "
+    "REFERENCES operations(operation_id), task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "version INTEGER NOT NULL CHECK(version >= 1), confirmed_at TEXT NOT NULL, "
+    "message_id TEXT, reason TEXT, completed_at TEXT, "
+    "CHECK ((completed_at IS NULL) = (message_id IS NULL AND reason IS NULL)))",
+)
+
+# 后台调用记录：每次 Agent 输入（新邮件、用户消息、执行结果回传）一条，保存类别、
+# 必要输入与运行状态，供查询和重启识别。执行结果回传按操作标识唯一，重复确认不新增回传。
+SCHEMA_V3 = (
+    "CREATE TABLE agent_runs (run_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "kind TEXT NOT NULL CHECK(kind IN ('new_mail','message','execution_result')), "
+    "reference_id TEXT, input TEXT NOT NULL, "
+    "status TEXT NOT NULL CHECK(status IN ('pending','running','done','error','interrupted')), "
+    "error TEXT, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, "
+    "CHECK ((finished_at IS NULL) = (status IN ('pending','running'))), "
+    "CHECK (error IS NULL OR status IN ('error','interrupted')))",
+    "CREATE UNIQUE INDEX agent_runs_delivery ON agent_runs(reference_id) "
+    "WHERE kind = 'execution_result'",
+    "CREATE TABLE mail_task_links (source_message_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), created_at TEXT NOT NULL)",
+    # 已接受确认的发送由后台执行；started_at 标记执行已开始，重复调度不再发送。
+    "ALTER TABLE approval_executions ADD COLUMN started_at TEXT",
+)
+
+SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {1: SCHEMA_V1, 2: SCHEMA_V2, 3: SCHEMA_V3}
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 
@@ -61,12 +109,24 @@ def schema_version(conn: sqlite3.Connection) -> int:
 
 
 def init_db(path: Path | None = None) -> int:
-    """建立实例持久目录、启用 WAL 并记录 schema 版本，返回当前版本。"""
+    """建立实例持久目录、启用 WAL，按版本补建缺失的表并记录 schema 版本，返回当前版本。
+
+    升级语句与版本号在同一写事务内提交：中途失败时现有数据与版本号都不变。
+    已经是当前版本时不执行任何语句，业务记录不受重复初始化影响。
+    """
     target = path or get_settings().db_path
     target.parent.mkdir(parents=True, exist_ok=True)
     with session(target) as conn:
         with write(conn):
             conn.execute("CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL)")
             if conn.execute("SELECT COUNT(*) AS n FROM schema_meta").fetchone()["n"] == 0:
-                conn.execute("INSERT INTO schema_meta (version) VALUES (?)", (SCHEMA_VERSION,))
+                conn.execute("INSERT INTO schema_meta (version) VALUES (0)")
+            current = schema_version(conn)
+            if current > SCHEMA_VERSION:
+                raise RuntimeError(f"Unsupported schema version: {current}")
+            for version in range(current + 1, SCHEMA_VERSION + 1):
+                for statement in SCHEMA_MIGRATIONS[version]:
+                    conn.execute(statement)
+            if current != SCHEMA_VERSION:
+                conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
         return schema_version(conn)

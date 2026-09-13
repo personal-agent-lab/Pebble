@@ -260,3 +260,24 @@ def prepare_reply(
         "status": status,
         "message": msg,
     }
+
+
+@tool(name="gmail_read_reply_draft", side_effect=SideEffect.READONLY)
+def read_reply_draft(task_id: str, operation_id: str) -> dict:
+    """读取当前任务的完整已保存草稿；修改前先读取最新内容与版本。"""
+    from server.sessions.service import SessionStore
+
+    if operation_id not in {
+        op["operation_id"] for op in SessionStore().list_task_operations(task_id)
+    }:
+        raise ValueError("草稿不属于当前任务")
+    return get_draft_storage().get_reply_draft(operation_id)
+
+
+@tool(name="gmail_update_reply_draft", side_effect=SideEffect.LOCAL_WRITE)
+def update_reply_draft(
+    task_id: str, operation_id: str, expected_version: int, to: list[str], subject: str, body: str
+) -> dict:
+    """按用户修改意见保存完整新版本，不发送；必须使用刚读取的当前版本。"""
+    read_reply_draft(task_id, operation_id)
+    return get_draft_storage().update_reply_draft(operation_id, expected_version, to, subject, body)
