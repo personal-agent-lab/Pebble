@@ -1,28 +1,13 @@
-"""仅测试用的可启动后端：真实服务 + 有脚本的 Agent/Gmail 替身。"""
+"""仅测试用的可启动后端：真实服务 + 有脚本的 Agent/Gmail 替身。
 
-import json
-import os
+邮件内容与对话由固定脚本给出。要手动走完整流程用 `tests/support/manual_backend.py`。
+"""
+
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from server.main import create_app
 from tests.support.agent_double import FakeAgentGateway
-
-
-def validate(**fields):
-    if not fields["body"]:
-        return {"valid": False, "errors": [{"field": "body", "message": "正文不能为空"}]}
-    return {"valid": True, "errors": []}
-
-
-def send(**fields):
-    with (Path(os.environ["PEBBLE_DATA_DIR"]) / "sent.jsonl").open("a") as output:
-        output.write(json.dumps(fields, ensure_ascii=False) + "\n")
-    status = os.environ.get("PEBBLE_TEST_SEND_STATUS", "sent")
-    if status == "sent":
-        return {"status": status, "message_id": "test-message"}
-    return {"status": status, "reason": "测试替身模拟结果：" + status}
-
+from tests.support.gmail_double import send, validate
 
 gateway = FakeAgentGateway()
 app = create_app(gateway=gateway, validate_reply_draft=validate, send_reply=send)

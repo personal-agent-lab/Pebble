@@ -225,6 +225,79 @@ uv run --project server uvicorn tests.support.backend_fixture:app --host 127.0.0
 访问 `http://127.0.0.1:8001/docs`，先读取 `/api/tasks` 得到自动生成的任务；提交消息、读取操作、
 编辑草稿并确认后，查看执行结果及 history。发送替身实际收到的参数保存在上述临时目录的
 `sent.jsonl`，重复确认不增加行数。此入口仅用于人工验收，不是生产启动方式。
+这个后端的邮件与对话是固定脚本，只够接口验证；在网页上按业务顺序手动走完整流程见
+「手动跑通完整邮件流程」。
+
+## 手动跑通完整邮件流程
+
+在网页上按业务顺序走一遍七步：收到新邮件 → 摘要和建议 → 要求准备回信 → 生成草稿 →
+多轮修改与直接编辑 → 确认发送 → 展示结果并交回 Agent。需要三个东西：替身后端、前端开发
+服务器，以及投递邮件的命令。任务、草稿版本、确认执行、SSE 与 SQLite 都是真的；邮件内容、
+摘要建议、草稿改写和 Gmail 发送是替身，不会真实发信。
+
+后端（仓库根执行；数据目录另给一个，避免和 `.data` 混在一起）：
+
+```bash
+PYTHONPATH=. PEBBLE_DATA_DIR=/tmp/pebble-manual PEBBLE_TEST_SEND_DELAY=2 uv run --project server uvicorn tests.support.manual_backend:app --host 127.0.0.1 --port 8000
+```
+
+前端按「启动」一节运行 `npm run dev`；端口 8000 与 Vite 默认代理目标一致，页面在
+`http://127.0.0.1:5173`。
+
+投递邮件（另开终端，`PEBBLE_DATA_DIR` 与后端一致）：
+
+```bash
+PYTHONPATH=. PEBBLE_DATA_DIR=/tmp/pebble-manual uv run --project server python -m tests.mail_inbox list
+```
+
+```bash
+PYTHONPATH=. PEBBLE_DATA_DIR=/tmp/pebble-manual uv run --project server python -m tests.mail_inbox deliver invite
+```
+
+现写一封：
+
+```bash
+PYTHONPATH=. PEBBLE_DATA_DIR=/tmp/pebble-manual uv run --project server python -m tests.mail_inbox compose --from lawyer@example.com --subject "合同条款确认" --body "你好，\n\n第 7 条的付款周期希望改成 30 天，能接受吗？"
+```
+
+`compose` 只有 `--from`、`--subject`、`--body` 必填（正文里的 `\n` 当换行），其余可选：
+`--thread` 给已有线程即为同线程的另一封邮件，`--id` 复用同一个 ID 用来验证去重，
+`--summary`、`--suggestion`、`--reply-body` 指定替身的摘要、建议和起草正文；不给就按正文生成。
+
+邮件就是收件箱目录（默认 `<数据目录>/inbox`，可用 `PEBBLE_TEST_INBOX_DIR` 指定）里的 json，
+所以手写一个文件放进去、或用编辑器改一改再存，效果和上面的命令一样；`deliver` 也接受 json 路径，
+样例在 `tests/support/mails/`，`clear` 清空收件箱。后台每秒扫描一次，邮件 ID 决定去重：
+重复投递同一个 ID 不重复建任务，重启后重新扫描也不会重复。
+
+替身 Agent 按关键词判断意图：普通提问只回答，出现「回信」「草稿」「改」「正式」「链接」
+这类词才动草稿，所以「让它准备草稿」和「确认发送」始终是两件事。草稿保存、版本、
+版本冲突和发送都走服务端真实接口。可调环境变量：`PEBBLE_TEST_AGENT_DELAY` 每段文本间隔
+（默认 0.4 秒），`PEBBLE_TEST_SEND_DELAY` 发送耗时（默认 0；设成 2 能在页面上看到 sending
+中间态），`PEBBLE_TEST_SEND_STATUS` 取 `sent`、`failed` 或 `unknown`。
+
+替身的记录都在数据目录：`sent.jsonl` 是发送替身实际收到的参数，`mock_agent_history.jsonl`
+是会话历史（重启后仍在），`mock_agent_mails.json` 是任务与邮件的对应关系。会话标识按任务生成，
+重启后新任务不会捡到旧任务的历史。
+
+新邮件来源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/mail_source.py` 的
+`MailSource`（`start` / `stop`）。真实 Gmail 检测由 B 实现同一接口；默认装配没有邮件来源，
+不伪造邮件。`tests/support/` 下的模拟邮箱与替身 Agent 只用于测试和人工验收。
+
+### 手动验收记录（2026-09-12）
+
+浏览器 1280×860 走完上述七步：投递 `invite` 后任务自动出现；对话里先给摘要和建议且没有
+自建草稿；问一句「这封邮件说了什么」只得到回答，操作数仍为 0；说「帮我写一封回信」后出现
+v1 草稿与待确认卡；「再问一下会议链接」改出 v2；确认页手动编辑保存为 v3；确认发送时出现
+`sending`（`PEBBLE_TEST_SEND_DELAY=2`），随后转 `sent` 并显示邮件 ID；`sent.jsonl` 只有一行，
+收件人、主题、正文与 v3 逐字段一致；执行结果分区按「1 / 1」汇总，Agent 在同一对话里给出
+后续回复；已发送后再要求修改被明确拒绝。重复投递同一封邮件任务数不变；投递第二封生成
+独立任务和独立草稿；重启后端后任务不重复、对话历史仍在。
+
+另外验证了 `compose` 现写的邮件：没有摘要字段时按正文首句摘要（跳过称呼），起草的回信按
+真实发件人和主题生成。
+
+自动化覆盖同一套装配的是 `tests/api/test_manual_flow.py`：七步、两封邮件各自独立、重启后
+历史不串、现写邮件无摘要字段。
 
 ## 带终端日志的七步邮件演示
 
