@@ -67,6 +67,13 @@ def prepare(stores, source="m1"):
     return task, operation
 
 
+def confirm(service, task_id, operation_id, version):
+    """接受确认后立即执行：生产走 HTTP 接受 + 后台执行，测试在同一线程内串起来。"""
+    service.accept_confirmation(task_id, operation_id, version)
+    service.execute_accepted(operation_id)
+    return service.get_execution(operation_id)
+
+
 def run_python(code: str, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-c", code, *args], check=True, capture_output=True, text=True
@@ -89,7 +96,7 @@ def test_confirm_sends_exact_confirmed_version(stores):
 
     sender = Sender()
     service = ConfirmationService(sender)
-    response = service.confirm_reply(task["task_id"], operation["operation_id"], 3)
+    response = confirm(service, task["task_id"], operation["operation_id"], 3)
 
     assert sender.calls == [
         {
@@ -124,7 +131,7 @@ def test_confirm_rejects_missing_objects_and_stale_version(stores):
     service = ConfirmationService(sender)
 
     with pytest.raises(VersionConflictError) as error:
-        service.confirm_reply(task["task_id"], operation["operation_id"], 1)
+        confirm(service, task["task_id"], operation["operation_id"], 1)
     assert error.value.current_version == 2
     assert sender.calls == []
     assert service.get_execution(operation["operation_id"]) == {
@@ -135,9 +142,9 @@ def test_confirm_rejects_missing_objects_and_stale_version(stores):
         "result": None,
     }
     with pytest.raises(NotFoundError):
-        service.confirm_reply(task["task_id"], "missing-operation", 2)
+        confirm(service, task["task_id"], "missing-operation", 2)
     with pytest.raises(NotFoundError):
-        service.confirm_reply("missing-task", operation["operation_id"], 2)
+        confirm(service, "missing-task", operation["operation_id"], 2)
     with pytest.raises(NotFoundError):
         service.get_execution("missing-operation")
     with pytest.raises(NotFoundError):
@@ -150,7 +157,7 @@ def test_confirm_requires_pending_without_execution(stores):
         conn.execute("UPDATE operations SET status = 'sending'")
     sender = Sender()
     with pytest.raises(NotEditableError) as error:
-        ConfirmationService(sender).confirm_reply(task["task_id"], operation["operation_id"], 1)
+        confirm(ConfirmationService(sender), task["task_id"], operation["operation_id"], 1)
     assert error.value.status == "sending"
     assert sender.calls == []
 
@@ -169,9 +176,9 @@ def test_concurrent_confirmation_single_execution(stores):
     other = Sender()
 
     with ThreadPoolExecutor(2) as pool:
-        winner = pool.submit(service.confirm_reply, task["task_id"], operation["operation_id"], 1)
+        winner = pool.submit(confirm, service, task["task_id"], operation["operation_id"], 1)
         assert started.wait(5)
-        duplicate = ConfirmationService(other).confirm_reply(
+        duplicate = confirm(ConfirmationService(other), 
             task["task_id"], operation["operation_id"], 1
         )
         release.set()
@@ -206,7 +213,7 @@ def test_edit_and_confirm_race(stores):
     def try_confirm() -> dict | str:
         barrier.wait(timeout=5)
         try:
-            return service.confirm_reply(task["task_id"], operation["operation_id"], 1)
+            return confirm(service, task["task_id"], operation["operation_id"], 1)
         except (NotEditableError, VersionConflictError) as error:
             return type(error).__name__
 
@@ -253,10 +260,10 @@ def test_send_result_persists_for_new_process(stores, outcome, expected):
     sender = Sender(outcome)
     service = ConfirmationService(sender)
 
-    response = service.confirm_reply(task["task_id"], operation["operation_id"], 1)
+    response = confirm(service, task["task_id"], operation["operation_id"], 1)
     assert response["status"] == expected["status"]
     assert response["result"] == expected
-    assert service.confirm_reply(task["task_id"], operation["operation_id"], 1) == response
+    assert confirm(service, task["task_id"], operation["operation_id"], 1) == response
     assert len(sender.calls) == 1
 
     reader = f"""
@@ -304,14 +311,14 @@ def test_unclear_send_result_saved_as_unknown(stores, returned):
     sender = Sender(returned)
     service = ConfirmationService(sender)
 
-    response = service.confirm_reply(task["task_id"], operation["operation_id"], 1)
+    response = confirm(service, task["task_id"], operation["operation_id"], 1)
     assert response["status"] == "unknown"
     assert response["result"]["status"] == "unknown"
     assert response["result"]["reason"]
 
     reopened = ConfirmationService(sender)
     assert reopened.get_execution(operation["operation_id"]) == response
-    assert reopened.confirm_reply(task["task_id"], operation["operation_id"], 1) == response
+    assert confirm(reopened, task["task_id"], operation["operation_id"], 1) == response
     assert len(sender.calls) == 1
 
 
@@ -329,14 +336,14 @@ def test_claim_rollback_leaves_no_trace(stores, monkeypatch):
     monkeypatch.setattr(approval_repo, "insert", interrupted)
     service = ConfirmationService(sender)
     with pytest.raises(RuntimeError):
-        service.confirm_reply(task["task_id"], operation["operation_id"], 1)
+        confirm(service, task["task_id"], operation["operation_id"], 1)
     assert sender.calls == []
     assert stores[1].get_reply_draft(operation["operation_id"])["status"] == "pending"
     with session() as conn:
         assert conn.execute("SELECT COUNT(*) FROM approval_executions").fetchone()[0] == 0
 
     state["fail"] = False
-    assert service.confirm_reply(task["task_id"], operation["operation_id"], 1)["status"] == "sent"
+    assert confirm(service, task["task_id"], operation["operation_id"], 1)["status"] == "sent"
 
 
 def test_result_save_failure_blocks_resend(stores, monkeypatch):
@@ -353,7 +360,7 @@ def test_result_save_failure_blocks_resend(stores, monkeypatch):
     monkeypatch.setattr(approval_repo, "complete", flaky)
     service = ConfirmationService(sender)
     with pytest.raises(sqlite3.OperationalError):
-        service.confirm_reply(task["task_id"], operation["operation_id"], 1)
+        confirm(service, task["task_id"], operation["operation_id"], 1)
     assert len(sender.calls) == 1
     interrupted = service.get_execution(operation["operation_id"])
     assert interrupted["status"] == "sending"
@@ -361,7 +368,7 @@ def test_result_save_failure_blocks_resend(stores, monkeypatch):
     assert interrupted["confirmation"]["version"] == 1
 
     state["fail"] = False
-    assert service.confirm_reply(task["task_id"], operation["operation_id"], 1) == interrupted
+    assert confirm(service, task["task_id"], operation["operation_id"], 1) == interrupted
     assert len(sender.calls) == 1
 
     assert service.recover_interrupted_executions() == [operation["operation_id"]]
@@ -369,7 +376,7 @@ def test_result_save_failure_blocks_resend(stores, monkeypatch):
     assert recovered["status"] == "unknown"
     assert recovered["result"]["status"] == "unknown"
     assert recovered["confirmation"] == interrupted["confirmation"]
-    assert service.confirm_reply(task["task_id"], operation["operation_id"], 1) == recovered
+    assert confirm(service, task["task_id"], operation["operation_id"], 1) == recovered
     assert len(sender.calls) == 1
 
 
@@ -386,7 +393,9 @@ def sender(**kwargs):
     os._exit(3)
 
 
-ConfirmationService(sender).confirm_reply(sys.argv[1], sys.argv[2], int(sys.argv[3]))
+service = ConfirmationService(sender)
+service.accept_confirmation(sys.argv[1], sys.argv[2], int(sys.argv[3]))
+service.execute_accepted(sys.argv[2])
 """
     result = subprocess.run(
         [sys.executable, "-c", crash, task["task_id"], operation["operation_id"], "1"],
@@ -407,7 +416,7 @@ ConfirmationService(sender).confirm_reply(sys.argv[1], sys.argv[2], int(sys.argv
     assert recovered["status"] == "unknown"
     assert recovered["result"]["status"] == "unknown"
     assert recovered["confirmation"] == interrupted["confirmation"]
-    assert service.confirm_reply(task["task_id"], operation["operation_id"], 1) == recovered
+    assert confirm(service, task["task_id"], operation["operation_id"], 1) == recovered
     assert sender.calls == []
 
 
@@ -462,7 +471,7 @@ def test_delivery_task_is_first_confirmation_task(stores):
 
     sender = Sender({"status": "failed", "reason": "SMTP 拒绝"})
     service = ConfirmationService(sender)
-    response = service.confirm_reply(second["task_id"], operation["operation_id"], 1)
+    response = confirm(service, second["task_id"], operation["operation_id"], 1)
 
     assert response["status"] == "failed"
     assert service.get_agent_result(operation["operation_id"]) == {
@@ -473,7 +482,7 @@ def test_delivery_task_is_first_confirmation_task(stores):
         "result": {"status": "failed", "reason": "SMTP 拒绝"},
     }
 
-    assert service.confirm_reply(first["task_id"], operation["operation_id"], 1) == response
+    assert confirm(service, first["task_id"], operation["operation_id"], 1) == response
     assert len(sender.calls) == 1
     agent = service.get_agent_result(operation["operation_id"])
     assert agent["task_id"] == second["task_id"]
@@ -492,7 +501,7 @@ def test_agent_result_needs_saved_result_and_session(stores):
     service = ConfirmationService(sender)
 
     assert service.get_agent_result(operation["operation_id"]) is None
-    response = service.confirm_reply(task["task_id"], operation["operation_id"], 1)
+    response = confirm(service, task["task_id"], operation["operation_id"], 1)
     assert response["result"] is not None
     assert service.get_agent_result(operation["operation_id"]) is None
 
@@ -536,7 +545,7 @@ def test_upgrade_from_v1_preserves_records(settings):
     assert drafts.get_reply_draft("o1", 2)["body"] == "第二版"
 
     sender = Sender()
-    response = ConfirmationService(sender).confirm_reply("t1", "o1", 2)
+    response = confirm(ConfirmationService(sender), "t1", "o1", 2)
     assert response["status"] == "sent"
     assert response["confirmation"]["task_id"] == "t1"
 
@@ -599,7 +608,7 @@ def unknown_execution(stores, **kwargs):
     task, operation = prepare(stores)
     stores[0].bind_sdk_session(task["task_id"], "sdk-1")
     service = ConfirmationService(Sender({"status": "unknown", "reason": "网关超时"}), **kwargs)
-    service.confirm_reply(task["task_id"], operation["operation_id"], 1)
+    confirm(service, task["task_id"], operation["operation_id"], 1)
     assert service.get_execution(operation["operation_id"])["status"] == "unknown"
     return task, operation
 
@@ -644,7 +653,7 @@ def test_verify_only_applies_to_unknown(stores):
     task, operation = prepare(stores)
     verifier = Verifier({"status": "sent", "message_id": "gmail-9"})
     service = ConfirmationService(Sender(), verifier)
-    sent = service.confirm_reply(task["task_id"], operation["operation_id"], 1)
+    sent = confirm(service, task["task_id"], operation["operation_id"], 1)
 
     assert service.verify_pending(operation["operation_id"]) == sent
     assert verifier.calls == []

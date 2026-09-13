@@ -168,12 +168,6 @@ class ConfirmationService:
         self._claim(task_id, operation_id, version)
         return self.get_execution(operation_id)
 
-    def confirm_reply(self, task_id: str, operation_id: str, version: int) -> dict:
-        """本地调用路径：接受确认后立即执行，供服务内联使用。"""
-        self.accept_confirmation(task_id, operation_id, version)
-        self.execute_accepted(operation_id)
-        return self.get_execution(operation_id)
-
     def execute_accepted(self, operation_id: str) -> dict | None:
         """执行已接受的确认：只有首次开始的调用会发送，参数取自已确认版本。
 

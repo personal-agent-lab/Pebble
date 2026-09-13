@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from server.agent.sdk_client import exposed_tools
 from server.db import init_db
 from server.errors import DraftValidationError, NotFoundError
 from server.sessions.service import SessionStore
@@ -31,9 +32,10 @@ def test_prepare_reply_registered_as_local_write() -> None:
     tool_def = default_registry.get_tool("gmail_prepare_reply")
     assert tool_def is not None
     assert tool_def.side_effect == SideEffect.LOCAL_WRITE
-    # LOCAL_WRITE 应该对模型可见（允许生成草稿供审阅）
-    exposed_names = [t.name for t in default_registry.get_model_exposed_tools()]
-    assert "gmail_prepare_reply" in exposed_names
+    # LOCAL_WRITE 只在允许起草的轮次对模型可见；新邮件轮只分析，不起草。
+    tools = default_registry.list_tools()
+    assert tool_def in exposed_tools(tools, allow_drafts=True)
+    assert tool_def not in exposed_tools(tools, allow_drafts=False)
 
 
 def test_prepare_reply_validation_failure_blocks_saving(drafts, task_id) -> None:

@@ -365,14 +365,15 @@ B 线（资料与能力成长）：
 按 `agent_runs` 的插入顺序启动就绪输入，不同任务独立执行。尚无会话的结果回传等待会话建立。
 HTTP/SSE 断开不取消工作。同步发送通过 `asyncio.to_thread`，正常关闭等待发送落盘，
 取消仍在运行的 Agent 调用；下次启动将运行中调用记为 interrupted，不自动重放。
-待处理输入继续运行；已有确认但进程遗留未完成的发送仍按既有规则记 unknown，不自动发送。
+待处理输入继续运行；已有确认但进程遗留未完成的发送不自动重发：已经调用过发送函数的记
+unknown 等待核实，`started_at` 仍为空即从未进入执行阶段，是明确未发送，记 failed。
 
 schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`。
 接受确认与后台开始发送分别原子处理，发送开始标记防止重复调用；保存发送结果和登记一次
 回传共用事务。Confirmation 依赖 sessions 的调用记录存取，不依赖 SDK 或 api 实现。
 Agent 历史由 B 的 read_history 返回；A 不保存另一份模型对话历史。
 
-新邮件来源是装配插孔：`gateway/runtime.py` 的 `MailSource` 只有 `start` / `stop`，
+新邮件来源是装配插孔：`gateway/runtime.py` 的 `MailSource` 只有 `start` / `stop` 与 `error`，
 由 `create_app(mail_source=...)` 传入，应用在恢复中断调用之后启动、关闭前停止。检测逻辑不在
 其中，真实 Gmail 检测（`background.py`）实现同一接口；默认装配没有邮件来源，不伪造邮件。
 
@@ -384,11 +385,18 @@ Agent 历史由 B 的 read_history 返回；A 不保存另一份模型对话历�
 `create_app` 接收已构造的存储，工具与 HTTP 共用同一实例，同一进程可并存互不影响的装配。
 未接入 Gmail 时工具清单不变，调用按依赖未接入拒绝，不退回模拟邮箱。
 
-模型可见范围由注册时的副作用声明决定，不是手写清单：EXTERNAL_WRITE 不在任何一轮的允许集合内，
-新邮件轮只允许 READONLY。回复草稿的业务校验只在 `ReplyDraftStore` 内做一次，且在按原邮件去重
+工具清单与模型可见范围都由注册时的副作用声明决定，不是手写清单：`agent/toolset.py` 遍历注册表
+绑定依赖，声明了无法装配的依赖在装配期就失败；筛选只有 `agent/sdk_client.py` 一处，
+EXTERNAL_WRITE 不在任何一轮的允许集合内，新邮件轮只允许 READONLY。回复草稿的业务校验只在 `ReplyDraftStore` 内做一次，且在按原邮件去重
 之后，符合契约 §4 复用已有操作时候选内容不参与校验。工具边界把已实现的契约错误按
 `server/errors.py` 的名称与字段交回模型，与 HTTP 响应体同一套词汇。
 
-未接入 Agent、校验或发送依赖时，相关新工作在写入前拒绝。只读任务、草稿及执行查询仍可用。
+发送结果为 unknown 时由 `Confirmation.verify_pending` 用 B 的 `verify_reply` 只读核实：输入是
+已确认版本的内容证据，不含操作标识与版本，也不重发。查不到不等于未发送，所以核实只把 unknown
+升级为 sent，不下明确失败的结论；升级后的结果按核实专用去重键另登记一次回传，原结果的回传
+尚未结束时不再登记。核实由 `POST /operations/{operation_id}/verification` 显式发起，
+读接口不做外部调用。
+
+未接入 Agent、核实或发送依赖时，相关新工作在写入前拒绝。只读任务、草稿及执行查询仍可用。
 生产默认装配不使用替身；测试替身和可启动验收应用均位于 tests。认证部署不属于本地后端
 验收的交付范围；当前服务仅按本机测试使用，正式 Web 接入仍须完成既定身份和来源检查。

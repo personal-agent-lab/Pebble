@@ -58,6 +58,13 @@ async def wait_for(predicate, timeout=5.0):
     raise AssertionError("等待超时")
 
 
+def confirm(service, task_id, operation_id, version):
+    """接受确认后立即执行：生产走 HTTP 接受 + 后台执行，测试在同一线程内串起来。"""
+    service.accept_confirmation(task_id, operation_id, version)
+    service.execute_accepted(operation_id)
+    return service.get_execution(operation_id)
+
+
 class Flow(NamedTuple):
     service: GatewayRuntime
     gateway: FakeAgentGateway
@@ -381,7 +388,7 @@ async def test_confirmed_result_waits_for_session_then_delivers(flow):
     operation = flow.drafts.save_reply_draft(task["task_id"], "m1", "thread-1", **DRAFT)
     assert flow.sender.calls == []
 
-    execution = flow.confirmations.confirm_reply(task["task_id"], operation["operation_id"], 1)
+    execution = confirm(flow.confirmations, task["task_id"], operation["operation_id"], 1)
     assert execution["status"] == "sent"
     assert len(flow.sender.calls) == 1
 
@@ -409,8 +416,8 @@ async def test_duplicate_confirmation_sends_once_and_registers_one_delivery(flow
     task = flow.tasks.create_task("重复确认")
     operation = flow.drafts.save_reply_draft(task["task_id"], "m1", "thread-1", **DRAFT)
 
-    first = flow.confirmations.confirm_reply(task["task_id"], operation["operation_id"], 1)
-    second = flow.confirmations.confirm_reply(task["task_id"], operation["operation_id"], 1)
+    first = confirm(flow.confirmations, task["task_id"], operation["operation_id"], 1)
+    second = confirm(flow.confirmations, task["task_id"], operation["operation_id"], 1)
 
     assert second == first
     assert len(flow.sender.calls) == 1
@@ -423,7 +430,7 @@ async def test_duplicate_confirmation_sends_once_and_registers_one_delivery(flow
 async def test_delivery_failure_keeps_send_result_and_no_resend(flow):
     task = flow.tasks.create_task("回传通道故障")
     operation = flow.drafts.save_reply_draft(task["task_id"], "m1", "thread-1", **DRAFT)
-    flow.confirmations.confirm_reply(task["task_id"], operation["operation_id"], 1)
+    confirm(flow.confirmations, task["task_id"], operation["operation_id"], 1)
     flow.tasks.bind_sdk_session(task["task_id"], "sdk-1")
 
     def broken(**kwargs):
@@ -441,7 +448,7 @@ async def test_delivery_failure_keeps_send_result_and_no_resend(flow):
     assert execution["status"] == "sent"
     assert execution["result"] == {"status": "sent", "message_id": "sent-1"}
     assert (
-        flow.confirmations.confirm_reply(task["task_id"], operation["operation_id"], 1) == execution
+        confirm(flow.confirmations, task["task_id"], operation["operation_id"], 1) == execution
     )
     assert len(flow.sender.calls) == 1
 
@@ -493,11 +500,11 @@ async def test_result_and_delivery_rollback_together(flow, monkeypatch):
 
     monkeypatch.setattr(runs, "insert", fail)
     with pytest.raises(RuntimeError, match="回传登记失败"):
-        flow.confirmations.confirm_reply(task["task_id"], op["operation_id"], 1)
+        confirm(flow.confirmations, task["task_id"], op["operation_id"], 1)
     assert flow.confirmations.get_execution(op["operation_id"])["status"] == "sending"
     assert flow.service.list_runs(task["task_id"]) == []
     assert len(flow.sender.calls) == 1
-    flow.confirmations.confirm_reply(task["task_id"], op["operation_id"], 1)
+    confirm(flow.confirmations, task["task_id"], op["operation_id"], 1)
     assert len(flow.sender.calls) == 1
 
 

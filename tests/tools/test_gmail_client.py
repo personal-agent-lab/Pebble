@@ -69,10 +69,6 @@ def test_mock_client_raw_send_reply_and_verify() -> None:
     assert thread[1].body_text == "确认可以按时出席会议。"
     assert "SENT" in thread[1].labels
 
-    # 验证发件状态核实
-    assert client.verify_message_sent("thread_invite_001", "项目进展评审与架构讨论邀请")
-    assert not client.verify_message_sent("thread_invite_001", "完全不相关的邮件")
-
 
 def test_mime_parser_helpers() -> None:
     # 1. 测试 base64url 解码与缺少 padding 补全

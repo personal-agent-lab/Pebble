@@ -4,6 +4,9 @@
 - 每个工具声明其能力、参数和副作用类型（READONLY / LOCAL_WRITE / EXTERNAL_WRITE）；
 - 外部写操作（EXTERNAL_WRITE）绝对不暴露给模型上下文；
 - 装饰器 @tool 用于声明与注册工具。
+
+注册表是装配的唯一来源：`agent/toolset.py` 遍历已注册工具绑定依赖，模型可见范围由
+`agent/sdk_client.py` 按本轮允许的副作用筛选。注册表本身不做筛选，避免两套宽严不同的边界。
 """
 
 from __future__ import annotations
@@ -78,21 +81,13 @@ class ToolRegistry:
     def get_tool(self, name: str) -> ToolDefinition | None:
         return self._tools.get(name)
 
-    def list_tools(self, side_effect: SideEffect | None = None) -> list[ToolDefinition]:
-        """列出已注册工具，支持按副作用类型过滤。"""
-        if side_effect is None:
-            return list(self._tools.values())
-        return [t for t in self._tools.values() if t.side_effect == side_effect]
+    def list_tools(self) -> list[ToolDefinition]:
+        """全部已注册工具，按注册顺序。
 
-    def get_model_exposed_tools(self) -> list[ToolDefinition]:
-        """安全边界：获取对模型可见的工具列表。
-
-        严格过滤掉 EXTERNAL_WRITE，杜绝模型直接调用外部写操作。
+        模型可见范围不在这里决定：注册表只记录声明，装配交给 `agent/toolset.py`，
+        每轮的允许集合由 `agent/sdk_client.py` 按副作用声明筛选，全流程只有那一处筛选。
         """
-        return [t for t in self._tools.values() if t.side_effect != SideEffect.EXTERNAL_WRITE]
-
-    def clear(self) -> None:
-        self._tools.clear()
+        return list(self._tools.values())
 
     @staticmethod
     def _generate_parameters_schema(fn: Callable[..., Any]) -> dict[str, Any]:

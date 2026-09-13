@@ -160,12 +160,3 @@ class MockGmailClient(BaseGmailClient):
             }
         )
         return SendReplyResult(message_id=sent_id, thread_id=thread_id)
-
-    def verify_message_sent(self, thread_id: str, subject_keyword: str) -> bool:
-        normalized_keyword = subject_keyword.replace("Re: ", "").strip().lower()
-        for sent in self.sent_log:
-            if sent["thread_id"] == thread_id:
-                sent_subj_norm = sent["subject"].replace("Re: ", "").strip().lower()
-                if normalized_keyword in sent_subj_norm:
-                    return True
-        return False
