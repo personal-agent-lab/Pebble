@@ -16,7 +16,7 @@ from google.auth.exceptions import RefreshError
 from googleapiclient.errors import HttpError
 
 from server.tools.gmail.client import BaseGmailClient
-from server.tools.gmail.validator import validate_reply_draft
+from server.tools.gmail.service import validate_reply_draft
 
 
 def _message_id(source_message_id: str) -> str:

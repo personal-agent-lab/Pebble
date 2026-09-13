@@ -18,7 +18,6 @@ from server.errors import (
     VersionConflictError,
 )
 from server.sessions.service import SessionStore
-from server.tools.gmail import repository as mail_repo
 from server.tools.gmail import service as mail_service
 from server.tools.gmail.service import ReplyDraftStore
 
@@ -183,13 +182,13 @@ def test_concurrent_creation(stores, monkeypatch):
 def test_rollback(stores, monkeypatch, editing):
     tasks, drafts = stores
     task, op = prepare(stores)
-    original = mail_repo.insert_version
+    original = mail_service.insert_version
 
     def interrupted(*args):
         original(*args)
         raise RuntimeError("interrupt before commit")
 
-    monkeypatch.setattr(mail_repo, "insert_version", interrupted)
+    monkeypatch.setattr(mail_service, "insert_version", interrupted)
     with pytest.raises(RuntimeError):
         if editing:
             drafts.update_reply_draft(op["operation_id"], 1, **CONTENT)

@@ -18,7 +18,7 @@ from server.errors import DependencyUnavailableError, NotEditableError, VersionC
 from server.sessions import repository as operations
 from server.sessions import runs as agent_runs
 from server.sessions.service import timestamp
-from server.tools.gmail import repository as mail
+from server.tools.gmail import service as mail
 
 RECOVERED_REASON = "发送调用未完成即中断，结果待核实"
 

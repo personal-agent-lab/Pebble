@@ -6,6 +6,7 @@ HTTP 请求和 SSE 连接不持有工作生命周期：接受输入时先保存�
 import asyncio
 import json
 import logging
+import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
@@ -21,7 +22,6 @@ from server.gateway.agent_contract import (
 from server.sessions import repository as operations
 from server.sessions import runs as repo
 from server.sessions.service import SessionStore, timestamp
-from server.tools.gmail import repository as mail
 
 
 class EventHub:
@@ -48,6 +48,20 @@ class EventHub:
 
 
 NEW_MAIL_GOAL = "处理新收到的邮件"
+
+
+# mail_task_links 只由新邮件入口读写：同一封邮件重复通知时找回原任务，不重复建任务。
+def find_task_link(conn: sqlite3.Connection, source_message_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT task_id FROM mail_task_links WHERE source_message_id = ?", (source_message_id,)
+    ).fetchone()
+    return row["task_id"] if row else None
+
+
+def insert_task_link(
+    conn: sqlite3.Connection, source_message_id: str, task_id: str, now: str
+) -> None:
+    conn.execute("INSERT INTO mail_task_links VALUES (?, ?, ?)", (source_message_id, task_id, now))
 
 
 INTERRUPTED_REASON = "上次进程退出时调用尚未结束，已记录中断"
@@ -83,13 +97,13 @@ class GatewayRuntime:
         """新邮件入口：同一事务创建任务、邮件关联和待处理调用；重复接收返回已有任务。"""
         self.require_gateway()
         with session(self.path) as conn, write(conn):
-            existing = mail.find_task_link(conn, source_message_id)
+            existing = find_task_link(conn, source_message_id)
             if existing is not None:
                 return operations.task(conn, existing)
             now = timestamp()
             task_id = str(uuid4())
             operations.insert_task(conn, task_id, NEW_MAIL_GOAL, now)
-            mail.insert_task_link(conn, source_message_id, task_id, now)
+            insert_task_link(conn, source_message_id, task_id, now)
             repo.insert(
                 conn,
                 str(uuid4()),

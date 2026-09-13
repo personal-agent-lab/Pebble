@@ -1,6 +1,6 @@
 """tests/test_gmail_validator.py: 测试 Gmail 回复草稿业务校验纯函数。"""
 
-from server.tools.gmail.validator import is_valid_email_address, validate_reply_draft
+from server.tools.gmail.service import is_valid_email_address, validate_reply_draft
 
 
 def test_validate_reply_draft_valid_inputs() -> None:
