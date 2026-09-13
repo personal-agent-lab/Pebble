@@ -6,7 +6,7 @@
 import pytest
 
 from server.db import init_db
-from server.errors import NotFoundError
+from server.errors import DraftValidationError, NotFoundError
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import ReplyDraftStore
 from server.tools.gmail.tools import prepare_reply
@@ -37,19 +37,18 @@ def test_prepare_reply_registered_as_local_write() -> None:
 
 def test_prepare_reply_validation_failure_blocks_saving(drafts, task_id) -> None:
     # 传入非法邮箱与空主题
-    res = prepare_reply(
-        task_id=task_id,
-        source_message_id="msg_invite_001",
-        thread_id="thread_invite_001",
-        to=["invalid-email-address"],
-        subject="  ",
-        body="这是测试正文",
-        drafts=drafts,
-    )
+    with pytest.raises(DraftValidationError) as raised:
+        prepare_reply(
+            task_id=task_id,
+            source_message_id="msg_invite_001",
+            thread_id="thread_invite_001",
+            to=["invalid-email-address"],
+            subject="  ",
+            body="这是测试正文",
+            drafts=drafts,
+        )
 
-    assert res["success"] is False
-    assert "草稿校验失败" in res["error"]
-    err_fields = [e["field"] for e in res["validation_errors"]]
+    err_fields = [e["field"] for e in raised.value.errors]
     assert "to" in err_fields
     assert "subject" in err_fields
 
@@ -68,7 +67,6 @@ def test_prepare_reply_success_creates_draft_pending_review(drafts, task_id) -> 
         drafts=drafts,
     )
 
-    assert res["success"] is True
     op_id = res["operation_id"]
     assert res["version"] == 1
     assert res["status"] == "pending"
@@ -97,7 +95,6 @@ def test_prepare_reply_deduplication_reuses_existing_operation(drafts, settings)
         body="第一次准备回复。",
         drafts=drafts,
     )
-    assert res1["success"] is True
 
     # 第 2 次针对同一封原邮件重复准备（例如 Agent 重复触发或未要求重写）
     res2 = prepare_reply(
@@ -109,7 +106,6 @@ def test_prepare_reply_deduplication_reuses_existing_operation(drafts, settings)
         body="第二次准备回复。",
         drafts=drafts,
     )
-    assert res2["success"] is True
 
     # 核心去重断言：复用已有 operation_id，内容仍是第 1 版
     assert res1["operation_id"] == res2["operation_id"]
@@ -133,3 +129,31 @@ def test_prepare_reply_rejects_unknown_task(drafts, settings) -> None:
             body="正文",
             drafts=drafts,
         )
+
+
+def test_prepare_reply_reuse_precedes_validation(drafts, task_id) -> None:
+    """契约 §4：原邮件已有回复操作时先复用，本次候选内容不参与校验，也不覆盖已保存内容。"""
+    first = prepare_reply(
+        task_id=task_id,
+        source_message_id="msg_invite_001",
+        thread_id="thread_invite_001",
+        to=["alice@example.com"],
+        subject="Re: 邀请",
+        body="第一次准备回复。",
+        drafts=drafts,
+    )
+
+    reused = prepare_reply(
+        task_id=task_id,
+        source_message_id="msg_invite_001",
+        thread_id="thread_invite_001",
+        to=["invalid-email-address"],
+        subject="  ",
+        body="",
+        drafts=drafts,
+    )
+
+    assert reused["operation_id"] == first["operation_id"]
+    assert reused["version"] == 1
+    assert reused["status"] == "pending"
+    assert drafts.get_reply_draft(first["operation_id"])["body"] == "第一次准备回复。"

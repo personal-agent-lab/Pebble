@@ -1,35 +1,20 @@
 """本地回复草稿；不调用模型、不发送邮件。"""
 
 from pathlib import Path
-from typing import Protocol, TypedDict
+from typing import Protocol
 
 from server.db import session, write
-from server.errors import DependencyUnavailableError
+from server.errors import DependencyUnavailableError, DraftValidationError
 from server.sessions import repository as operations
 from server.sessions.service import check_editable, create_operation, next_version, timestamp
 from server.tools.gmail import repository as repo
-
-
-class FieldError(TypedDict):
-    field: str
-    message: str
-
-
-class ValidationResult(TypedDict):
-    valid: bool
-    errors: list[FieldError]
+from server.tools.gmail.validator import ValidationResult
 
 
 class ReplyValidator(Protocol):
     def __call__(
         self, *, source_message_id: str, thread_id: str, to: list[str], subject: str, body: str
     ) -> ValidationResult: ...
-
-
-class DraftValidationError(Exception):
-    def __init__(self, errors: list[FieldError]):
-        self.errors = errors
-        super().__init__(str(errors))
 
 
 def summary(operation: dict) -> dict:

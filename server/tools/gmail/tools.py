@@ -12,10 +12,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from server.errors import NotFoundError
 from server.sessions.service import SessionStore
 from server.tools.gmail.client import BaseGmailClient
 from server.tools.gmail.service import ReplyDraftStore
-from server.tools.gmail.validator import validate_reply_draft
 from server.tools.registry import SideEffect, tool
 
 
@@ -173,23 +173,11 @@ def prepare_reply(
     *,
     drafts: ReplyDraftStore,
 ) -> dict[str, Any]:
-    """拟定邮件回复草稿，经过业务规则校验后持久化，返回操作标识与审阅状态。"""
-    # 1. 核心复用：调用纯函数业务规则校验
-    val_res = validate_reply_draft(
-        source_message_id=source_message_id,
-        thread_id=thread_id,
-        to=to,
-        subject=subject,
-        body=body,
-    )
-    if not val_res["valid"]:
-        return {
-            "success": False,
-            "error": "回复草稿校验失败，请检查并修正字段后重试",
-            "validation_errors": val_res["errors"],
-        }
+    """拟定邮件回复草稿并持久化，返回操作标识与审阅状态。
 
-    # 2. 校验通过，交给草稿存储保存（自带按原邮件去重与版本管理）
+    校验只在存储里做一次：按契约 §4，原邮件已有回复操作时先复用并返回其当前版本与状态，
+    本次候选内容不参与校验，也不覆盖已保存内容。校验不通过时抛 DraftValidationError。
+    """
     saved = drafts.save_reply_draft(
         task_id=task_id,
         source_message_id=source_message_id,
@@ -215,7 +203,6 @@ def prepare_reply(
         )
 
     return {
-        "success": True,
         "operation_id": op_id,
         "version": version,
         "status": status,
@@ -233,7 +220,8 @@ def read_reply_draft(
 ) -> dict:
     """读取当前任务的完整已保存草稿；修改前先读取最新内容与版本。"""
     if operation_id not in {op["operation_id"] for op in tasks.list_task_operations(task_id)}:
-        raise ValueError("草稿不属于当前任务")
+        # 不区分"不存在"与"属于别的任务"，不泄露其他任务的操作标识。
+        raise NotFoundError(operation_id)
     return drafts.get_reply_draft(operation_id)
 
 

@@ -1,4 +1,8 @@
-"""跨模块共享的业务异常；HTTP 映射留在 api。"""
+"""跨模块共享的业务异常及其统一描述。
+
+`error_details` 给出契约第 8 节各错误的名称与附带字段：`api/errors.py` 用它作为 HTTP 响应体，
+Agent 工具边界用它把失败原因交回模型。两处共用同一套名称和字段，不各写一份。
+"""
 
 
 class DependencyUnavailableError(Exception):
@@ -23,3 +27,32 @@ class NotEditableError(Exception):
 
 class SessionConflictError(Exception):
     pass
+
+
+class DraftValidationError(Exception):
+    """邮件业务校验未通过；`errors` 为契约第 5 节的字段与原因列表。"""
+
+    def __init__(self, errors: list[dict[str, str]]):
+        self.errors = errors
+        super().__init__(str(errors))
+
+
+def error_details(error: Exception) -> dict | None:
+    """已知业务异常的名称与附带字段；其他异常返回 None，由调用方按未预期错误处理。"""
+    if isinstance(error, DependencyUnavailableError):
+        return {"error": "unavailable", "message": str(error)}
+    if isinstance(error, NotFoundError):
+        return {"error": "not_found", "message": f"对象不存在：{error}"}
+    if isinstance(error, VersionConflictError):
+        return {
+            "error": "version_conflict",
+            "message": str(error),
+            "current_version": error.current_version,
+        }
+    if isinstance(error, NotEditableError):
+        return {"error": "not_editable", "message": str(error), "status": error.status}
+    if isinstance(error, SessionConflictError):
+        return {"error": "session_conflict", "message": "任务已关联不同会话"}
+    if isinstance(error, DraftValidationError):
+        return {"error": "invalid_draft", "message": "邮件草稿未通过校验", "errors": error.errors}
+    return None

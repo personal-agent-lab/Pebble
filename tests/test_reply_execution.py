@@ -1,4 +1,5 @@
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -232,3 +233,116 @@ def test_http_failure_classification(http_status, expected):
     assert result["status"] == expected
     assert "private" not in str(result)
     assert not client.sent_log
+
+
+def capture_tool_handlers(monkeypatch, tools, task_id):
+    """取出注册给 SDK 的 MCP 处理函数，用于断言交回模型的结果形状。"""
+    handlers = {}
+    original = sdk_client.tool
+
+    def register(name, description, schema):
+        def decorate(handler):
+            handlers[name] = handler
+            return original(name, description, schema)(handler)
+
+        return decorate
+
+    monkeypatch.setattr(sdk_client, "tool", register)
+    sdk_client.build_options(tools, task_id)
+    monkeypatch.setattr(sdk_client, "tool", original)
+
+    async def call(name, fields):
+        response = await handlers[name](fields)
+        return response["isError"], json.loads(response["content"][0]["text"])
+
+    return call
+
+
+def test_tool_boundary_returns_structured_business_errors(settings, monkeypatch):
+    """已知业务失败带结构化原因交回模型；不属于本任务的操作按对象不存在处理。"""
+    monkeypatch.setattr(
+        sdk_client,
+        "get_settings",
+        lambda: Settings(
+            data_dir=settings.data_dir, QODERCN_PERSONAL_ACCESS_TOKEN="test", _env_file=None
+        ),
+    )
+    init_db()
+    tasks = SessionStore()
+    drafts = ReplyDraftStore(validate_reply_draft)
+    tools = build_tools(drafts=drafts, tasks=tasks, gmail=MockGmailClient())
+    task_id = tasks.create_task("处理新收到的邮件")["task_id"]
+    other_task = tasks.create_task("另一个任务")["task_id"]
+    call = capture_tool_handlers(monkeypatch, tools, task_id)
+    call_as_other = capture_tool_handlers(monkeypatch, tools, other_task)
+
+    draft = {
+        "source_message_id": "msg_invite_001",
+        "thread_id": "thread_invite_001",
+        "to": ["alice@example.com"],
+        "subject": "Re: 邀请",
+        "body": "正文",
+    }
+
+    failed, payload = asyncio.run(
+        call("gmail_prepare_reply", {**draft, "to": ["not-an-address"], "subject": "  "})
+    )
+    assert failed is True
+    assert payload["error"] == "invalid_draft"
+    assert {item["field"] for item in payload["errors"]} == {"to", "subject"}
+
+    failed, saved = asyncio.run(call("gmail_prepare_reply", draft))
+    assert failed is False
+    assert saved["version"] == 1
+
+    failed, payload = asyncio.run(
+        call(
+            "gmail_update_reply_draft",
+            {
+                "operation_id": saved["operation_id"],
+                "expected_version": 7,
+                "to": draft["to"],
+                "subject": draft["subject"],
+                "body": "改写正文",
+            },
+        )
+    )
+    assert failed is True
+    assert payload == {
+        "error": "version_conflict",
+        "message": "当前版本为 1",
+        "current_version": 1,
+    }
+
+    failed, payload = asyncio.run(
+        call("gmail_read_reply_draft", {"operation_id": saved["operation_id"]})
+    )
+    assert (failed, payload["version"]) == (False, 1)
+
+    # 另一个任务读同一操作：既不成功，也不透露它存在于别处
+    failed, payload = asyncio.run(
+        call_as_other("gmail_read_reply_draft", {"operation_id": saved["operation_id"]})
+    )
+    assert failed is True
+    assert payload["error"] == "not_found"
+
+
+def test_tool_boundary_hides_unexpected_failure_detail(settings, monkeypatch):
+    monkeypatch.setattr(
+        sdk_client,
+        "get_settings",
+        lambda: Settings(
+            data_dir=settings.data_dir, QODERCN_PERSONAL_ACCESS_TOKEN="test", _env_file=None
+        ),
+    )
+
+    class Exploding(MockGmailClient):
+        def get_message(self, message_id):
+            raise RuntimeError("secret must not leak")
+
+    tools = build_tools(drafts=ReplyDraftStore(None), tasks=SessionStore(), gmail=Exploding())
+    call = capture_tool_handlers(monkeypatch, tools, "task")
+    failed, payload = asyncio.run(call("gmail_get_message", {"message_id": "msg_invite_001"}))
+    assert failed is True
+    assert payload["error"] == "unexpected"
+    assert "secret" not in json.dumps(payload, ensure_ascii=False)

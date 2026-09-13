@@ -29,10 +29,23 @@ from qodercn_agent_sdk import (
 
 from server.agent.prompt import SYSTEM_PROMPT
 from server.config import get_settings
+from server.errors import error_details
 from server.tools.registry import ToolDefinition
+
+UNEXPECTED_ERROR_TEXT = "工具执行失败，未确认保存成功，请检查输入或服务配置"
 
 # 保存成功后需要通知页面可读取草稿的工具；按名称判断，绑定依赖后的定义不是同一对象。
 DRAFT_TOOL_NAMES = {"gmail_prepare_reply", "gmail_update_reply_draft"}
+
+
+def tool_result(payload: object, *, failed: bool = False) -> dict:
+    """工具返回值收敛为 MCP 结果；失败结果保留结构化原因，未知失败只给固定文案。"""
+    if failed and payload == {"error": "unexpected"}:
+        payload = {"error": "unexpected", "message": UNEXPECTED_ERROR_TEXT}
+    return {
+        "isError": failed,
+        "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
+    }
 
 
 def build_options(
@@ -66,7 +79,6 @@ def build_options(
                         and result.get("operation_id")
                         and result.get("version")
                         and definition.name in DRAFT_TOOL_NAMES
-                        and result.get("success") is not False
                     ):
                         draft_events.append(
                             {
@@ -75,22 +87,11 @@ def build_options(
                                 "version": result["version"],
                             }
                         )
-                    return {
-                        "isError": isinstance(result, dict) and result.get("success") is False,
-                        "content": [
-                            {"type": "text", "text": json.dumps(result, ensure_ascii=False)}
-                        ],
-                    }
-                except Exception:
-                    return {
-                        "isError": True,
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "工具执行失败，未确认保存成功，请检查输入或服务配置",
-                            }
-                        ],
-                    }
+                    return tool_result(result)
+                except Exception as error:
+                    # 已知业务失败交回结构化原因（校验字段、当前版本、当前状态），
+                    # 模型才能据此修正；其他异常只给固定文案，不泄露服务端细节。
+                    return tool_result(error_details(error) or {"error": "unexpected"}, failed=True)
 
             return handler
 
