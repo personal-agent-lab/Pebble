@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 
 import type { FeedItem } from "../hooks";
+import Markdown from "./Markdown";
 
 /** 距底多少像素以内算"贴着底部"：容得下一次行高抖动，又不至于把明显上翻当成贴底。 */
 const STICK_PX = 48;
@@ -25,7 +26,8 @@ function atBottom(scroller: HTMLElement): boolean {
  * 连续同一角色的消息成组，只有组内首条带头像，避免逐条重复身份标识。
  * Agent 消息是正文，与操作卡、结果卡同宽同边；用户消息是靠右的气泡。
  * 身份在视觉上由位置承担，读屏器另给一条隐藏说明。
- * 文本按原样展示（`white-space: pre-wrap`），不做 Markdown 渲染。
+ * Agent 消息按 Markdown 渲染；用户消息按原样展示（`white-space: pre-wrap`）——
+ * 那是用户自己敲进去的字，把它当标记解析会改写他们写下的内容。
  *
  * 自动滚动只在用户本来就停在底部时发生。feed 数组每次渲染都是新引用
  * （任务列表每 5 秒轮询、输入框打字都会触发重渲染），按引用做依赖会让页面
@@ -87,7 +89,7 @@ export default function MessageFeed({ items, children }: { items: FeedItem[]; ch
             <div className="msg-body">
               <span className="sr-only">{agent ? "Agent 说：" : "我说："}</span>
               <div className="bubble">
-                {item.text}
+                {agent ? <Markdown text={item.text} /> : item.text}
                 {item.streaming && (
                   <span className="typing" aria-label="正在生成">
                     <span />
