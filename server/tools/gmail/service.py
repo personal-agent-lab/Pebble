@@ -42,12 +42,20 @@ def is_valid_email_address(addr: str) -> bool:
     return bool(EMAIL_REGEX.match(parsed.strip() if parsed else clean))
 
 
-def validate_draft(to: list[str], subject: str, body: str) -> ValidationResult:
-    """校验新邮件和回复共有的完整内容，不保存也不改写。"""
+def validate_draft(
+    to: list[str], subject: str, body: str, *, require_recipients: bool = False
+) -> ValidationResult:
+    """校验新邮件和回复共有的内容，不保存也不改写。
+
+    草稿只要求主题与正文非空，收件人可以留空待填；发送口径（`require_recipients`）
+    额外要求至少一个收件人，缺失只在确认发送时拒绝，不阻止保存草稿。
+    """
     errors: list[ValidationError] = []
-    if not isinstance(to, list) or not to:
-        errors.append({"field": "to", "message": "收件人 (to) 必须为非空有效邮箱地址列表"})
+    if not isinstance(to, list):
+        errors.append({"field": "to", "message": "收件人 (to) 必须为邮箱地址列表"})
     else:
+        if require_recipients and not to:
+            errors.append({"field": "to", "message": "收件人 (to) 不能为空，填写后才能发送"})
         for address in to:
             if not is_valid_email_address(address):
                 errors.append({"field": "to", "message": f"邮箱格式错误: {address}"})
@@ -83,8 +91,9 @@ def validate_mail_draft(
     body: str,
     source_message_id: str | None = None,
     thread_id: str | None = None,
+    require_recipients: bool = False,
 ) -> ValidationResult:
-    content = validate_draft(to, subject, body)
+    content = validate_draft(to, subject, body, require_recipients=require_recipients)
     if kind == "new":
         return content
     identity = validate_reply_identity(source_message_id or "", thread_id or "")
@@ -158,7 +167,13 @@ def draft(conn: sqlite3.Connection, operation_id: str, version: int | None) -> d
 
 
 def summary(operation: dict) -> dict:
-    return {key: operation[key] for key in ("operation_id", "version", "status")}
+    # presented_to_user 如实陈述工具效果：草稿保存后由系统以审阅卡片呈现给用户。
+    return {
+        "operation_id": operation["operation_id"],
+        "version": operation["version"],
+        "status": operation["status"],
+        "presented_to_user": True,
+    }
 
 
 class MailDraftStore:
@@ -262,4 +277,9 @@ class MailDraftStore:
                 body,
                 timestamp(),
             )
-            return {"operation_id": operation_id, "version": version, "status": "pending"}
+            return {
+                "operation_id": operation_id,
+                "version": version,
+                "status": "pending",
+                "presented_to_user": True,
+            }

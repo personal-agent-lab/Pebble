@@ -75,20 +75,26 @@ def test_validate_mail_draft_missing_source_or_thread_id() -> None:
     assert any("不合法" in m for m in err_msgs)
 
 
-def test_validate_mail_draft_empty_or_invalid_recipient() -> None:
-    # 1. 空收件人
-    res_empty = validate_mail_draft(
-        kind="reply",
-        source_message_id="msg_123",
-        thread_id="thread_456",
-        to=[],
-        subject="Re: 测试",
-        body="正文",
-    )
-    assert res_empty["valid"] is False
-    assert any(e["field"] == "to" for e in res_empty["errors"])
+def test_validate_mail_draft_allows_empty_recipients_until_sending() -> None:
+    draft = {
+        "kind": "reply",
+        "source_message_id": "msg_123",
+        "thread_id": "thread_456",
+        "subject": "Re: 测试",
+        "body": "正文",
+    }
 
-    # 2. 格式非法的收件人
+    # 1. 草稿只要求主题与正文：收件人可以空着，等用户在卡片上补填
+    res_empty = validate_mail_draft(to=[], **draft)
+    assert res_empty == {"valid": True, "errors": []}
+
+    # 2. 发送口径额外要求至少一个收件人
+    res_sending = validate_mail_draft(to=[], require_recipients=True, **draft)
+    assert res_sending["valid"] is False
+    assert [e["field"] for e in res_sending["errors"]] == ["to"]
+
+
+def test_validate_mail_draft_rejects_malformed_recipient() -> None:
     res_malformed = validate_mail_draft(
         kind="reply",
         source_message_id="msg_123",

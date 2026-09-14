@@ -16,6 +16,7 @@ from server.approval.service import NOT_STARTED_REASON, ConfirmationService
 from server.db import SCHEMA_VERSION, init_db, session, write
 from server.errors import (
     DependencyUnavailableError,
+    DraftValidationError,
     NotEditableError,
     NotFoundError,
     VersionConflictError,
@@ -112,6 +113,28 @@ def test_confirm_sends_exact_confirmed_version(stores):
     assert drafts.get_draft(operation["operation_id"], 1)["subject"] == FINAL["subject"]
     assert drafts.get_draft(operation["operation_id"], 1)["to"] == FINAL["to"]
     assert drafts.get_draft(operation["operation_id"], 2)["subject"] == "回复：活动邀请"
+
+
+def test_confirm_rejects_draft_without_recipients(stores):
+    """收件人可以空着保存，但不能被确认：拒绝发生在取得执行权之前，草稿保持可编辑。"""
+    tasks, drafts = stores
+    task = tasks.create_task("先写好正文")
+    operation = drafts.save_email_draft(task["task_id"], [], "会议通知", "正文")
+    sender = Sender()
+    service = ConfirmationService(sender)
+
+    with pytest.raises(DraftValidationError) as raised:
+        service.accept_confirmation(task["task_id"], operation["operation_id"], 1)
+
+    assert [error["field"] for error in raised.value.errors] == ["to"]
+    assert sender.calls == []
+    assert service.get_execution(operation["operation_id"])["status"] == "pending"
+
+    # 补上收件人后，同一操作无需重建即可确认发送
+    drafts.update_draft(operation["operation_id"], 1, ["zoe@example.com"], "会议通知", "正文")
+    response = confirm(service, task["task_id"], operation["operation_id"], 2)
+    assert response["status"] == "sent"
+    assert sender.calls[0]["to"] == ["zoe@example.com"]
 
 
 def test_new_email_uses_same_versioned_confirmation(stores):

@@ -72,9 +72,9 @@ Agent 可以读邮件和保存本地草稿，但不能直接发送；发送只�
 
 ### `gmail_prepare_email`
 
-输入 `to: string[]`、`subject: string`、`body: string`。用于不依赖已有邮件的新邮件，每次成功调用新建一份待审阅草稿。
+输入 `to: string[]`、`subject: string`、`body: string`。用于不依赖已有邮件的新邮件，每次成功调用新建一份待审阅草稿。收件人可以是空列表，正文先起草、收件人稍后在卡片上补填。
 
-`gmail_prepare_reply` 和 `gmail_prepare_email` 的输出均为 `operation_id: string`、`version: integer`、`status: "pending"`，不含重复的自然语言说明。工具只保存本地草稿，不发送。
+`gmail_prepare_reply` 和 `gmail_prepare_email` 的输出均为 `operation_id: string`、`version: integer`、`status: "pending"`、`presented_to_user: true`，不含重复的自然语言说明。`presented_to_user` 如实陈述工具效果：草稿已由系统以审阅卡片呈现给用户，Agent 回复无需重复其内容。工具只保存本地草稿，不发送。
 
 ### `gmail_read_draft`
 
@@ -85,7 +85,7 @@ Agent 可以读邮件和保存本地草稿，但不能直接发送；发送只�
 
 ### `gmail_update_draft`
 
-输入 `operation_id: string`、`expected_version: integer`、`to: string[]`、`subject: string`、`body: string`。输出 `operation_id`、新 `version`、`status: "pending"`。
+输入 `operation_id: string`、`expected_version: integer`、`to: string[]`、`subject: string`、`body: string`。输出 `operation_id`、新 `version`、`status: "pending"`、`presented_to_user: true`，语义同上。
 
 仅 `pending` 草稿可修改；版本不匹配时拒绝，历史版本不改写。用户在卡片上的直接编辑走同一套版本规则。
 
@@ -105,7 +105,9 @@ Agent 可以读邮件和保存本地草稿，但不能直接发送；发送只�
 
 ## 3. 草稿校验与通知
 
-新邮件和回复共用收件人、主题和正文校验；回复额外校验原邮件与往来标识。校验失败返回 `DraftValidationError` 及 `errors[]`，每项含 `field` 和 `message`，不保存数据。复用已有操作时候选内容不参与校验。
+新邮件和回复共用内容校验，保存草稿只要求主题与正文非空；收件人可以为空，填写时每项必须是有效邮箱地址。回复额外校验原邮件与往来标识。校验失败返回 `DraftValidationError` 及 `errors[]`，每项含 `field` 和 `message`，不保存数据。复用已有操作时候选内容不参与校验。
+
+确认发送按更严的发送口径校验已保存版本，额外要求至少一个收件人；不满足时确认被拒绝（`DraftValidationError`），操作保持 `pending` 且可继续编辑，不进入发送阶段。
 
 草稿创建、复用或修改成功后，工具端点发出：
 
@@ -134,7 +136,7 @@ Runtime 在发布通知前先保存时间线位置。通知表示草稿可读取
 
 ## 6. 确认、发送与核实
 
-确认输入为 `task_id`、`operation_id`、`version`。确认请求不重复携带邮件内容，系统从指定已保存版本读取发送字段。内容修改后旧版本确认失效。
+确认输入为 `task_id`、`operation_id`、`version`。确认请求不重复携带邮件内容，系统从指定已保存版本读取发送字段，并按发送口径校验（§3）：不通过时返回 `DraftValidationError`，不取得执行权。内容修改后旧版本确认失效。
 
 发送器输入为 `operation_id`、`version`、`kind: "reply" | "new"`、`source_message_id: string | null`、`thread_id: string | null`、`to`、`subject`、`body`。回复发送前再读取原邮件，校验它仍属于已保存的往来，并使用原邮件 Message-ID 构建 In-Reply-To。新邮件的两个关联字段为 null，不传 Gmail `threadId`。
 

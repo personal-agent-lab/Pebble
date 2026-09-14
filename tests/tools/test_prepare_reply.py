@@ -74,6 +74,31 @@ def test_prepare_email_creates_editable_new_message(drafts, task_id) -> None:
     }
 
 
+def test_prepare_email_without_recipients_stays_editable(drafts, task_id) -> None:
+    """草稿只要求主题与正文：收件人先空着，之后再由用户或修改轮补上。"""
+    result = prepare_email(
+        task_id=task_id,
+        to=[],
+        subject="会议通知：沟通下一步开发内容",
+        body="你好，兹定于明天下午2点开会。",
+        drafts=drafts,
+    )
+
+    assert result["status"] == "pending"
+    draft = drafts.get_draft(result["operation_id"])
+    assert draft["to"] == []
+
+    edited = drafts.update_draft(
+        result["operation_id"],
+        result["version"],
+        [],
+        "会议通知：沟通下一步开发内容",
+        "你好，兹定于明天下午2点召开线上会议。",
+    )
+    assert edited["version"] == 2
+    assert drafts.get_draft(result["operation_id"])["to"] == []
+
+
 def test_prepare_reply_validation_failure_blocks_saving(drafts, task_id) -> None:
     # 传入非法邮箱与空主题
     with pytest.raises(DraftValidationError) as raised:
@@ -109,7 +134,7 @@ def test_prepare_reply_success_creates_draft_pending_review(drafts, task_id) -> 
     op_id = res["operation_id"]
     assert res["version"] == 1
     assert res["status"] == "pending"
-    assert set(res) == {"operation_id", "version", "status"}
+    assert set(res) == {"operation_id", "version", "status", "presented_to_user"}
 
     # 验证底层存储已记录，并关联到当前任务
     draft = drafts.get_draft(op_id)

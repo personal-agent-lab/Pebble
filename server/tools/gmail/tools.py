@@ -105,7 +105,7 @@ def get_attachment(
     name="gmail_prepare_reply",
     description=(
         "针对一封 Gmail 邮件保存本地回复草稿，仅用于审阅，不会发送。"
-        "邮件往来标识由工具从原邮件读取。"
+        "邮件往来标识由工具从原邮件读取。保存成功后系统会把草稿以审阅卡片呈现给用户。"
     ),
     side_effect=SideEffect.LOCAL_WRITE,
     emits_draft_saved=True,
@@ -135,6 +135,8 @@ def prepare_reply(
     name="gmail_prepare_email",
     description=(
         "保存一封不依赖已有邮件的本地新邮件草稿，仅用于审阅，不会发送。"
+        "收件人可以是空列表：先按已知信息起草，收件人由用户稍后在审阅卡片上补填。"
+        "保存成功后系统会把草稿以审阅卡片呈现给用户。"
     ),
     side_effect=SideEffect.LOCAL_WRITE,
     emits_draft_saved=True,
@@ -164,6 +166,7 @@ def read_draft(
     name="gmail_update_draft",
     description=(
         "按用户修改意见保存邮件草稿的完整新版本，不发送。"
+        "保存成功后系统会把新版本以审阅卡片呈现给用户。"
     ),
     side_effect=SideEffect.LOCAL_WRITE,
     emits_draft_saved=True,

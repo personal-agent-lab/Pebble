@@ -88,6 +88,7 @@ def send_message(
         to=to,
         subject=subject,
         body=body,
+        require_recipients=True,
     )
     if not operation_id or type(version) is not int or version < 1 or not validation["valid"]:
         return {"status": "failed", "reason": "已确认草稿字段不合法"}

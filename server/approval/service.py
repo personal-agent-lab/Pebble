@@ -1,7 +1,8 @@
 """确认执行：版本校验、取得执行权、调用发送函数并保存实际结果。
 
 发送与核实函数由调用方注入（Gmail 提供真实实现，测试使用替身），生产代码不提供默认值。
-HTTP 入口只接受确认（accept_confirmation：写事务内检查版本、保存确认、取得执行权），
+HTTP 入口只接受确认（accept_confirmation：写事务内检查版本与发送前置条件、保存确认、
+取得执行权），
 后台执行（execute_accepted）读取确认版本并调用发送函数；一次确认只调用一次，
 已有执行记录或已开始的重复确认只返回已保存状态。
 执行结果保存与待回传调用记录在同一事务内登记，重复确认不新增回传。
@@ -17,7 +18,12 @@ from uuid import uuid4
 
 from server.approval import repository as repo
 from server.db import session, write
-from server.errors import DependencyUnavailableError, NotEditableError, VersionConflictError
+from server.errors import (
+    DependencyUnavailableError,
+    DraftValidationError,
+    NotEditableError,
+    VersionConflictError,
+)
 from server.sessions import repository as operations
 from server.sessions import runs as agent_runs
 from server.sessions.service import timestamp
@@ -124,6 +130,26 @@ def register_delivery(
         reference or operation_id,
         now,
     )
+
+
+def _check_sendable(conn: sqlite3.Connection, operation_id: str, version: int) -> None:
+    """按发送口径校验将要确认的版本：草稿里允许空缺的字段，到这里必须齐备。
+
+    在取得执行权之前拒绝，操作保持 pending 可编辑；否则确认后才发现内容不合法，
+    只会把操作推进没有重发入口的 failed。
+    """
+    draft = mail.draft(conn, operation_id, version)
+    result = mail.validate_mail_draft(
+        kind=draft["kind"],
+        source_message_id=draft.get("source_message_id"),
+        thread_id=draft.get("thread_id"),
+        to=list(draft["to"]),
+        subject=draft["subject"],
+        body=draft["body"],
+        require_recipients=True,
+    )
+    if not result["valid"]:
+        raise DraftValidationError(result["errors"])
 
 
 class ConfirmationService:
@@ -271,6 +297,7 @@ class ConfirmationService:
                 raise NotEditableError(row["status"])
             if self.send_message is None:
                 raise DependencyUnavailableError("邮件发送尚未接入")
+            _check_sendable(conn, operation_id, version)
             now = timestamp()
             repo.insert(conn, operation_id, task_id, version, now)
             operations.update_status(conn, operation_id, "sending", now)
