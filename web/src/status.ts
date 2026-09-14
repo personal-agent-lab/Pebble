@@ -5,7 +5,7 @@
  * 推导，两者含义不同（契约第 9 节），这里只做展示层归并，不写回后端。
  */
 
-import type { Execution, OperationStatus, OperationSummary, Run } from "./api";
+import type { OperationStatus, OperationSummary, Run } from "./api";
 
 export type BadgeTone = "neutral" | "wait" | "run" | "ok" | "err" | "unk";
 
@@ -61,26 +61,6 @@ export function taskBadge(latestRun: Run | null, operations: OperationSummary[])
  * 汇总是结果卡的一行注记，不是独立版块：全部成功时没有需要提醒的分歧，
  * caveat 留空；有失败或待核实才说明各项互不影响。
  */
-export function resultSummary(
-  executions: Execution[],
-): { lead: string; counts: string; caveat: string | null } {
-  const total = executions.length;
-  const done = executions.filter((execution) => execution.result?.status === "sent").length;
-  const failed = executions.filter((execution) => execution.result?.status === "failed").length;
-  const unknown = executions.filter((execution) => execution.result?.status === "unknown").length;
-
-  const rest: string[] = [];
-  if (failed > 0) rest.push(`${failed} 项失败`);
-  if (unknown > 0) rest.push(`${unknown} 项待核实`);
-
-  return {
-    lead: done === total ? "全部完成" : "部分完成",
-    counts: [`${done} / ${total} 已发送`, ...rest].join("、"),
-    caveat:
-      done === total ? null : "各项结果独立记录，失败或待核实不影响已成功项。",
-  };
-}
-
 const TIME = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
 const DATE_TIME = new Intl.DateTimeFormat("zh-CN", {
   month: "numeric",

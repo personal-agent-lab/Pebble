@@ -1,7 +1,7 @@
 """Qoder Agent SDK 网关：把一轮输入变成契约事件流，并把工具接回本进程的服务。
 
 每次调用独立启动 CLI 子进程：新会话由 CLI 生成会话标识，后续轮次用 `resume` 接续；进程
-退出后本层不保存会话状态，历史以 CLI 自己落盘的记录为准（`read_history` 直接读取）。
+退出后 SDK 自己保存会话状态，网页可见时间线由应用运行时单独持久化。
 
 模型可见的工具只有本进程 MCP server（名字 `pebble`）里的只读与本地写工具：每轮在
 `agent/mcp.py` 的端点上登记一个一次性路径，CLI 经回环地址连接，内置工具与本机设置一律
@@ -25,7 +25,6 @@ from qodercn_agent_sdk import (
     SystemMessage,
     TextBlock,
     access_token,
-    get_session_messages,
 )
 
 from server.agent import context
@@ -84,20 +83,6 @@ class QoderGateway:
         """执行一轮调用；消息与材料由调用方组装，网关不区分触发来源。"""
         return self._stream(turn)
 
-    async def read_history(self, *, task_id: str, sdk_session_id: str | None) -> list[dict]:
-        """读取会话记录里的完整对话；只保留双方真实说过的文本。"""
-        if sdk_session_id is None:
-            return []
-        recorded = await asyncio.to_thread(
-            get_session_messages, sdk_session_id, directory=str(self.workspace)
-        )
-        history = []
-        for message in recorded:
-            text = visible_text(message.message)
-            if text:
-                history.append({"role": message.type, "text": text})
-        return history
-
     # ---------- 调用执行 ----------
 
     async def _stream(self, turn: Turn) -> AsyncIterator[AgentEvent]:
@@ -105,7 +90,12 @@ class QoderGateway:
         visible = exposed_tools(self.tools, allowed=ALLOWED_EFFECTS[turn.kind])
         announced: str | None = None
         streamed = False
-        async with self.tool_server.serve(visible, task_id=turn.task_id, queued=queued) as path:
+        async with self.tool_server.serve(
+            visible,
+            task_id=turn.task_id,
+            target_operation_id=turn.target_operation_id,
+            queued=queued,
+        ) as path:
             options = self._options(turn, visible=visible, path=path)
             async with QoderSDKClient(options) as client:
                 await client.query(turn.message)
@@ -224,18 +214,3 @@ def _delta_text(event: dict[str, Any]) -> str:
     if delta.get("type") != "text_delta":
         return ""
     return delta.get("text", "")
-
-
-def visible_text(message: Any) -> str:
-    """从会话记录里取可见文本：只保留 text 块，思考与工具调用不进入历史。"""
-    content = message.get("content") if isinstance(message, dict) else None
-    if isinstance(content, str):
-        return content.strip()
-    if not isinstance(content, list):
-        return ""
-    parts = [
-        block.get("text", "").strip()
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "text"
-    ]
-    return "\n".join(part for part in parts if part)

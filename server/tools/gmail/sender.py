@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-from email.encoders import encode_base64
 from email.message import EmailMessage
 from email.policy import SMTP
 from typing import Any
@@ -32,6 +31,22 @@ def _same_content(message: GmailMessage, *, to: list[str], subject: str, body: s
     )
 
 
+def _same_attachments(message: GmailMessage, expected: list[dict], client: BaseGmailClient) -> bool:
+    if len(message.attachments) != len(expected):
+        return False
+    for actual, wanted in zip(message.attachments, expected, strict=True):
+        if (
+            actual.filename != wanted["filename"]
+            or actual.mime_type != wanted["mime_type"]
+            or actual.size != wanted["size"]
+        ):
+            return False
+        content = client.get_attachment(message.id, actual.attachment_id).data
+        if hashlib.sha256(content).hexdigest() != wanted["sha256"]:
+            return False
+    return True
+
+
 def verify_message(
     *,
     operation_id: str,
@@ -39,6 +54,7 @@ def verify_message(
     to: list[str],
     subject: str,
     body: str,
+    attachments: list[dict],
     client: BaseGmailClient,
     source_message_id: str | None = None,
     thread_id: str | None = None,
@@ -54,6 +70,7 @@ def verify_message(
                 "SENT" not in message.labels
                 or message.rfc_message_id != expected_id
                 or not _same_content(message, to=to, subject=subject, body=body)
+                or not _same_attachments(message, attachments, client)
             ):
                 continue
             if kind == "reply" and (
@@ -76,6 +93,7 @@ def send_message(
     to: list[str],
     subject: str,
     body: str,
+    attachments: list[dict],
     *,
     client: BaseGmailClient,
     source_message_id: str | None = None,
@@ -105,10 +123,18 @@ def send_message(
         if source is not None:
             mime["In-Reply-To"] = source.rfc_message_id
             mime["References"] = " ".join(filter(None, [source.references, source.rfc_message_id]))
-        mime.set_payload(body.encode("utf-8"))
-        mime["Content-Type"] = 'text/plain; charset="utf-8"'
-        mime["MIME-Version"] = "1.0"
-        encode_base64(mime)
+        mime.set_content(body)
+        for attachment in attachments:
+            mime_type = attachment["mime_type"]
+            maintype, subtype = (
+                mime_type.split("/", 1) if "/" in mime_type else ("application", "octet-stream")
+            )
+            mime.add_attachment(
+                attachment["data"],
+                maintype=maintype,
+                subtype=subtype,
+                filename=attachment["filename"],
+            )
         raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
     except Exception:
         return {"status": "failed", "reason": "构建邮件失败或无法读取原邮件"}
@@ -131,6 +157,7 @@ def send_message(
         to=to,
         subject=subject,
         body=body,
+        attachments=attachments,
         client=client,
         reason="发送调用未给出结果，待核实",
     )

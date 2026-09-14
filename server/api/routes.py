@@ -2,9 +2,9 @@
 
 import asyncio
 import json
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,7 @@ from server.db import schema_version, session
 from server.gateway.runtime import GatewayRuntime
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
+from server.uploads import UploadStore
 
 
 def get_tasks(request: Request) -> SessionStore:
@@ -32,6 +33,10 @@ def get_confirmations(request: Request) -> ConfirmationService:
     return request.app.state.confirmations
 
 
+def get_uploads(request: Request) -> UploadStore:
+    return request.app.state.uploads
+
+
 Tasks = Annotated[SessionStore, Depends(get_tasks)]
 
 
@@ -42,6 +47,9 @@ Drafts = Annotated[MailDraftStore, Depends(get_drafts)]
 
 
 Confirmations = Annotated[ConfirmationService, Depends(get_confirmations)]
+
+
+Uploads = Annotated[UploadStore, Depends(get_uploads)]
 
 
 router = APIRouter()
@@ -90,21 +98,47 @@ def task_operations(task_id: str, tasks: Tasks) -> list[dict]:
     return tasks.list_task_operations(task_id)
 
 
-@router.get("/tasks/{task_id}/history", tags=["tasks"])
-async def task_history(task_id: str, agent: Agent) -> dict:
-    return await agent.read_history(task_id)
+@router.get("/tasks/{task_id}/timeline", tags=["tasks"])
+def task_timeline(task_id: str, agent: Agent) -> dict:
+    return agent.get_timeline(task_id)
 
 
 KEEPALIVE_SECONDS = 15
 
 
+class MessageTarget(BaseModel):
+    kind: Literal["mail_draft"]
+    operation_id: str
+
+
 class MessageInput(BaseModel):
     message: str = Field(min_length=1)
+    target: MessageTarget | None = None
+    attachment_ids: list[str] = Field(default_factory=list)
 
 
 @router.post("/tasks/{task_id}/messages", status_code=202, tags=["chat"])
 async def submit_message(task_id: str, body: MessageInput, agent: Agent) -> dict:
-    return agent.submit_message(task_id, body.message)
+    return agent.submit_message(
+        task_id,
+        body.message,
+        target=body.target.model_dump() if body.target is not None else None,
+        attachment_ids=list(body.attachment_ids),
+    )
+
+
+@router.post("/tasks/{task_id}/uploads", status_code=201, tags=["chat"])
+def upload_file(
+    task_id: str,
+    uploads: Uploads,
+    file: Annotated[UploadFile, File()],
+) -> dict:
+    return uploads.save(
+        task_id,
+        file.filename or "attachment",
+        file.content_type or "application/octet-stream",
+        file.file.read(),
+    )
 
 
 def event_frame(event: dict) -> str:
@@ -145,6 +179,7 @@ class DraftEdit(BaseModel):
     to: list[str]
     subject: str
     body: str
+    attachment_ids: list[str]
 
 
 class ConfirmationInput(BaseModel):
@@ -159,13 +194,18 @@ def read_draft(operation_id: str, drafts: Drafts, version: int | None = None) ->
 
 @router.patch("/operations/{operation_id}/draft", tags=["approvals"])
 def edit_draft(operation_id: str, body: DraftEdit, drafts: Drafts) -> dict:
-    """按契约 §4 编辑草稿：输入不含任务标识，同一操作可由任何关联任务的页面编辑。
+    """按邮件契约编辑草稿：输入不含任务标识，同一操作可由任何关联任务的页面编辑。
 
     工具路径另有归属检查，限制模型只能读写本会话任务的草稿，防邮件正文里的指令越界；
     那不是用户授权检查，与本接口不同是有意的。用户身份检查随正式 Web 接入一起补。
     """
     return drafts.update_draft(
-        operation_id, body.expected_version, list(body.to), body.subject, body.body
+        operation_id,
+        body.expected_version,
+        list(body.to),
+        body.subject,
+        body.body,
+        list(body.attachment_ids),
     )
 
 
@@ -185,7 +225,7 @@ def execution(operation_id: str, confirmations: Confirmations) -> dict:
 
 @router.post("/operations/{operation_id}/verification", tags=["approvals"])
 def verify(operation_id: str, confirmations: Confirmations, agent: Agent) -> dict:
-    """核实待核实的发送结果：只读查询实际结果，不重发（契约 §6）。
+    """核实待核实的发送结果：只读查询实际结果，不重发（邮件契约 §4）。
 
     读接口不做外部调用，核实要用户或恢复流程显式发起。升级为 sent 时会登记结果回传，
     这里接着推进，让原会话拿到最终结果。

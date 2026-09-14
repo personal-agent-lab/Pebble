@@ -14,7 +14,6 @@ from qodercn_agent_sdk import (
     StreamEvent,
     SystemMessage,
     TextBlock,
-    project_key_for_directory,
 )
 
 from server.agent import client as agent_client
@@ -40,6 +39,7 @@ DRAFT = {
     "to": ["alice@example.com"],
     "subject": "Re: 邀请",
     "body": "谢谢邀请，我准时参加。",
+    "attachment_ids": [],
 }
 TURN_TOKEN = "0123456789abcdef"
 
@@ -461,6 +461,7 @@ def test_tool_boundary_returns_structured_business_errors(settings, monkeypatch)
                 "to": DRAFT["to"],
                 "subject": DRAFT["subject"],
                 "body": "改写正文",
+                "attachment_ids": [],
             },
         ),
         task_id=task_id,
@@ -506,55 +507,3 @@ def test_schema_hides_injected_dependencies(settings):
         assert not {"gmail", "drafts", "tasks", "task_id"} & set(
             definition.parameters_schema["properties"]
         )
-
-
-# ---------- 会话历史 ----------
-
-
-def test_history_reads_persisted_transcript(settings):
-    gateway = make_gateway(settings)
-    project = (
-        settings.data_dir
-        / "agent"
-        / "config"
-        / "projects"
-        / project_key_for_directory(gateway.workspace)
-    )
-    project.mkdir(parents=True)
-    session_id, user_id, assistant_id = (
-        "11111111-1111-4111-8111-111111111111",
-        "22222222-2222-4222-8222-222222222222",
-        "33333333-3333-4333-8333-333333333333",
-    )
-    entries = [
-        {
-            "uuid": user_id,
-            "parentUuid": None,
-            "sessionId": session_id,
-            "type": "user",
-            "message": {"role": "user", "content": "帮我写一封回信"},
-        },
-        {
-            "uuid": assistant_id,
-            "parentUuid": user_id,
-            "sessionId": session_id,
-            "type": "assistant",
-            "message": {
-                "role": "assistant",
-                "content": [
-                    {"type": "thinking", "thinking": "不展示"},
-                    {"type": "tool_use", "id": "t1", "name": "gmail_read_draft", "input": {}},
-                    {"type": "text", "text": "草稿已准备好"},
-                ],
-            },
-        },
-    ]
-    (project / f"{session_id}.jsonl").write_text("\n".join(json.dumps(e) for e in entries))
-
-    history = asyncio.run(gateway.read_history(task_id="task-1", sdk_session_id=session_id))
-
-    assert history == [
-        {"role": "user", "text": "帮我写一封回信"},
-        {"role": "assistant", "text": "草稿已准备好"},
-    ]
-    assert asyncio.run(gateway.read_history(task_id="task-1", sdk_session_id=None)) == []

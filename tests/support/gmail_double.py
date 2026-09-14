@@ -8,6 +8,7 @@
 """
 
 import base64
+import hashlib
 import html
 import json
 import os
@@ -33,8 +34,15 @@ def sent_log() -> Path:
 
 
 def send(**fields):
+    recorded = {
+        **fields,
+        "attachments": [
+            {key: attachment[key] for key in ("file_id", "filename", "mime_type", "size", "sha256")}
+            for attachment in fields["attachments"]
+        ],
+    }
     with sent_log().open("a") as output:
-        output.write(json.dumps(fields, ensure_ascii=False) + "\n")
+        output.write(json.dumps(recorded, ensure_ascii=False) + "\n")
     time.sleep(float(os.environ.get("PEBBLE_TEST_SEND_DELAY", "0")))
     status = os.environ.get("PEBBLE_TEST_SEND_STATUS", "sent")
     if status == "sent":
@@ -131,12 +139,30 @@ class MockGmailClient(BaseGmailClient):
         from email.parser import BytesParser
 
         mime = BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(raw))
+        body_part = mime.get_body(preferencelist=("plain",))
+        body = "" if body_part is None else body_part.get_content()
+        body = body.replace("\r\n", "\n").rstrip("\n")
+        outgoing = []
+        for index, part in enumerate(mime.iter_attachments()):
+            data = part.get_payload(decode=True) or b""
+            outgoing.append(
+                (
+                    GmailAttachment(
+                        attachment_id=f"sent-attachment-{index}",
+                        filename=part.get_filename() or "attachment",
+                        mime_type=part.get_content_type(),
+                        size=len(data),
+                    ),
+                    data,
+                )
+            )
         result = self.raw_send_message(
             MimeParser.parse_address_list(str(mime["To"])),
             str(mime["Subject"]),
-            mime.get_content(),
+            body,
             thread_id,
             str(mime["In-Reply-To"]) if mime["In-Reply-To"] is not None else None,
+            outgoing,
         )
         self.messages[result.message_id] = replace(
             self.messages[result.message_id],
@@ -153,6 +179,7 @@ class MockGmailClient(BaseGmailClient):
         body: str,
         thread_id: str | None,
         in_reply_to_rfc_id: str | None = None,
+        attachments: list[tuple[GmailAttachment, bytes]] | None = None,
     ) -> SendReplyResult:
         sent_id = f"mock_sent_{uuid.uuid4().hex[:8]}"
         target_thread = thread_id or f"mock_thread_{uuid.uuid4().hex[:8]}"
@@ -170,12 +197,15 @@ class MockGmailClient(BaseGmailClient):
             body_html=f"<p>{html.escape(body)}</p>",
             internal_date_ms=1789200300000,
             labels=["SENT"],
+            attachments=[item[0] for item in attachments or []],
         )
         self.messages[sent_id] = new_msg
         if target_thread in self.threads:
             self.threads[target_thread].append(sent_id)
         else:
             self.threads[target_thread] = [sent_id]
+        for metadata, data in attachments or []:
+            self.attachments[(sent_id, metadata.attachment_id)] = data
 
         self.sent_log.append(
             {
@@ -185,6 +215,15 @@ class MockGmailClient(BaseGmailClient):
                 "subject": subject,
                 "body": body,
                 "in_reply_to": in_reply_to_rfc_id,
+                "attachments": [
+                    {
+                        "filename": metadata.filename,
+                        "mime_type": metadata.mime_type,
+                        "size": metadata.size,
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                    }
+                    for metadata, data in attachments or []
+                ],
             }
         )
         return SendReplyResult(message_id=sent_id, thread_id=target_thread)

@@ -34,18 +34,18 @@ flowchart TD
 
 | 组件 | 职责 | 位置 |
 | --- | --- | --- |
-| Web Chat | PC 与手机共用响应式界面，提供对话、进度、来源查看、草稿编辑、明确确认，以及规则和 Skill 审阅 | `web/`（TypeScript + React + Vite） |
+| Web Chat | PC 与手机共用响应式界面，以有序时间线展示对话和完整草稿卡，提供草稿编辑、定向修改与明确确认 | `web/`（TypeScript + React + Vite） |
 | Gateway | HTTP、SSE、认证；接收用户与后台输入，定位会话，启动 Agent 并返回结果 | `server/api/`（HTTP/SSE）、`server/gateway/`（后台运行） |
 | Agent Loop | 通过 Qoder Agent SDK 调用模型和工具，加载 Memory 与已生效 Skills，按目标决定下一步 | `server/agent/` |
 | Memory | 保存用户偏好、纠正及持久规则，供后续会话使用 | `server/memory/` |
 | Skills | 保存可复用流程，管理草稿、审核、生效版本及 Git 历史 | `server/skills/` |
 | Tools | 集中注册、校验和调用工具；每个实现负责自己的认证、协议和业务校验 | `server/tools/` |
-| Session Store | 保存会话关联、任务目标和运行状态、待确认内容及版本、确认记录和逐项执行结果 | `server/sessions/`、`server/approval/` |
+| Session Store | 保存会话关联、任务目标、运行状态、网页时间线、待确认内容及版本、确认记录和逐项执行结果 | `server/sessions/`、`server/approval/` |
 | Background Task | 定时检查新邮件并交给 Gateway 触发 Agent | `server/tools/gmail/sync.py` |
 
 PC 与手机共用 `web/` 中的页面组件和交互逻辑，按屏幕尺寸调整布局；两端提供规格要求的完整功能，使用同一套 API、任务状态和确认流程。此处明确双端交付范围，避免仅以手机界面作为实现和验收目标。
 
-Session Store 是 Gateway、Agent Loop 与 Confirmation 的共享持久化入口。业务状态使用 SQLite，资料原件、规则和 Skill 使用文件保存，不要求所有数据都进入会话记录。
+Session Store 是 Gateway、Agent Loop 与 Confirmation 的共享持久化入口。业务状态与网页可见时间线使用 SQLite；用户上传内容、资料原件、规则和 Skill 使用文件保存。SDK 会话只负责模型上下文恢复，不作为网页展示数据源。
 
 代码结构：`#` 后是该条目的职责，目录注释对应上表组件。
 
@@ -56,6 +56,7 @@ Pebble/
 │   ├── main.py               # 服务启动、SDK 配置与工具注册
 │   ├── config.py             # 模型、持久目录与外部服务凭证引用
 │   ├── db.py                 # SQLite 连接、约束与迁移
+│   ├── uploads.py            # 任务级不可变上传内容与元数据
 │   ├── pyproject.toml
 │   ├── api/                  # HTTP/SSE 传输层
 │   │   ├── routes.py         # 请求结构、服务依赖与路由：健康检查、任务、对话、确认
@@ -65,7 +66,7 @@ Pebble/
 │   │   └── agent_contract.py # Agent 调用接口与事件类型
 │   ├── errors.py             # 跨模块共享的业务异常
 │   ├── agent/                # 不实现自有循环，只装配 SDK
-│   │   ├── client.py         # SDK 客户端装配、消息流转与会话读取
+│   │   ├── client.py         # SDK 客户端装配、消息流转与会话恢复
 │   │   ├── mcp.py            # 应用进程内的工具端点：按轮次登记模型可见工具
 │   │   ├── toolset.py        # 按装配依赖绑定业务工具，按轮次筛选模型可见范围
 │   │   ├── context.py        # 每轮系统提示与技能名单组装
@@ -87,7 +88,8 @@ Pebble/
 │   ├── sessions/             # Session Store
 │   │   ├── service.py        # 会话关联、运行状态、预览与逐项结果
 │   │   ├── repository.py     # 任务与操作 SQL
-│   │   └── runs.py           # 后台调用记录 SQL
+│   │   ├── runs.py           # 后台调用记录 SQL
+│   │   └── timeline.py       # 有序文字、草稿卡与错误项的物化读取
 │   ├── approval/             # Confirmation
 │   │   ├── service.py        # 确认执行：版本校验、取得执行权、发送与结果保存
 │   │   └── repository.py     # 确认记录与执行结果 SQL
@@ -113,8 +115,8 @@ Pebble/
 
 直接接入 Qoder Agent SDK 带来的取舍：
 
-- Agent 循环、消息流和模型会话历史由 SDK 与 qodercli 承担；`agent/` 只做客户端装配、上下文和系统提示，不实现自有 loop/runtime。
-- `models/` 不含消息与规则：模型历史复用 Qoder CLI 的本地会话存储，SQLite 只保存任务与 SDK 会话 ID 的关联及确认、执行状态；Memory 规则与 Skill 内容以文件保存并经 Git 管理。
+- Agent 循环和模型上下文历史由 SDK 与 qodercli 承担；`agent/` 只做客户端装配、上下文和系统提示，不实现自有 loop/runtime。
+- 模型历史复用 Qoder CLI 的本地会话存储；SQLite 另行保存前端唯一读取的应用时间线，以及任务、运行、草稿、确认和执行状态。两份数据职责不同，不相互解析或回填。
 - Skill 内容放在实例数据目录而非代码包内，不内置业务流程。
 - 外部写工具只向模型暴露准备方法，执行函数由 `approval/service.py` 直接调用，详见第 3 节。
 
@@ -140,7 +142,7 @@ Gmail、Calendar、Personal KB 都通过相同入口注册，没有专属于某�
 
 | 工具 | 首版能力与关键约束 |
 | --- | --- |
-| Gmail | 搜索邮件，读取单封、完整往来及附件，准备回复或主动新邮件，确认后发送并核实结果；草稿保存在本地 |
+| Gmail | 搜索邮件，读取单封、完整往来及附件，准备回复或主动新邮件，绑定本地上传附件，确认后发送并核实结果；草稿保存在本地 |
 | Calendar | 查询 iCloud 日程、检查冲突、准备预览、确认后创建；正确处理时区和已有重复/全天日程；执行前检查目标时间 |
 | Personal KB | 保存、索引、检索和更新资料，归档任务来源及结果；引用带资料版本和原文位置，更新后旧引用仍可定位 |
 
@@ -148,7 +150,9 @@ Gmail、Calendar、Personal KB 都通过相同入口注册，没有专属于某�
 
 ### Session Store
 
-任务开始、等待用户、准备操作和取得执行结果时保存必要状态。页面刷新后读取已保存内容；SSE 断开不取消后台执行。
+任务开始、等待用户、准备操作和取得执行结果时保存必要状态。每个 Agent run 产生有序时间线项：连续文字增量合并为一个文字项；草稿工具成功时结束当前文字项并在当前位置插入一张卡；后续文字建立新项。页面刷新后读取已保存时间线；SSE 只传输实时变化，断开不取消后台执行，运行结束后前端重新读取时间线对账。
+
+时间线只保存草稿卡位置和 `operation_id`，读取时物化该操作的最新版本和执行状态。同一草稿的直接编辑和 Agent 修改都只新增不可变草稿版本，不移动卡片，也不新增第二张卡。卡片定向消息把目标操作的最新完整草稿作为本轮材料，同时工具端点禁止新建邮件或读写其他草稿。
 
 每个任务关联自己的会话。同一会话的 Agent 调用串行进行，避免上下文互相覆盖。Agent 一轮结束不等于任务成功，界面依据实际工具结果展示各项进度。
 
@@ -168,7 +172,7 @@ Gmail、Calendar、Personal KB 都通过相同入口注册，没有专属于某�
 
 1. 写事务内检查任务与操作存在、确认版本等于当前版本；已有执行记录时直接返回已有状态，不再次发送。
 2. 首次确认要求操作处于 `pending`：同一事务写入确认记录并将状态置为 `sending`，随后返回已接受状态。
-3. 后台在写事务内标记发送开始并读取确认版本；提交后调用发送函数。重复调度不能再次取得执行权，确认输入不含正文。
+3. 后台在写事务内标记发送开始并读取确认版本；提交后调用发送函数。收件人、主题、正文和有序附件均来自该不可变版本，重复调度不能再次取得执行权，确认输入不含正文或附件。
 4. 新事务保存实际结果并更新状态：明确成功记 `sent` 与邮件 ID；明确失败记 `failed` 与原因；超时、异常或返回不符契约记 `unknown`，不推断未发送，不自动重试。
 5. 结果保存失败时向调用方报错，已有执行记录仍阻止重发；进程中断遗留的 `sending` 在服务启动时由 `recover_interrupted_executions()` 置为 `unknown`，该恢复不放进 `init_db`，避免普通初始化影响正在执行的调用。
 
@@ -276,10 +280,11 @@ HTTP/SSE 断开不取消工作。同步发送通过 `asyncio.to_thread`，正常
 待处理输入继续运行；已有确认但进程遗留未完成的发送不自动重发：已经调用过发送函数的记
 unknown 等待核实，`started_at` 仍为空即从未进入执行阶段，是明确未发送，记 failed。
 
-schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`。schema 4 将回复专用草稿表收敛为新邮件与回复共用的 `mail_drafts` 和 `mail_draft_versions`。
+schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`。schema 4 将回复专用草稿表收敛为新邮件与回复共用的 `mail_drafts` 和 `mail_draft_versions`。schema 5 增加 `task_timeline_items`、`uploaded_files` 及草稿版本的有序附件标识。
 接受确认与后台开始发送分别原子处理，发送开始标记防止重复调用；保存发送结果和登记一次
 回传共用事务。Confirmation 依赖 sessions 的调用记录存取，不依赖 SDK 或 api 实现。
-Agent 历史由 SDK 的 read_history 返回；Gateway 不保存另一份模型对话历史。
+Gateway 在转发 SSE 前先把用户文字、Agent 文字、草稿位置和错误写入应用时间线。网页只读取
+`GET /tasks/{task_id}/timeline`；SDK 历史不作为展示接口，也不需要前端解析模型自然语言或拼接操作列表。
 
 新邮件来源是装配插孔：`gateway/runtime.py` 的 `MailSource` 只有 `start` / `stop` 与 `error`，
 由 `create_app(mail_source=...)` 传入，应用在恢复中断调用之后启动、关闭前停止。检测逻辑不在
@@ -289,8 +294,8 @@ Agent 历史由 SDK 的 read_history 返回；Gateway 不保存另一份模型�
 
 `agent/client.py` 的 `QoderGateway` 实现 `AgentGateway` 接口：每轮输入独立启动一次 qodercli 子进程，
 新会话由 CLI 生成会话标识并经 init 事件交回，Gateway 绑定到任务后，后续轮次用 `resume` 接续，
-本层不保存会话状态。`read_history` 直接读 CLI 落在 `data_dir/agent/config` 下的会话记录，只保留
-双方文本块，思考与工具调用不进入历史。子进程以 `data_dir/agent/workspace` 为工作目录。
+本层不保存会话状态。CLI 会话记录落在 `data_dir/agent/config` 下，仅用于 SDK 恢复模型上下文；
+子进程以 `data_dir/agent/workspace` 为工作目录。
 
 模型可见的工具由本进程的 MCP 端点提供（`agent/mcp.py`，server 名 `pebble`）：每轮登记一个一次性
 路径，绑定当轮工具集合、任务标识与草稿事件队列，CLI 子进程按回环地址
@@ -300,13 +305,13 @@ Agent 历史由 SDK 的 read_history 返回；Gateway 不保存另一份模型�
 `strict_mcp_config`），技能名单由 `agent/context.py` 逐轮组装（当前为空，接入已批准名单后扩展）。
 系统提示同样由 `context.py` 组装：基础提示固定在最前，本轮材料（触发载荷、执行结果等）以
 带标题的块追加在末尾，结构化数据渲染为 JSON 块、自由文本按原文呈现，不伪造用户消息，
-历史接口因此只含双方真实说过的内容。基础提示只写域中立的工作原则，领域行为语义
-（草稿待审阅、发送边界等）由各工具的 description 携带。网关契约收敛为 `stream_turn` 与
-`read_history`：触发轮的消息与材料由触发域组装（邮件见 `tools/gmail/trigger.py`），
+基础提示只写域中立的工作原则，领域行为语义（草稿待审阅、发送边界等）由各工具的 description
+携带。网关契约只包含 `stream_turn`：触发轮的消息与材料由触发域组装（邮件见 `tools/gmail/trigger.py`），
 执行结果回传的措辞由 `gateway/runtime.py` 持有，网关本身不区分触发来源。
 
 事件收敛规则：`include_partial_messages` 打开后按增量转发 text，整段消息仅在无增量时补发；
-工具成功后入队的 draft_saved 在该工具调用之后的模型下一条消息之前送出，草稿到达先于模型叙述；
+工具成功后入队的 draft_saved 在该工具调用之后的模型下一条消息之前送出；Runtime 先持久化对应
+时间线项，再发布携带 `item_id` 的 SSE 事件，因此“文字 A → 草稿 → 文字 B”的位置在刷新前后相同；
 ResultMessage 收敛为 done 或 error，结束事件之后不得再有事件，流自然结束而未给出结束事件时
 补发 error。会话建立事件一轮只广播一次，同一标识重复上报不重复转发。模型与凭证只在这一层读取：
 托管模型直接给型号名；配置第三方提供方时三项必须齐全且供应商已登记，
@@ -325,9 +330,14 @@ Gmail 客户端是必需的装配参数，测试显式注入替身。
 工具清单与模型可见范围都由注册时的副作用声明决定，不是手写清单：`agent/toolset.py` 遍历注册表
 绑定依赖，声明了无法装配的依赖在装配期就失败；筛选只有 `agent/toolset.py` 的 `exposed_tools` 一处，
 EXTERNAL_WRITE 不在任何一轮的允许集合内，新邮件轮只允许 READONLY。草稿业务校验只在 `MailDraftStore` 内做一次；回复草稿在按原邮件去重
-之后，符合契约 §4 复用已有操作时候选内容不参与校验。工具端点（`agent/mcp.py`）把已实现的契约错误按
+之后，符合邮件工具契约：复用已有操作时候选内容不参与校验。工具端点（`agent/mcp.py`）把已实现的契约错误按
 `server/errors.py` 的名称与字段交回模型，与 HTTP 响应体同一套词汇；调用不在当轮清单里的工具按
-不存在处理，不解释原因。
+不存在处理，不解释原因。定向修改轮次额外绑定目标 `operation_id`，禁止 prepare 新操作，并拒绝读取或
+更新其他草稿；直接编辑与 Agent 更新都通过 `MailDraftStore.update_draft` 使用同一版本冲突规则。
+
+任务级上传由 `server/uploads.py` 保存：用户文件名仅作展示元数据，实际路径只使用服务端生成的
+`file_id`。草稿版本保存有序 `attachment_ids`；Confirmation 解析已确认版本的不可变文件并交给
+Gmail multipart 发送器。结果待核实时同时核对附件文件名、MIME、大小和 SHA-256，不自动重发。
 
 发送结果为 unknown 时由 `Confirmation.verify_pending` 用 Gmail 的 `verify_message` 只读核实：输入是
 已确认版本的内容证据和用于重建确定 Message-ID 的操作标识，不重发。查不到不等于未发送，所以核实只把 unknown

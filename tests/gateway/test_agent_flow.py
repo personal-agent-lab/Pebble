@@ -35,6 +35,7 @@ DRAFT = {
     "to": ["alice@example.com"],
     "subject": "回复：活动邀请",
     "body": "你好，\n\n我参加。\n",
+    "attachment_ids": [],
 }
 
 
@@ -151,7 +152,73 @@ async def test_user_request_saves_draft_without_sending(flow):
     assert [(op["version"], op["status"]) for op in operations] == [(1, "pending")]
     assert flow.drafts.get_draft(operations[0]["operation_id"])["body"] == DRAFT["body"]
     assert flow.sender.calls == []
-    assert flow.service.get_run(run["run_id"])["status"] == "done"
+
+
+async def test_timeline_preserves_text_draft_text_and_updates_card_in_place(flow):
+    task = flow.tasks.create_task("写邮件")
+
+    def create_handler(turn):
+        async def events():
+            yield {"type": "text", "text": "我先准备一下。"}
+            saved = flow.drafts.save_email_draft(
+                turn.task_id,
+                DRAFT["to"],
+                DRAFT["subject"],
+                DRAFT["body"],
+                [],
+            )
+            yield {"type": "draft_saved", **saved}
+            yield {"type": "text", "text": "请直接在卡片里审阅。"}
+            yield {"type": "done"}
+
+        return events()
+
+    flow.gateway.handle("message", create_handler)
+    flow.service.submit_message(task["task_id"], "请写邮件")
+    await drain(flow.service)
+    first = flow.service.get_timeline(task["task_id"])["items"]
+    assert [item["kind"] for item in first] == ["text", "text", "mail_draft", "text"]
+    assert [item.get("text") for item in first] == [
+        "请写邮件",
+        "我先准备一下。",
+        None,
+        "请直接在卡片里审阅。",
+    ]
+    card = first[2]
+
+    def update_handler(turn):
+        async def events():
+            assert turn.target_operation_id == card["operation_id"]
+            target = next(material for material in turn.materials if "指定修改" in material.title)
+            assert target.content["operation_id"] == card["operation_id"]
+            current = flow.drafts.get_draft(card["operation_id"])
+            saved = flow.drafts.update_draft(
+                card["operation_id"],
+                current["version"],
+                current["to"],
+                current["subject"],
+                current["body"] + "\n更正式。",
+                [],
+            )
+            yield {"type": "draft_saved", **saved}
+            yield {"type": "text", "text": "已更新原草稿。"}
+            yield {"type": "done"}
+
+        return events()
+
+    flow.gateway.handle("message", update_handler)
+    flow.service.submit_message(
+        task["task_id"],
+        "语气更正式",
+        target={"kind": "mail_draft", "operation_id": card["operation_id"]},
+    )
+    await drain(flow.service)
+    second = flow.service.get_timeline(task["task_id"])["items"]
+    cards = [item for item in second if item["kind"] == "mail_draft"]
+    assert len(cards) == 1
+    assert cards[0]["item_id"] == card["item_id"]
+    assert cards[0]["draft"]["version"] == 2
+    assert "更正式" in cards[0]["draft"]["body"]
 
 
 async def test_turn_can_end_without_draft(flow):
@@ -312,25 +379,25 @@ async def test_events_are_published_with_run_id(flow):
     assert flow.service.events.subscriber_count(task["task_id"]) == 1
 
 
-async def test_history_reads_the_bound_session(flow):
+async def test_timeline_reads_application_visible_order(flow):
     task = flow.service.accept_new_mail("m1", "thread-1")
     await drain(flow.service)
     flow.service.submit_message(task["task_id"], "请帮我写回复")
     await drain(flow.service)
 
-    history = await flow.service.read_history(task["task_id"])
-    assert history["sdk_session_id"] == "fake-session-1"
-    assert history["messages"] == [
-        {"role": "assistant", "text": "新邮件 m1 的摘要与建议"},
-        {"role": "user", "text": "请帮我写回复"},
-        {"role": "assistant", "text": "收到：请帮我写回复"},
+    result = flow.service.get_timeline(task["task_id"])
+    assert result["sdk_session_id"] == "fake-session-1"
+    assert [(item["role"], item["text"]) for item in result["items"]] == [
+        ("assistant", "新邮件 m1 的摘要与建议"),
+        ("user", "请帮我写回复"),
+        ("assistant", "收到：请帮我写回复"),
     ]
 
     empty = flow.tasks.create_task("尚无会话")
-    assert await flow.service.read_history(empty["task_id"]) == {
+    assert flow.service.get_timeline(empty["task_id"]) == {
         "task_id": empty["task_id"],
         "sdk_session_id": None,
-        "messages": [],
+        "items": [],
     }
 
 

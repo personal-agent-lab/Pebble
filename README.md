@@ -4,8 +4,8 @@
 程序负责保证确认、持久化与去重。单用户单实例部署，PC 和手机浏览器都能发起任务、编辑草稿和确认操作；任务不依赖浏览器页面保持开启。
 
 当前状态：任务、草稿版本、确认执行、Gateway、网页与 Qoder CN/Gmail
-生产装配已连接，SQLite schema 为 4。Gmail 支持搜索、单封与完整往来读取、附件读取、
-回复与主动新写邮件；两者共用草稿编辑、最终版本确认、去重发送和结果核实。
+生产装配已连接，SQLite schema 为 5。Gmail 支持搜索、单封与完整往来读取、附件读取、
+回复与主动新写邮件；两者共用内嵌草稿卡、草稿编辑、最终版本确认、附件发送、去重发送和结果核实。
 生产入口不使用模拟邮箱或内存草稿；真实账号七步验收仍在进行，
 本地测试通过不代表真实邮件已发送。Memory、Skill、KB 和认证部署仍未完成。
 
@@ -17,7 +17,7 @@
 
 设计文档第 2 节的组件表是目标结构，`server/sessions/`、`server/tools/gmail/` 与 `server/approval/`
 已实现本地存储；HTTP 接口位于 `server/api/`，后台调用管理位于 `server/gateway/`，调用记录位于 `server/sessions/`，
-`server/agent/` 装配 Qoder CN SDK，会话历史直接读取 SDK 持久化记录。
+`server/agent/` 装配 Qoder CN SDK；SDK 会话负责模型上下文恢复，网页使用应用持久化的有序时间线。
 
 ## 前置依赖
 
@@ -69,12 +69,13 @@ npm run dev
 
 ## 网页
 
-`web/` 是 TypeScript + React + Vite 单页应用，路由为 `/tasks`（发起新任务）、
-`/tasks/:taskId`（对话、待确认内容与逐项执行结果）、`/tasks/:taskId/confirm`（草稿编辑与确认）。
+`web/` 是 TypeScript + React + Vite 单页应用，路由为 `/tasks`（发起新任务）和
+`/tasks/:taskId`（统一时间线、完整草稿卡与逐项执行结果）。
 视觉设计系统 token 见 `src/styles/tokens.css`。
 断点 900px：以上为侧栏布局，以下折叠为底部 tab，两端功能一致。
 任务列表就是导航本身：PC 在侧栏，手机在任务页内，默认列最近 5 条，其余折在「展开显示」后面。
-对话卡片进入完整草稿页审阅与确认；未保存的修改不能确认，确认绑定展示草稿的版本。
+邮件草稿固定在 Agent 生成时的对话位置，卡片内展示完整正文和附件，并支持直接编辑、定向对话修改与最终确认。
+未保存的修改不能确认，确认绑定卡片当前展示的草稿版本；发送状态和结果继续显示在原卡片上。
 编辑收件人时每行填写一个地址，可保留显示名。
 
 任务列表没有列表级事件流，按 5 秒轮询刷新（页面不可见时暂停），新邮件自动触发的任务无需手动刷新；
@@ -120,9 +121,10 @@ npm run build
 
 ## 本地任务、草稿与确认发送服务
 
-初始化数据库后使用 `server.sessions.service.SessionStore`、
-`server.tools.gmail.service.MailDraftStore` 和 `server.approval.service.ConfirmationService`。
-三者默认使用实例数据库，也可显式传入 `path=Path(...)`。草稿校验由 `server/tools/gmail/service.py`
+初始化数据库后使用 `server.sessions.service.SessionStore`、`server.sessions.timeline.TimelineStore`、
+`server.uploads.UploadStore`、`server.tools.gmail.service.MailDraftStore` 和
+`server.approval.service.ConfirmationService`。它们默认使用实例数据库，也可显式传入
+`path=Path(...)`。上传内容保存在实例目录的 `uploads/` 中，SQLite 保存不可变文件元数据；草稿校验由 `server/tools/gmail/service.py`
 的纯函数在存储内完成；`ConfirmationService` 必须传入 Gmail 同步发送函数，生产代码没有
 默认成功的发送函数。输入输出字段及错误含义见
 [邮件接口字段契约](docs/v1-mail-flow-contract.md)。
@@ -173,9 +175,10 @@ Gmail 首次启动记录当前 historyId，随后每 10 秒检测新增的收件
 模型经应用进程内的 MCP 端点（server 名 `pebble`）调用工具，内置工具与本机设置关闭：每轮登记一个
 一次性路径供 qodercli 子进程按回环地址连接，轮次结束即撤销。每轮独立启动一次 qodercli 子进程，
 会话标识由 SDK 生成并按任务保存，重启后靠它接续。会话记录落在 `.data/agent/config/` 下，
-历史接口直接读取该记录。
+模型上下文由该记录恢复；网页时间线由 SQLite 独立持久化，刷新后仍保持文字与草稿卡的生成顺序。
 
 联合测试 `tests/gateway/test_integrated_mail.py` 覆盖实际模块衔接、Agent 修改与手动编辑、
 旧版本拒绝、最终内容一致性、重复确认、结果会话关联与游标推进；`tests/gateway/test_agent_stream.py`
-覆盖选项装配、事件映射、工具边界与会话历史读取。其中 SDK 模型响应和 Gmail 投递仍为测试边界替身；
+覆盖选项装配、事件映射与工具边界；`tests/api/test_http_flow.py` 覆盖上传、内嵌时间线、原卡片更新和附件确认发送。
+其中 SDK 模型响应和 Gmail 投递仍为测试边界替身；
 真实验收结果需另行记录。

@@ -19,6 +19,7 @@ DRAFT = {
     "to": ["alice@example.com"],
     "subject": "Re: 邀请",
     "body": "谢谢邀请，我准时参加。",
+    "attachment_ids": [],
 }
 
 
@@ -109,5 +110,54 @@ def test_concurrent_turns_are_isolated(settings):
                 # 草稿事件只进产生它的那一轮。
                 assert draft_queue.get_nowait()["type"] == "draft_saved"
                 assert mail_queue.empty()
+
+    asyncio.run(scenario())
+
+
+def test_targeted_turn_can_only_update_selected_draft(settings):
+    tools, tasks = build(settings)
+    task_id = tasks.create_task("修改邮件")["task_id"]
+    drafts = MailDraftStore()
+    target = drafts.save_email_draft(task_id, ["a@example.com"], "主题", "正文", [])
+    other = drafts.save_email_draft(task_id, ["b@example.com"], "其他", "正文", [])
+    server = ToolServer()
+    drafting = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
+
+    async def scenario():
+        async with (
+            server.serve(
+                drafting,
+                task_id=task_id,
+                target_operation_id=target["operation_id"],
+                queued=asyncio.Queue(),
+            ) as path,
+            mcp_session(server, f"{BASE_URL}{path}") as session,
+        ):
+            created = await session.call_tool(
+                "gmail_prepare_email",
+                {
+                    "to": ["c@example.com"],
+                    "subject": "新建",
+                    "body": "正文",
+                    "attachment_ids": [],
+                },
+            )
+            assert tool_payload(created)["error"] == "wrong_target"
+            wrong = await session.call_tool(
+                "gmail_read_draft", {"operation_id": other["operation_id"]}
+            )
+            assert tool_payload(wrong)["error"] == "wrong_target"
+            updated = await session.call_tool(
+                "gmail_update_draft",
+                {
+                    "operation_id": target["operation_id"],
+                    "expected_version": 1,
+                    "to": ["a@example.com"],
+                    "subject": "已更新",
+                    "body": "正文",
+                    "attachment_ids": [],
+                },
+            )
+            assert tool_payload(updated)["version"] == 2
 
     asyncio.run(scenario())

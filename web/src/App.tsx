@@ -1,6 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
-import ConfirmPage from "./pages/ConfirmPage";
 import TaskListPage from "./pages/TaskListPage";
 import TaskPage from "./pages/TaskPage";
 import { TaskListProvider } from "./tasks";
@@ -13,7 +12,6 @@ export default function App() {
         <Route path="/" element={<Navigate to="/tasks" replace />} />
         <Route path="/tasks" element={<TaskListPage />} />
         <Route path="/tasks/:taskId" element={<TaskPage />} />
-        <Route path="/tasks/:taskId/confirm" element={<ConfirmPage />} />
         <Route path="*" element={<Navigate to="/tasks" replace />} />
       </Routes>
     </TaskListProvider>

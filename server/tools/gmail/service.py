@@ -17,6 +17,7 @@ from server.db import session, write
 from server.errors import DraftValidationError, NotFoundError
 from server.sessions import repository as operations
 from server.sessions.service import check_editable, create_operation, next_version, timestamp
+from server.uploads import UploadStore, files_for_ids, public_file
 
 DraftKind = Literal["reply", "new"]
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$")
@@ -121,18 +122,29 @@ def insert_version(
     to: list[str],
     subject: str,
     body: str,
+    attachment_ids: list[str],
     now: str,
 ) -> None:
     conn.execute(
-        "INSERT INTO mail_draft_versions VALUES (?, ?, ?, ?, ?, ?)",
-        (operation_id, version, json.dumps(to, ensure_ascii=False), subject, body, now),
+        "INSERT INTO mail_draft_versions "
+        "(operation_id, version, recipients, subject, body, created_at, attachment_ids) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            operation_id,
+            version,
+            json.dumps(to, ensure_ascii=False),
+            subject,
+            body,
+            now,
+            json.dumps(attachment_ids),
+        ),
     )
 
 
 def draft(conn: sqlite3.Connection, operation_id: str, version: int | None) -> dict:
     row = conn.execute(
         "SELECT o.operation_id, d.kind, v.version, o.status, d.source_message_id, d.thread_id, "
-        "v.recipients, v.subject, v.body FROM operations o "
+        "v.recipients, v.subject, v.body, v.attachment_ids FROM operations o "
         "JOIN mail_drafts d ON d.operation_id = o.operation_id "
         "JOIN mail_draft_versions v ON v.operation_id = o.operation_id "
         "AND v.version = COALESCE(?, o.version) WHERE o.operation_id = ?",
@@ -142,6 +154,10 @@ def draft(conn: sqlite3.Connection, operation_id: str, version: int | None) -> d
         raise NotFoundError(f"{operation_id}:{version}")
     result = dict(row)
     result["to"] = json.loads(result.pop("recipients"))
+    attachment_ids = json.loads(result.pop("attachment_ids"))
+    result["attachments"] = [
+        public_file(attachment) for attachment in files_for_ids(conn, attachment_ids)
+    ]
     if result["kind"] == "new":
         result.pop("source_message_id")
         result.pop("thread_id")
@@ -155,6 +171,7 @@ def summary(operation: dict) -> dict:
 class MailDraftStore:
     def __init__(self, path: Path | None = None):
         self.path = path
+        self.uploads = UploadStore(path)
 
     @staticmethod
     def _validate(**fields) -> None:
@@ -176,6 +193,7 @@ class MailDraftStore:
         to: list[str],
         subject: str,
         body: str,
+        attachment_ids: list[str],
     ) -> dict:
         recipients = list(to)
         with session(self.path) as conn:
@@ -192,6 +210,7 @@ class MailDraftStore:
             subject=subject,
             body=body,
         )
+        self.uploads.require_for_task(task_id, attachment_ids)
         with session(self.path) as conn, write(conn):
             existing = find_reply(conn, source_message_id)
             if existing is not None:
@@ -199,18 +218,30 @@ class MailDraftStore:
             operation = create_operation(conn, task_id, "mail")
             operation_id = operation["operation_id"]
             insert_draft(conn, operation_id, "reply", source_message_id, thread_id)
-            insert_version(conn, operation_id, 1, recipients, subject, body, timestamp())
+            insert_version(
+                conn, operation_id, 1, recipients, subject, body, attachment_ids, timestamp()
+            )
             return summary(operation)
 
-    def save_email_draft(self, task_id: str, to: list[str], subject: str, body: str) -> dict:
+    def save_email_draft(
+        self,
+        task_id: str,
+        to: list[str],
+        subject: str,
+        body: str,
+        attachment_ids: list[str],
+    ) -> dict:
         recipients = list(to)
         self._validate(kind="new", to=recipients, subject=subject, body=body)
+        self.uploads.require_for_task(task_id, attachment_ids)
         with session(self.path) as conn, write(conn):
             operations.task(conn, task_id)
             operation = create_operation(conn, task_id, "mail")
             operation_id = operation["operation_id"]
             insert_draft(conn, operation_id, "new", None, None)
-            insert_version(conn, operation_id, 1, recipients, subject, body, timestamp())
+            insert_version(
+                conn, operation_id, 1, recipients, subject, body, attachment_ids, timestamp()
+            )
             return summary(operation)
 
     def get_draft(self, operation_id: str, version: int | None = None) -> dict:
@@ -218,7 +249,13 @@ class MailDraftStore:
             return draft(conn, operation_id, version)
 
     def update_draft(
-        self, operation_id: str, expected_version: int, to: list[str], subject: str, body: str
+        self,
+        operation_id: str,
+        expected_version: int,
+        to: list[str],
+        subject: str,
+        body: str,
+        attachment_ids: list[str],
     ) -> dict:
         recipients = list(to)
         current = self.get_draft(operation_id)
@@ -231,7 +268,17 @@ class MailDraftStore:
             subject=subject,
             body=body,
         )
+        self.uploads.require_for_operation(operation_id, attachment_ids)
         with session(self.path) as conn, write(conn):
             version = next_version(conn, operation_id, expected_version)
-            insert_version(conn, operation_id, version, recipients, subject, body, timestamp())
+            insert_version(
+                conn,
+                operation_id,
+                version,
+                recipients,
+                subject,
+                body,
+                attachment_ids,
+                timestamp(),
+            )
             return {"operation_id": operation_id, "version": version, "status": "pending"}

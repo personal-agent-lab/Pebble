@@ -105,7 +105,8 @@ def get_attachment(
     name="gmail_prepare_reply",
     description=(
         "针对一封 Gmail 邮件保存本地回复草稿，仅用于审阅，不会发送。"
-        "邮件往来标识由工具从原邮件读取。"
+        "邮件往来标识由工具从原邮件读取。attachment_ids 使用用户本轮上传的文件标识；"
+        "没有附件时传空数组。"
     ),
     side_effect=SideEffect.LOCAL_WRITE,
     emits_draft_saved=True,
@@ -115,6 +116,7 @@ def prepare_reply(
     to: list[str],
     subject: str,
     body: str,
+    attachment_ids: list[str],
     *,
     task_id: str,
     drafts: MailDraftStore,
@@ -128,12 +130,16 @@ def prepare_reply(
         to=to,
         subject=subject,
         body=body,
+        attachment_ids=attachment_ids,
     )
 
 
 @tool(
     name="gmail_prepare_email",
-    description="保存一封不依赖已有邮件的本地新邮件草稿，仅用于审阅，不会发送。",
+    description=(
+        "保存一封不依赖已有邮件的本地新邮件草稿，仅用于审阅，不会发送。"
+        "attachment_ids 使用用户本轮上传的文件标识；没有附件时传空数组。"
+    ),
     side_effect=SideEffect.LOCAL_WRITE,
     emits_draft_saved=True,
 )
@@ -141,11 +147,12 @@ def prepare_email(
     to: list[str],
     subject: str,
     body: str,
+    attachment_ids: list[str],
     *,
     task_id: str,
     drafts: MailDraftStore,
 ) -> dict[str, Any]:
-    return drafts.save_email_draft(task_id, to, subject, body)
+    return drafts.save_email_draft(task_id, to, subject, body, attachment_ids)
 
 
 @tool(name="gmail_read_draft", side_effect=SideEffect.READONLY)
@@ -158,18 +165,26 @@ def read_draft(
     return drafts.get_draft(operation_id)
 
 
-@tool(name="gmail_update_draft", side_effect=SideEffect.LOCAL_WRITE, emits_draft_saved=True)
+@tool(
+    name="gmail_update_draft",
+    description=(
+        "按用户修改意见保存邮件草稿的完整新版本，不发送。保留附件时必须回传其 file_id；"
+        "没有附件时传空数组。"
+    ),
+    side_effect=SideEffect.LOCAL_WRITE,
+    emits_draft_saved=True,
+)
 def update_draft(
     operation_id: str,
     expected_version: int,
     to: list[str],
     subject: str,
     body: str,
+    attachment_ids: list[str],
     *,
     task_id: str,
     drafts: MailDraftStore,
     tasks: SessionStore,
 ) -> dict:
-    """按用户修改意见保存完整新版本，不发送。"""
     read_draft(operation_id, task_id=task_id, drafts=drafts, tasks=tasks)
-    return drafts.update_draft(operation_id, expected_version, to, subject, body)
+    return drafts.update_draft(operation_id, expected_version, to, subject, body, attachment_ids)

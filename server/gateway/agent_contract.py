@@ -22,6 +22,7 @@ class Turn:
     sdk_session_id: str | None
     message: str
     materials: tuple[Material, ...] = ()
+    target_operation_id: str | None = None
 
 
 class AgentEvent(TypedDict, total=False):
@@ -41,8 +42,6 @@ class AgentProtocolError(Exception):
 
 class AgentGateway(Protocol):
     def stream_turn(self, turn: Turn) -> AsyncIterator[AgentEvent]: ...
-
-    async def read_history(self, *, task_id: str, sdk_session_id: str | None) -> list[dict]: ...
 
 
 def checked_event(event: object) -> AgentEvent:

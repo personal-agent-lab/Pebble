@@ -1,5 +1,7 @@
 """确认后的真实发送与结果核实：明确成功、明确失败与待核实的分界。"""
 
+import hashlib
+
 import pytest
 from googleapiclient.errors import HttpError
 from httplib2 import Response
@@ -16,11 +18,21 @@ FIELDS = dict(
     to=["alice@example.com"],
     subject="Re: 邀请",
     body="确认内容\n保留空格  ",
+    attachments=[],
 )
 
 EVIDENCE = {
     key: FIELDS[key]
-    for key in ("operation_id", "kind", "source_message_id", "thread_id", "to", "subject", "body")
+    for key in (
+        "operation_id",
+        "kind",
+        "source_message_id",
+        "thread_id",
+        "to",
+        "subject",
+        "body",
+        "attachments",
+    )
 }
 
 
@@ -44,11 +56,37 @@ def test_new_email_uses_same_send_and_verification_contract():
         "to": ["professor@example.edu"],
         "subject": "咨询见面时间",
         "body": "老师您好，请问周五是否方便？",
+        "attachments": [],
     }
     assert send_message(**fields, client=client)["status"] == "sent"
     assert client.sent_log[0]["in_reply_to"] is None
     evidence = {key: value for key, value in fields.items() if key != "version"}
     assert verify_message(**evidence, client=client)["status"] == "sent"
+
+
+def test_attachment_bytes_are_sent_and_verified_by_hash():
+    client = MockGmailClient()
+    data = b"immutable attachment bytes"
+    attachment = {
+        "file_id": "file-1",
+        "filename": "proof.pdf",
+        "mime_type": "application/pdf",
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "data": data,
+    }
+    fields = {**FIELDS, "operation_id": "attachment-op", "attachments": [attachment]}
+    assert send_message(**fields, client=client)["status"] == "sent"
+    assert client.sent_log[0]["attachments"] == [
+        {key: attachment[key] for key in ("filename", "mime_type", "size", "sha256")}
+    ]
+    evidence = {key: value for key, value in fields.items() if key != "version"}
+    assert verify_message(**evidence, client=client)["status"] == "sent"
+
+    sent_id = client.sent_log[0]["id"]
+    attachment_id = client.messages[sent_id].attachments[0].attachment_id
+    client.attachments[(sent_id, attachment_id)] = b"tampered"
+    assert verify_message(**evidence, client=client)["status"] == "unknown"
 
 
 @pytest.mark.parametrize("delivered", [True, False])

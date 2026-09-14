@@ -30,6 +30,7 @@ MCP_MOUNT_PATH = "/mcp"
 TOOL_SERVER_NAME = "pebble"
 TOOL_ERROR_MESSAGE = "工具执行失败"
 UNKNOWN_TOOL_MESSAGE = "本轮没有这个工具"
+TARGET_TOOL_MESSAGE = "本轮只能修改指定邮件草稿，不能新建或操作其他草稿"
 
 
 class ToolServer:
@@ -40,11 +41,21 @@ class ToolServer:
 
     @asynccontextmanager
     async def serve(
-        self, tools: list[ToolDefinition], *, task_id: str, queued: asyncio.Queue
+        self,
+        tools: list[ToolDefinition],
+        *,
+        task_id: str,
+        queued: asyncio.Queue,
+        target_operation_id: str | None = None,
     ) -> AsyncIterator[str]:
         """登记一轮的工具，yield 该轮的 URL 路径；退出时撤销。"""
         token = uuid4().hex
-        server = build_server(tools, task_id=task_id, queued=queued)
+        server = build_server(
+            tools,
+            task_id=task_id,
+            target_operation_id=target_operation_id,
+            queued=queued,
+        )
         manager = StreamableHTTPSessionManager(app=server, json_response=True, stateless=True)
         async with manager.run():
             self._turns[token] = manager
@@ -65,7 +76,13 @@ class ToolServer:
         await manager.handle_request(scope, receive, send)
 
 
-def build_server(tools: list[ToolDefinition], *, task_id: str, queued: asyncio.Queue) -> Server:
+def build_server(
+    tools: list[ToolDefinition],
+    *,
+    task_id: str,
+    queued: asyncio.Queue,
+    target_operation_id: str | None = None,
+) -> Server:
     """把本轮允许的工具装到一个 MCP server 上：清单与调用都只认这一份。"""
     server = Server(TOOL_SERVER_NAME, version="1.0.0")
     known = {tool.name: tool for tool in tools}
@@ -82,7 +99,13 @@ def build_server(tools: list[ToolDefinition], *, task_id: str, queued: asyncio.Q
         definition = known.get(name)
         if definition is None:
             return error_result({"error": "unknown_tool", "message": UNKNOWN_TOOL_MESSAGE})
-        return await invoke(definition, arguments, task_id=task_id, queued=queued)
+        return await invoke(
+            definition,
+            arguments,
+            task_id=task_id,
+            target_operation_id=target_operation_id,
+            queued=queued,
+        )
 
     return server
 
@@ -93,9 +116,18 @@ async def invoke(
     *,
     task_id: str,
     queued: asyncio.Queue,
+    target_operation_id: str | None = None,
 ) -> CallToolResult:
     """执行一次工具调用：业务失败按统一错误词汇交回模型，成功时把草稿事件入队。"""
     fields = dict(arguments)
+    if target_operation_id is not None and (
+        definition.name in {"gmail_prepare_reply", "gmail_prepare_email"}
+        or (
+            definition.name in {"gmail_read_draft", "gmail_update_draft"}
+            and fields.get("operation_id") != target_operation_id
+        )
+    ):
+        return error_result({"error": "wrong_target", "message": TARGET_TOOL_MESSAGE})
     if definition.needs_task_id:
         fields["task_id"] = task_id
     try:

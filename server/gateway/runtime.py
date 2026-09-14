@@ -26,8 +26,12 @@ from server.gateway.agent_contract import (
 )
 from server.sessions import repository as operations
 from server.sessions import runs as repo
+from server.sessions import timeline
 from server.sessions.service import SessionStore, timestamp
+from server.sessions.timeline import TimelineStore
+from server.tools.gmail.service import MailDraftStore
 from server.tools.gmail.trigger import NEW_MAIL_GOAL, new_mail_content
+from server.uploads import UploadStore
 
 
 class EventHub:
@@ -71,6 +75,8 @@ INTERRUPTED_REASON = "上次进程退出时调用尚未结束，已记录中断"
 
 EXECUTION_RESULT_MESSAGE = "系统已完成你此前请求的操作，执行结果见系统提示。请向用户简要汇报。"
 EXECUTION_RESULT_MATERIAL_TITLE = "执行结果（外部操作已结束，请据此向用户汇报）"
+TARGET_DRAFT_MATERIAL_TITLE = "本轮指定修改的邮件草稿"
+UPLOADS_MATERIAL_TITLE = "用户随本轮消息上传的附件"
 
 
 def execution_result_content(
@@ -101,6 +107,9 @@ class GatewayRuntime:
         self.path = path
         self.events = EventHub()
         self._sessions = SessionStore(path)
+        self._drafts = MailDraftStore(path)
+        self._timeline = TimelineStore(path)
+        self._uploads = UploadStore(path)
         self._active: dict[str, asyncio.Task] = {}
         self._sends: dict[str, asyncio.Task] = {}
         self._closed = False
@@ -135,14 +144,41 @@ class GatewayRuntime:
         self.kick()
         return task
 
-    def submit_message(self, task_id: str, message: str) -> dict:
+    def submit_message(
+        self,
+        task_id: str,
+        message: str,
+        *,
+        target: dict | None = None,
+        attachment_ids: list[str] | None = None,
+    ) -> dict:
         """登记用户消息并返回调用记录；会话标识从任务记录读取。"""
         self.require_gateway()
+        ids = list(attachment_ids or [])
+        self._uploads.require_for_task(task_id, ids)
+        target_operation_id = None
+        if target is not None:
+            if target.get("kind") != "mail_draft" or not isinstance(
+                target.get("operation_id"), str
+            ):
+                raise ValueError("消息目标不合法")
+            target_operation_id = target["operation_id"]
+            known = {item["operation_id"] for item in self._sessions.list_task_operations(task_id)}
+            if target_operation_id not in known:
+                from server.errors import NotFoundError
+
+                raise NotFoundError(target_operation_id)
         now = timestamp()
         run_id = str(uuid4())
+        payload = {
+            "message": message,
+            "target": target,
+            "attachment_ids": ids,
+        }
         with session(self.path) as conn, write(conn):
             operations.task(conn, task_id)
-            repo.insert(conn, run_id, task_id, repo.KIND_MESSAGE, {"message": message}, None, now)
+            repo.insert(conn, run_id, task_id, repo.KIND_MESSAGE, payload, None, now)
+            timeline.insert_text(conn, task_id, run_id, "user", message, ids)
             row = repo.run(conn, run_id)
         self.kick()
         return repo.run_response(row)
@@ -179,14 +215,8 @@ class GatewayRuntime:
             row = repo.latest(conn, task_id)
         return repo.run_response(row) if row is not None else None
 
-    async def read_history(self, task_id: str) -> dict:
-        """读取完整历史对话；未关联会话时为空，不另行保存模型会话。"""
-        self.require_gateway()
-        sdk_session_id = self._sessions.get_task(task_id)["sdk_session_id"]
-        if sdk_session_id is None:
-            return {"task_id": task_id, "sdk_session_id": None, "messages": []}
-        messages = await self.gateway.read_history(task_id=task_id, sdk_session_id=sdk_session_id)
-        return {"task_id": task_id, "sdk_session_id": sdk_session_id, "messages": messages}
+    def get_timeline(self, task_id: str) -> dict:
+        return self._timeline.list_items(task_id)
 
     def _row(self, run_id: str) -> dict:
         with session(self.path) as conn:
@@ -265,7 +295,25 @@ class GatewayRuntime:
         if row["kind"] == repo.KIND_NEW_MAIL:
             message, materials = new_mail_content(**payload)
         elif row["kind"] == repo.KIND_MESSAGE:
-            message, materials = payload["message"], ()
+            message = payload["message"]
+            material_items = []
+            if payload.get("attachment_ids"):
+                material_items.append(
+                    Material(
+                        UPLOADS_MATERIAL_TITLE,
+                        self._uploads.public(payload["attachment_ids"]),
+                    )
+                )
+            target = payload.get("target")
+            target_operation_id = target["operation_id"] if target is not None else None
+            if target_operation_id is not None:
+                material_items.append(
+                    Material(
+                        TARGET_DRAFT_MATERIAL_TITLE,
+                        self._drafts.get_draft(target_operation_id),
+                    )
+                )
+            materials = tuple(material_items)
         else:
             delivery = (
                 self.confirmations.get_agent_result(payload["operation_id"])
@@ -289,6 +337,11 @@ class GatewayRuntime:
                 sdk_session_id=sdk_session_id,
                 message=message,
                 materials=materials,
+                target_operation_id=(
+                    (payload.get("target") or {}).get("operation_id")
+                    if row["kind"] == repo.KIND_MESSAGE
+                    else None
+                ),
             )
         )
 
@@ -311,13 +364,28 @@ class GatewayRuntime:
     def _forward(self, row: dict, event: AgentEvent) -> None:
         """保存会话关联或结束状态并转发已校验的事件。"""
         kind = event["type"]
+        published = dict(event)
         if kind == "session":
             self._bind_session(row["task_id"], event["sdk_session_id"])
+        elif kind == "text":
+            with session(self.path) as conn, write(conn):
+                published["item_id"] = timeline.append_assistant_text(
+                    conn, row["task_id"], row["run_id"], event["text"]
+                )
+        elif kind == "draft_saved":
+            with session(self.path) as conn, write(conn):
+                published["item_id"] = timeline.ensure_mail_draft(
+                    conn, row["task_id"], row["run_id"], event["operation_id"]
+                )
         elif kind == "done":
             self._finish(row["run_id"], "done", None)
         elif kind == "error":
-            self._finish(row["run_id"], "error", event["message"])
-        self.events.publish(row["task_id"], {"run_id": row["run_id"], **event})
+            with session(self.path) as conn, write(conn):
+                repo.finish(conn, row["run_id"], "error", event["message"], timestamp())
+                published["item_id"] = timeline.insert_error(
+                    conn, row["task_id"], row["run_id"], event["message"]
+                )
+        self.events.publish(row["task_id"], {"run_id": row["run_id"], **published})
 
     def _bind_session(self, task_id: str, sdk_session_id: str) -> None:
         self._sessions.bind_sdk_session(task_id, sdk_session_id)
@@ -328,9 +396,12 @@ class GatewayRuntime:
             repo.finish(conn, run_id, status, error, timestamp())
 
     def _fail(self, row: dict, message: str) -> None:
-        self._finish(row["run_id"], "error", message)
+        with session(self.path) as conn, write(conn):
+            repo.finish(conn, row["run_id"], "error", message, timestamp())
+            item_id = timeline.insert_error(conn, row["task_id"], row["run_id"], message)
         self.events.publish(
-            row["task_id"], {"run_id": row["run_id"], "type": "error", "message": message}
+            row["task_id"],
+            {"run_id": row["run_id"], "item_id": item_id, "type": "error", "message": message},
         )
 
 

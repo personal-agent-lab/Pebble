@@ -6,7 +6,7 @@ HTTP 入口只接受确认（accept_confirmation：写事务内检查版本、�
 已有执行记录或已开始的重复确认只返回已保存状态。
 执行结果保存与待回传调用记录在同一事务内登记，重复确认不新增回传。
 
-结果为 unknown 时由 verify_pending 只读核实实际结果（契约 §6）：核实不重发，
+结果为 unknown 时由 verify_pending 只读核实实际结果（邮件契约 §4）：核实不重发，
 只能把 unknown 升级为 sent，升级后按核实专用标识另登记一次回传。
 """
 
@@ -22,10 +22,11 @@ from server.sessions import repository as operations
 from server.sessions import runs as agent_runs
 from server.sessions.service import timestamp
 from server.tools.gmail import service as mail
+from server.uploads import UploadStore
 
 RECOVERED_REASON = "发送调用未完成即中断，结果待核实"
 
-# 取得执行权后进程即退出：发送函数从未被调用，按契约 §6 不属于 unknown。
+# 取得执行权后进程即退出：发送函数从未被调用，按邮件契约 §4 不属于 unknown。
 NOT_STARTED_REASON = "确认后尚未开始发送即中断，未进入执行阶段"
 
 VERIFIED_DELIVERY_SUFFIX = ":verified"
@@ -41,6 +42,7 @@ class MailSender(Protocol):
         to: list[str],
         subject: str,
         body: str,
+        attachments: list[dict],
         source_message_id: str | None = None,
         thread_id: str | None = None,
     ) -> dict: ...
@@ -57,6 +59,7 @@ class MailVerifier(Protocol):
         to: list[str],
         subject: str,
         body: str,
+        attachments: list[dict],
         source_message_id: str | None = None,
         thread_id: str | None = None,
     ) -> dict: ...
@@ -136,6 +139,7 @@ class ConfirmationService:
         self.send_message = send_message
         self.verify_message = verify_message
         self.path = path
+        self.uploads = UploadStore(path)
 
     def accept_confirmation(self, task_id: str, operation_id: str, version: int) -> dict:
         """接受确认：写事务内检查版本、保存确认并取得执行权，返回当前状态。
@@ -178,6 +182,7 @@ class ConfirmationService:
 
     def _verify(self, operation_id: str, draft: dict) -> dict:
         try:
+            attachments = self.uploads.contents(draft["attachments"])
             returned = self.verify_message(
                 operation_id=operation_id,
                 kind=draft["kind"],
@@ -186,6 +191,7 @@ class ConfirmationService:
                 to=list(draft["to"]),
                 subject=draft["subject"],
                 body=draft["body"],
+                attachments=attachments,
             )
         except Exception as error:  # 核实失败不能证明未发送，保持待核实
             return {"status": "unknown", "reason": f"核实调用异常：{error!r}"}
@@ -237,7 +243,7 @@ class ConfirmationService:
         """把上次进程遗留的未完成执行按是否进入执行阶段归位，返回被处理的执行。
 
         由服务启动流程在接受请求前调用；不放进数据库初始化，避免普通初始化影响正在执行的调用。
-        已取得执行权但 started_at 仍为空的记录从未调用发送函数，按契约 §6 是明确未发送，
+        已取得执行权但 started_at 仍为空的记录从未调用发送函数，按邮件契约 §4 是明确未发送，
         记 failed 而不是 unknown；已开始的记 unknown，实际结果由后续核实兑现。
         两种结果都与正常执行一样登记回传，待兑现的发送结果不会遗漏。
         """
@@ -289,6 +295,7 @@ class ConfirmationService:
 
     def _send(self, operation_id: str, version: int, draft: dict) -> dict:
         try:
+            attachments = self.uploads.contents(draft["attachments"])
             returned = self.send_message(
                 operation_id=operation_id,
                 version=version,
@@ -298,6 +305,7 @@ class ConfirmationService:
                 to=list(draft["to"]),
                 subject=draft["subject"],
                 body=draft["body"],
+                attachments=attachments,
             )
         except Exception as error:  # 超时与普通异常都只说明结果待核实
             return {"status": "unknown", "reason": f"发送调用异常：{error!r}"}

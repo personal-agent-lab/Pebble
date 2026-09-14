@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -79,11 +79,34 @@ SCHEMA_V4 = (
     "UPDATE operations SET type = 'mail' WHERE type = 'mail_reply'",
 )
 
+# 网页展示使用应用持久化的有序时间线；SDK 会话只负责模型上下文恢复。
+# 上传文件使用不可变内部标识保存，草稿版本只绑定有序标识列表，不保存用户文件名路径。
+SCHEMA_V5 = (
+    "CREATE TABLE uploaded_files (file_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), filename TEXT NOT NULL, "
+    "mime_type TEXT NOT NULL, size INTEGER NOT NULL CHECK(size >= 0), sha256 TEXT NOT NULL, "
+    "storage_path TEXT NOT NULL, created_at TEXT NOT NULL)",
+    "ALTER TABLE mail_draft_versions ADD COLUMN attachment_ids TEXT NOT NULL DEFAULT '[]'",
+    "CREATE TABLE task_timeline_items (item_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "run_id TEXT NOT NULL REFERENCES agent_runs(run_id), "
+    "kind TEXT NOT NULL CHECK(kind IN ('text','mail_draft','error')), "
+    "role TEXT CHECK(role IN ('user','assistant')), text TEXT, "
+    "operation_id TEXT REFERENCES operations(operation_id), "
+    "attachment_ids TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, "
+    "CHECK ((kind = 'text') = (role IS NOT NULL AND text IS NOT NULL)), "
+    "CHECK ((kind = 'mail_draft') = (operation_id IS NOT NULL)), "
+    "CHECK (kind != 'error' OR (role IS NULL AND text IS NOT NULL)))",
+    "CREATE UNIQUE INDEX task_timeline_mail_draft "
+    "ON task_timeline_items(task_id, operation_id) WHERE kind = 'mail_draft'",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
     3: SCHEMA_V3,
     4: SCHEMA_V4,
+    5: SCHEMA_V5,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

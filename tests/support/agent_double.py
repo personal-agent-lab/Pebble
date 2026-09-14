@@ -1,4 +1,4 @@
-"""Agent 网关测试替身：按脚本产生事件、记录每次调用并保存内存历史。
+"""Agent 网关测试替身：按脚本产生事件并记录每次调用。
 
 用于后台调度测试与手动验收；生产代码不默认装配本模块。
 """
@@ -23,7 +23,6 @@ class FakeAgentGateway:
     def __init__(self, *, session_prefix: str = "fake"):
         self.session_prefix = session_prefix
         self.calls: list[dict[str, Any]] = []
-        self.history: dict[str, list[dict]] = {}
         self._handlers: dict[str, Handler] = {}
         self._sessions = count(1)
         self._lock = threading.Lock()
@@ -42,16 +41,6 @@ class FakeAgentGateway:
         async for event in self._stream(turn):
             yield event
 
-    async def read_history(self, *, task_id: str, sdk_session_id: str | None) -> list[dict]:
-        with self._lock:
-            return [dict(message) for message in self.history.get(sdk_session_id or "", [])]
-
-    def _remember(self, session_id: str | None, messages: list[dict]) -> None:
-        if session_id is None or not messages:
-            return
-        with self._lock:
-            self.history.setdefault(session_id, []).extend(messages)
-
     async def _stream(self, turn: Turn) -> AsyncIterator[AgentEvent]:
         kind = str(turn.kind)
         with self._lock:
@@ -64,24 +53,9 @@ class FakeAgentGateway:
                     "materials": turn.materials,
                 }
             )
-        session_id = turn.sdk_session_id
-        # 边产生边记录：消费方在 done 处停止迭代，生成器不会回到循环之后。
-        pending: list[dict] = []
-        if kind == "message":
-            pending.append({"role": "user", "text": turn.message})
         handler = self._handlers.get(kind)
         events = handler(turn=turn) if handler is not None else self._default(turn)
         async for event in events:
-            if event.get("type") == "session":
-                session_id = event["sdk_session_id"]
-                self._remember(session_id, pending)
-                pending.clear()
-            elif event.get("type") == "text":
-                text = {"role": "assistant", "text": event["text"]}
-                if session_id is None:
-                    pending.append(text)
-                else:
-                    self._remember(session_id, [text])
             yield event
 
     async def _default(self, turn: Turn) -> AsyncIterator[AgentEvent]:

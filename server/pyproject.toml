@@ -12,6 +12,7 @@ dependencies = [
     "google-auth-oauthlib>=1.2.0",
     "google-auth-httplib2>=0.2.0",
     "qodercn-agent-sdk==1.0.14",
+    "python-multipart>=0.0.20",
 ]
 
 [dependency-groups]

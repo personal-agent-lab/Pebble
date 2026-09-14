@@ -58,12 +58,13 @@
 | `to` | string[] | 完整收件人列表 |
 | `subject` | string | 完整主题 |
 | `body` | string | 完整正文 |
+| `attachment_ids` | string[] | 按顺序绑定的 Pebble 本地上传文件标识；无附件时为空数组 |
 
 `thread_id` 不由 Agent 传入，工具根据原邮件读取，避免原邮件与往来不匹配。同一原邮件已有回复操作时复用它，不用本次候选内容覆盖已保存草稿。
 
 ### `gmail_prepare_email`
 
-输入 `to: string[]`、`subject: string`、`body: string`。用于不依赖已有邮件的新邮件，每次成功调用新建一份待审阅草稿。
+输入 `to: string[]`、`subject: string`、`body: string`、`attachment_ids: string[]`。用于不依赖已有邮件的新邮件，每次成功调用新建一份待审阅草稿。
 
 `gmail_prepare_reply` 和 `gmail_prepare_email` 的输出均为 `operation_id: string`、`version: integer`、`status: "pending"`。输出不含重复的自然语言说明。工具只保存本地草稿，不发送。
 
@@ -71,12 +72,14 @@
 
 输入 `operation_id: string`，只能读取与当前任务关联的草稿。
 
-- 回复草稿包含 `operation_id`、`kind: "reply"`、`version`、`status`、`source_message_id`、`thread_id`、`to`、`subject`、`body`。
-- 新邮件草稿包含 `operation_id`、`kind: "new"`、`version`、`status`、`to`、`subject`、`body`，不含原邮件和往来标识。
+- 回复草稿包含 `operation_id`、`kind: "reply"`、`version`、`status`、`source_message_id`、`thread_id`、`to`、`subject`、`body`、`attachments`。
+- 新邮件草稿包含 `operation_id`、`kind: "new"`、`version`、`status`、`to`、`subject`、`body`、`attachments`，不含原邮件和往来标识。
+
+`attachments[]` 每项是不可变上传元数据：`file_id`、`filename`、`mime_type`、`size`、`sha256`。草稿读取不返回附件字节。
 
 ### `gmail_update_draft`
 
-输入 `operation_id: string`、`expected_version: integer`、`to: string[]`、`subject: string`、`body: string`。输出 `operation_id`、新 `version`、`status: "pending"`。
+输入 `operation_id: string`、`expected_version: integer`、`to: string[]`、`subject: string`、`body: string`、`attachment_ids: string[]`。输出 `operation_id`、新 `version`、`status: "pending"`。
 
 仅 `pending` 草稿可修改；版本不匹配时拒绝，历史版本不改写。
 
@@ -87,16 +90,24 @@
 草稿创建、复用或修改成功后，工具端点发出：
 
 ```json
-{"type":"draft_saved","operation_id":"op_123","version":2}
+{"type":"draft_saved","item_id":"item_123","operation_id":"op_123","version":2}
 ```
 
-通知表示草稿可读取，不表示邮件已发送。
+Runtime 在发布通知前先保存时间线位置。通知表示草稿可读取，不表示邮件已发送；同一 `operation_id` 后续更新继续使用原 `item_id`。
 
-## 3. 确认、发送与核实
+## 3. 时间线、定向消息与上传
+
+网页展示只读取 `GET /tasks/{task_id}/timeline`。返回的 `items` 按持久化顺序组成联合类型：用户或 Agent `text`、`mail_draft`、`error`。连续 Agent 文本增量使用同一 `item_id`；草稿项物化最新草稿版本和当前执行状态。运行结束后网页重新读取该接口，与流式状态对账。
+
+`POST /tasks/{task_id}/messages` 输入 `message`、可选 `target` 和 `attachment_ids`。邮件卡片中的修改要求使用 `target: {"kind":"mail_draft","operation_id":"op_123"}`。本轮把目标草稿最新完整内容交给 Agent，并只允许读取、更新该草稿；不能创建新邮件操作或修改其他草稿。
+
+`POST /tasks/{task_id}/uploads` 接受单个 multipart 文件，返回 `file_id`、`filename`、`mime_type`、`size`、`sha256`。文件内容以服务端生成的 `file_id` 保存到实例数据目录，用户文件名不参与路径拼接。上传文件只可用于其任务或该任务关联的邮件操作。本契约不支持复用收到的 Gmail 附件作为外发附件。
+
+## 4. 确认、发送与核实
 
 确认输入为 `task_id`、`operation_id`、`version`。确认请求不重复携带邮件内容；系统从指定已保存版本读取发送字段。内容修改后旧版本确认失效。
 
-发送器输入为 `operation_id`、`version`、`kind: "reply" | "new"`、`source_message_id: string | null`、`thread_id: string | null`、`to`、`subject`、`body`。回复发送前再读取原邮件，校验它仍属于已保存的往来，并使用原邮件 Message-ID 构建 In-Reply-To。新邮件的两个关联字段为 null，不传 Gmail `threadId`。
+发送器输入为 `operation_id`、`version`、`kind: "reply" | "new"`、`source_message_id: string | null`、`thread_id: string | null`、`to`、`subject`、`body`、`attachments`。附件包含已验证的元数据和不可变字节，使用 multipart MIME 发送。回复发送前再读取原邮件，校验它仍属于已保存的往来，并使用原邮件 Message-ID 构建 In-Reply-To。新邮件的两个关联字段为 null，不传 Gmail `threadId`。
 
 发送结果：
 
@@ -108,9 +119,9 @@
 
 同一操作只发送一次。重复确认只返回已保存状态；`unknown` 不可直接重发。
 
-核实器输入与发送器相同，但不需要 `version`。它用 `operation_id` 重建确定的 Message-ID，并核对已发送邮件的标识、收件人、主题、正文；回复还要核对往来和 In-Reply-To。查不到不能证明未发送，所以核实只能将 `unknown` 升级为 `sent`。
+核实器输入与发送器相同，但不需要 `version`。它用 `operation_id` 重建确定的 Message-ID，并核对已发送邮件的标识、收件人、主题、正文，以及附件的顺序、文件名、MIME 类型、大小和 SHA-256；回复还要核对往来和 In-Reply-To。查不到不能证明未发送，所以核实只能将 `unknown` 升级为 `sent`。
 
-## 4. 状态和错误
+## 5. 状态和错误
 
 | `status` | 含义 |
 | --- | --- |
