@@ -1,33 +1,39 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ApiError, createTask, sendMessage } from "../api";
-import AppShell from "../components/AppShell";
+import AppShell, { TaskLinks } from "../components/AppShell";
 import Notice from "../components/Notice";
-import StatusBadge from "../components/StatusBadge";
-import { shortTime, taskBadge, taskHint } from "../status";
-import { pendingTotal, useTasks } from "../tasks";
+import { useTasks } from "../tasks";
 
-const TASK_ICON = (
-  <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
-    <polyline points="22,6 12,13 2,6" />
+const SEND_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="12" y1="19" x2="12" y2="5" />
+    <polyline points="5 12 12 5 19 12" />
   </svg>
 );
 
+/** 输入框跟着内容长高，到上限后改为内部滚动，不把页面顶出视野。 */
+const MAX_INPUT_HEIGHT = 200;
+
 /**
- * 任务总览与新任务入口。自动触发的任务与手动发起的任务统一呈现，
- * 待确认任务最突出；列表按固定间隔轮询，新邮件到达后无需手动刷新。
- * 输入框固定在页面底部，列表再长也不必回到顶部才能发起任务。
+ * 新任务入口。任务索引在侧栏，这里只有一件事：写下目标。
+ * 自动触发的任务与手动发起的任务都会出现在任务列表，无需手动刷新。
  */
 export default function TaskListPage() {
   const navigate = useNavigate();
-  const { entries, error, reload } = useTasks();
+  const { error, reload } = useTasks();
   const [goal, setGoal] = useState("");
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<ApiError | null>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
 
-  const pendingCount = pendingTotal(entries);
+  const resize = () => {
+    const node = input.current;
+    if (node === null) return;
+    node.style.height = "auto";
+    node.style.height = `${Math.min(node.scrollHeight, MAX_INPUT_HEIGHT)}px`;
+  };
 
   const start = async () => {
     const text = goal.trim();
@@ -55,20 +61,44 @@ export default function TaskListPage() {
 
   return (
     <AppShell serviceError={error}>
-      <div className="topbar">
-        <h2>任务</h2>
-        <span className="sub">
-          {error !== null
-            ? "未连接"
-            : entries === null
-              ? "读取中…"
-              : `${entries.length} 个任务 · ${pendingCount} 项待确认`}
-        </span>
-      </div>
+      <div className="hero">
+        <div className="hero-inner">
+          <h1 className="hero-title">今天要做什么？</h1>
 
-      <div className="content">
-        {error !== null && (
-          <div style={{ marginBottom: 16 }}>
+          <div className="starter">
+            <textarea
+              ref={input}
+              className="starter-input"
+              rows={1}
+              value={goal}
+              placeholder="输入目标开始任务…"
+              aria-label="新任务目标"
+              onChange={(event) => {
+                setGoal(event.target.value);
+                resize();
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void start();
+                }
+              }}
+            />
+            <div className="starter-foot">
+              <span className="starter-tip">Enter 发起 · Shift + Enter 换行</span>
+              <button
+                type="button"
+                className="starter-send"
+                onClick={() => void start()}
+                disabled={goal.trim() === "" || starting}
+                aria-label="发起任务"
+              >
+                {SEND_ICON}
+              </button>
+            </div>
+          </div>
+
+          {error !== null && (
             <Notice
               tone="danger"
               title="无法连接服务"
@@ -82,57 +112,8 @@ export default function TaskListPage() {
               <br />
               确认 Pebble 服务已启动后重试。已保存的草稿与待确认内容不会丢失。
             </Notice>
-          </div>
-        )}
+          )}
 
-        {entries === null && error === null && <div className="loading">读取任务…</div>}
-
-        {entries !== null && entries.length === 0 && (
-          <div className="list-card">
-            <div className="empty">
-              <div className="empty-title">还没有任务</div>
-              <div className="empty-sub">
-                在输入框写下目标发起第一个任务；新邮件到达后会自动出现在这里，无需主动刷新。
-              </div>
-            </div>
-          </div>
-        )}
-
-        {entries !== null && entries.length > 0 && (
-          <div className="list-card">
-            <div className="list-head">
-              任务列表 · 按创建时间
-              <span className="count">共 {entries.length} 个任务</span>
-            </div>
-            {entries.map((entry) => {
-              const badge = taskBadge(entry.latestRun, entry.operations);
-              return (
-                <button
-                  type="button"
-                  key={entry.task.task_id}
-                  className={`task-row${badge.tone === "wait" ? " hl" : ""}`}
-                  onClick={() => navigate(`/tasks/${entry.task.task_id}`)}
-                >
-                  <div className="task-ic">{TASK_ICON}</div>
-                  <div className="task-body">
-                    <div className="task-title">{entry.task.goal}</div>
-                    <div className="task-meta">{taskHint(entry.latestRun, entry.operations)}</div>
-                  </div>
-                  <div className="task-side">
-                    <StatusBadge badge={badge} />
-                    <span className="task-time">
-                      {shortTime(entry.latestRun?.created_at ?? entry.task.created_at)}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="dock">
-        <div className="dock-inner">
           {startError !== null && (
             <Notice
               tone={startError.unavailable ? "muted" : "danger"}
@@ -143,20 +124,10 @@ export default function TaskListPage() {
             </Notice>
           )}
 
-          <div className="composer">
-            <input
-              className="composer-input"
-              value={goal}
-              placeholder="输入目标开始任务…"
-              aria-label="新任务目标"
-              onChange={(event) => setGoal(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void start();
-              }}
-            />
-            <button type="button" className="btn" onClick={() => void start()} disabled={goal.trim() === "" || starting}>
-              {starting ? "发起中…" : "发起任务"}
-            </button>
+          {/* 手机没有侧栏：任务列表改挂在这里，两端都能从任务页进入已有任务。 */}
+          <div className="narrow-only task-nav">
+            <div className="task-nav-head">任务列表</div>
+            <TaskLinks />
           </div>
         </div>
       </div>

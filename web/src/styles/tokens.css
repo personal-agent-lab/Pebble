@@ -63,7 +63,7 @@
   --text-md: 14px;
   --text-lg: 16px;
   --text-xl: 20px;
-  --leading-body: 1.75;
+  --leading-body: 1.55;
   --leading-ui: 1.5;
 
   --spacing-xs: var(--primitive-space-1);
@@ -84,6 +84,16 @@
   --button-bg-hover: color-mix(in oklch, var(--color-accent) 88%, var(--color-fg));
   --button-radius: var(--radius-md);
 
+
+  /* Markdown 正文的块间距：比正文行距略小一档，段与段之间约一行留白，
+     不用整档 spacing-md，那会把回答拉得比 Codex 松。 */
+  --md-block-gap: calc(var(--spacing-md) * 0.75);
+
+  /* 用户消息气泡：浅主色底 + 深主色字，不靠位置也能认出哪句是自己说的。 */
+  /* 与白底混色走 sRGB：白色在 oklch 里没有色相，按 oklch 插值会把蓝拐成粉。 */
+  --bubble-bg: color-mix(in srgb, var(--color-accent) 13%, var(--color-surface));
+  --bubble-fg: color-mix(in oklch, var(--color-accent) 32%, var(--color-fg));
+  --bubble-radius: calc(var(--radius-lg) * 1.5);
 
   --input-bg: var(--color-surface);
   --input-fg: var(--color-fg);

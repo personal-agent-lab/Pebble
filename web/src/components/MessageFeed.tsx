@@ -23,9 +23,9 @@ function atBottom(scroller: HTMLElement): boolean {
 
 /**
  * 消息流：失败原因用小字嵌入，Agent 与用户消息分列，流式回复带输入指示。
- * 连续同一角色的消息成组，只有组内首条带头像，避免逐条重复身份标识。
- * Agent 消息是正文，与操作卡、结果卡同宽同边；用户消息是靠右的气泡。
- * 身份在视觉上由位置承担，读屏器另给一条隐藏说明。
+ * 连续同一角色的消息成组，组内间距收紧。
+ * Agent 消息是正文，通栏排版，与操作卡、结果卡同宽同边；用户消息是靠右的气泡。
+ * 身份在视觉上由位置与底色承担，不摆头像；读屏器另给一条隐藏说明。
  * Agent 消息按 Markdown 渲染；用户消息按原样展示（`white-space: pre-wrap`）——
  * 那是用户自己敲进去的字，把它当标记解析会改写他们写下的内容。
  *
@@ -73,11 +73,6 @@ export default function MessageFeed({ items, children }: { items: FeedItem[]; ch
         const grouped = previous?.kind === "message" && previous.role === item.role;
         return (
           <div className={`msg ${agent ? "agent" : "user"}${grouped ? " cont" : ""}`} key={item.id}>
-            {agent && (
-              <div className="who" aria-hidden>
-                A
-              </div>
-            )}
             <div className="msg-body">
               <span className="sr-only">{agent ? "Agent 说：" : "我说："}</span>
               <div className="bubble">

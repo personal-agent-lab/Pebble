@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 
 import type { ApiError } from "../api";
 import { taskBadge } from "../status";
@@ -17,9 +17,10 @@ const TASKS_ICON = (
   </svg>
 );
 
-const CHEVRON_ICON = (
-  <svg className="i chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="9 18 15 12 9 6" />
+const COMPOSE_ICON = (
+  <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
   </svg>
 );
 
@@ -50,29 +51,32 @@ const PLACEHOLDERS = [
   { label: "Skill", icon: SKILL_ICON },
 ];
 
-const OPEN_KEY = "pebble.nav.tasks";
+/** 收起时显示的任务条数：够认出最近在做什么，又不会把下面的入口顶出视野。 */
+const COLLAPSED_COUNT = 5;
+
+const EXPANDED_KEY = "pebble.nav.tasks.expanded";
 
 /** 展开状态跨页面、跨刷新保留；本地存储不可用时只是记不住，不影响使用。 */
-function readOpen(): boolean {
+function readExpanded(): boolean {
   try {
-    return window.localStorage.getItem(OPEN_KEY) !== "0";
+    return window.localStorage.getItem(EXPANDED_KEY) === "1";
   } catch {
-    return true;
+    return false;
   }
 }
 
-function writeOpen(open: boolean): void {
+function writeExpanded(expanded: boolean): void {
   try {
-    window.localStorage.setItem(OPEN_KEY, open ? "1" : "0");
+    window.localStorage.setItem(EXPANDED_KEY, expanded ? "1" : "0");
   } catch {
     /* 无痕模式等场景下写入被拒绝，忽略即可 */
   }
 }
 
-/** 侧栏内任务列表自己标出所处任务，入口只在总览页高亮；底部 tab 没有子项，整个分区都算在内。 */
-function TasksLink({ pending, exact }: { pending: number; exact?: boolean }) {
+/** 手机底部 tab 用的任务入口：没有子列表，整个任务分区都算在内。 */
+function TasksLink({ pending }: { pending: number }) {
   return (
-    <NavLink to="/tasks" end={exact} className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
+    <NavLink to="/tasks" className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
       {TASKS_ICON}
       任务
       {pending > 0 && <span className="nav-count">{pending} 待确认</span>}
@@ -95,57 +99,82 @@ function Placeholders() {
 }
 
 /**
- * 侧栏任务区：入口可展开为任务列表，收起后只剩一行入口。
- * 列表项直接进入对应任务，待确认的任务带强调点，无需先回到总览页。
+ * 任务列表本身就是导航，列表项直接进入对应任务。
+ *
+ * 默认只列最近几条，其余折在“展开显示”后面——这是索引不是总览，
+ * 状态与时间留在任务页；只有待确认会在行内标出，因为它需要用户动作。
+ * PC 放在侧栏，手机没有侧栏，同一组件直接出现在任务页里。
  */
-function SidebarTasks() {
+export function TaskLinks() {
   const { entries } = useTasks();
-  const [open, setOpen] = useState(readOpen);
-  const pending = pendingTotal(entries);
+  const [expanded, setExpanded] = useState(readExpanded);
+  const { pathname } = useLocation();
 
   const toggle = () => {
-    const next = !open;
-    setOpen(next);
-    writeOpen(next);
+    const next = !expanded;
+    setExpanded(next);
+    writeExpanded(next);
   };
+
+  const all = entries ?? [];
+  const visible = expanded ? [...all] : all.slice(0, COLLAPSED_COUNT);
+  // 正在查看的任务始终留在列表里，收起时也不会从列表消失。
+  const current = all.find((entry) => pathname.startsWith(`/tasks/${entry.task.task_id}`));
+  if (current !== undefined && !visible.includes(current)) visible.push(current);
+
+  return (
+    <>
+      <div className="nav-list">
+        {entries === null && <div className="nav-note">读取中…</div>}
+        {entries !== null && all.length === 0 && <div className="nav-note">还没有任务</div>}
+        {visible.map((entry) => {
+          const badge = taskBadge(entry.latestRun, entry.operations);
+          return (
+            <NavLink
+              key={entry.task.task_id}
+              to={`/tasks/${entry.task.task_id}`}
+              title={`${entry.task.goal} · ${badge.label}`}
+              className={({ isActive }) => `nav-task${isActive ? " active" : ""}`}
+            >
+              <span className="t">{entry.task.goal}</span>
+              {badge.tone === "wait" && <span className="nav-dot wait" aria-hidden />}
+              <span className="sr-only">{badge.label}</span>
+            </NavLink>
+          );
+        })}
+      </div>
+
+      {all.length > COLLAPSED_COUNT && (
+        <button type="button" className="nav-more" aria-expanded={expanded} onClick={toggle}>
+          {expanded ? "收起显示" : "展开显示"}
+        </button>
+      )}
+    </>
+  );
+}
+
+/** 侧栏任务区：分区标题 + 任务列表，标题右侧是发起新任务的入口。 */
+function SidebarTasks() {
+  const { entries } = useTasks();
+  const pending = pendingTotal(entries);
 
   return (
     <div className="nav-group">
-      <div className="nav-row">
-        <TasksLink pending={pending} exact />
-        <button
-          type="button"
-          className={`nav-disc${open ? " open" : ""}`}
-          aria-expanded={open}
-          aria-controls="nav-task-list"
-          aria-label={open ? "收起任务列表" : "展开任务列表"}
-          onClick={toggle}
+      <div className="nav-head">
+        {TASKS_ICON}
+        <span className="nav-head-title">任务</span>
+        {pending > 0 && <span className="nav-head-count">{pending} 待确认</span>}
+        <NavLink
+          to="/tasks"
+          end
+          title="发起新任务"
+          aria-label="发起新任务"
+          className={({ isActive }) => `nav-new${isActive ? " active" : ""}`}
         >
-          {CHEVRON_ICON}
-        </button>
+          {COMPOSE_ICON}
+        </NavLink>
       </div>
-
-      {open && (
-        <div className="nav-list" id="nav-task-list">
-          {entries === null && <div className="nav-note">读取中…</div>}
-          {entries !== null && entries.length === 0 && <div className="nav-note">还没有任务</div>}
-          {entries?.map((entry) => {
-            const badge = taskBadge(entry.latestRun, entry.operations);
-            return (
-              <NavLink
-                key={entry.task.task_id}
-                to={`/tasks/${entry.task.task_id}`}
-                title={`${entry.task.goal} · ${badge.label}`}
-                className={({ isActive }) => `nav-task${isActive ? " active" : ""}`}
-              >
-                <span className={`nav-dot ${badge.tone}`} aria-hidden />
-                <span className="t">{entry.task.goal}</span>
-                <span className="sr-only">{badge.label}</span>
-              </NavLink>
-            );
-          })}
-        </div>
-      )}
+      <TaskLinks />
     </div>
   );
 }

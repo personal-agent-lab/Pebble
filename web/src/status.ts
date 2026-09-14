@@ -55,24 +55,6 @@ export function taskBadge(latestRun: Run | null, operations: OperationSummary[])
   return { tone: "ok", label: "已完成" };
 }
 
-/** 任务行的补充说明，只用已读到的数据，不猜测 Agent 进展。 */
-export function taskHint(latestRun: Run | null, operations: OperationSummary[]): string {
-  const pending = operations.filter((operation) => operation.status === "pending").length;
-  if (pending > 0) return `${pending} 项待确认内容已保存，关闭页面后仍可继续编辑`;
-  if (latestRun?.status === "running") return "Agent 正在处理";
-  if (latestRun?.status === "pending") return "已接受输入，等待开始";
-  if (latestRun?.error) return latestRun.error;
-  if (operations.some((operation) => operation.status === "sending")) return "已确认，正在执行";
-  if (operations.some((operation) => operation.status === "unknown")) {
-    return "发送结果待核实，未核实前不会再次发送";
-  }
-  if (operations.length > 0) {
-    const sent = operations.filter((operation) => operation.status === "sent").length;
-    return `${operations.length} 项操作，${sent} 项已发送`;
-  }
-  return "尚无操作";
-}
-
 /**
  * 逐项结果汇总；部分成功如实写成 N / M，不报告为整体成功。
  *
