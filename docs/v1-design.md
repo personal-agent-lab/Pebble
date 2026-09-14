@@ -2,7 +2,7 @@
 
 本文承接 `v1-spec.md`：规格定义做什么和验收标准，本文定义组件划分、执行约束的实现方式、代码结构、交付顺序与验证证据。两者冲突时以规格为准。
 
-各域的接口字段与语义单独成文，位于 `docs/contracts/`：`mail.md`（已实现）、`calendar.md`、`personal-kb.md`、`skills.md`（后三者为约定，尚未实现）。本文不重复契约字段。
+各域的接口字段与语义单独成文，位于 `docs/contracts/`：`mail.md`、`calendar.md`（已实现），`personal-kb.md`、`skills.md`（约定，尚未实现）。本文不重复契约字段。
 
 第 1–6 节是设计，改动需要说明理由；第 7 节的阶段状态随实施推进更新；第 8–9 节是工作约定；第 10 节记录当前实现与已知偏差。
 
@@ -249,7 +249,7 @@ SDK 显式限定项目工具和必要的 Skill 能力，使用独立工作目录
 
 ## 7. 交付阶段
 
-按 `v1-spec.md` 第 5 节的两个验收场景逐步交付完整链路。本节状态随实施更新；阶段 2 进行中：Web、Gateway、Qoder CN SDK 与 Gmail 生产装配已接通，自动化测试使用外部边界替身，真实账号验收尚未完成。
+按 `v1-spec.md` 第 5 节的两个验收场景逐步交付完整链路。本节状态随实施更新；阶段 2 已完成代码接入，阶段 3 进行中：Calendar 已接入，Memory 与 Personal KB 尚未实现；自动化测试使用外部边界替身，真实账号验收尚未完成。
 
 | 阶段 | 交付物 | 通过条件 |
 | --- | --- | --- |
@@ -301,7 +301,7 @@ git 提交遵循 `AGENTS.md` 的约定：当前分支、英文 `[Module] Descrip
 
 ## 10. 当前实现
 
-已实现：Web、Gateway、Agent 装配、Gmail 域（读取、草稿、确认发送、核实）、Session Store 与 Confirmation。SQLite schema 为 6。未实现：Calendar、Personal KB、Memory、Skills、认证与 HTTPS 远程访问。
+已实现：Web、Gateway、Agent 装配、Gmail 域、Calendar 域、Session Store 与 Confirmation。SQLite schema 为 7。未实现：Personal KB、Memory、Skills、认证与 HTTPS 远程访问。
 
 ### Gateway 与触发源
 
@@ -311,7 +311,7 @@ git 提交遵循 `AGENTS.md` 的约定：当前分支、英文 `[Module] Descrip
 
 任务创建时以触发文案或用户首句作为目标；首个调用成功结束后，运行时把该轮对话文本交给一次性的无工具模型调用生成不超过 12 字的短标题，改写任务目标。生成失败或为空时保留原目标；该调用不接续任务会话，也不进入对话历史。
 
-schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`。schema 4 将回复专用草稿表收敛为新邮件与回复共用的 `mail_drafts` 和 `mail_draft_versions`。schema 5 增加 `task_timeline_items`。schema 6 移除上传文件与草稿版本、时间线上的附件绑定，外发邮件只支持纯文字。
+schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`。schema 4 将回复专用草稿表收敛为新邮件与回复共用的 `mail_drafts` 和 `mail_draft_versions`。schema 5 增加 `task_timeline_items`。schema 6 移除邮件附件绑定。schema 7 增加日程预览、`creating/created` 状态与日程时间线卡，并将执行结果统一保存为 JSON。
 
 接受确认与后台开始发送分别原子处理，发送开始标记防止重复调用；保存发送结果和登记一次回传共用事务。Confirmation 依赖 sessions 的调用记录存取，不依赖 SDK 或 api 实现。Gateway 在转发 SSE 前先把用户文字、Agent 文字、草稿位置和错误写入应用时间线，事件携带持久化后的 `item_id` 与 `run_id`。网页只读取 `GET /tasks/{task_id}/timeline`；SDK 历史不作为展示接口，也不需要前端解析模型自然语言或拼接操作列表。
 
@@ -337,17 +337,17 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 
 发送结果为 unknown 时由 `Confirmation.verify_pending` 用 Gmail 的 `verify_message` 只读核实：输入是已确认版本的内容证据和用于重建确定 Message-ID 的操作标识，不重发。查不到不等于未发送，所以核实只把 unknown 升级为 sent，不下明确失败的结论；升级后的结果按核实专用去重键另登记一次回传，原结果的回传尚未结束时不再登记。核实由 `POST /operations/{operation_id}/verification` 显式发起，读接口不做外部调用。
 
-未接入 Agent、核实或发送依赖时，相关新工作在写入前拒绝。只读任务、草稿及执行查询仍可用。生产默认装配不使用替身，测试替身只替换 SDK 子进程与 Gmail 投递这两个外部边界。生产工厂为三个用途各构造一个 Gmail 客户端（同步检测、模型工具、确认发送与核实），互不共享令牌刷新状态。
+未接入 Agent、核实或外部执行依赖时，相关新工作在写入前拒绝。只读任务、预览及执行查询仍可用。生产默认装配不使用替身；测试替换 SDK 子进程、Gmail 投递和 iCloud CalDAV 三个外部边界。生产工厂为三个用途各构造一个 Gmail 客户端（同步检测、模型工具、确认发送与核实），互不共享令牌刷新状态，并为查询与确认创建装配 iCloud Calendar 客户端。
 
 ### Web
 
 `web/` 是 React 单页应用，路由为 `/tasks`（任务列表与发起新任务）和 `/tasks/:taskId`（时间线、草稿卡与逐项结果）。任务列表按 5 秒轮询，页面不可见时暂停；任务详情用 SSE，另在有操作处于 `sending` 时按 1.5 秒轮询执行结果，SSE 重连后整体重读时间线对账。单一断点 900px：以上为侧栏布局，以下折叠为底部 tab，两端功能一致。设计 token 分种子、原语与语义三层，见 `src/styles/tokens.css`。
 
-界面只呈现接口能支撑的内容：来源引用面板、日程预览卡与全局搜索框对应的接口尚未提供，暂不渲染。
+界面只呈现接口能支撑的内容：邮件草稿卡和日程预览卡都可编辑并确认；来源引用面板与全局搜索框对应的接口尚未提供，暂不渲染。
 
 ### 已知偏差与未完成
 
 - 认证与 HTTPS 未实现：服务当前只按本机与局域网测试使用，`PATCH /api/operations/{operation_id}/draft` 还不校验操作与任务的归属关系。这两项是阶段 6 的交付内容，公网暴露前必须完成。
 - 触发源插孔仍带邮件域名（`MailSource`、`accept_new_mail`、`create_app(mail_source=...)`），与“通用层不持有域措辞”的约定不一致；第二个触发源接入时改为域中立命名。
-- 生效 Skill 名单恒为空，Memory、Skills、Personal KB、Calendar 四个域尚无代码。
-- 真实账号验收（Gmail 发送、iCloud、SDK 模型响应）尚未完成；本地测试通过不代表真实邮件已发送。
+- 生效 Skill 名单恒为空，Memory、Skills、Personal KB 三个域尚无代码。
+- 真实账号验收（Gmail 发送、iCloud 读写、SDK 模型响应）尚未完成；本地测试通过不代表真实外部操作成功。

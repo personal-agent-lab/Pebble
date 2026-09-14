@@ -1,6 +1,6 @@
 # iCloud Calendar 工具与确认创建契约
 
-状态：**约定，尚未实现**。本文定义 Calendar 工具的输入、输出与创建边界。实现与本文冲突时先改本文。
+状态：**已实现**。本文定义 Calendar 工具的输入、输出与创建边界。实现与本文冲突时先改本文。
 
 Agent 可以查询日程和保存本地预览，但不能直接创建事件；创建只能在用户确认已保存的确切版本后由 Confirmation 执行。确认、版本、状态与结果语义与 `mail.md` 共用一套。
 
@@ -10,6 +10,8 @@ Agent 可以查询日程和保存本地预览，但不能直接创建事件；�
 - 全天日程使用日期语义：`start`、`end` 为 `YYYY-MM-DD`，`end` 是不含的结束日。
 - 时区以日历服务返回的偏移为准，工具不做隐式本地时区转换。
 - 首版只读取重复日程并在冲突检查中展开，不支持创建重复日程。
+- 首版只连接服务端配置的主日历；`calendar_id` 省略时为 `primary`，其他值拒绝。
+- 读取已有事件时返回参与人；创建预览不接受参与人，也不会发送邀请。
 
 ## 2. Agent 可见工具
 
@@ -50,7 +52,7 @@ Agent 可以查询日程和保存本地预览，但不能直接创建事件；�
 
 ### `calendar_prepare_event`
 
-输入 `summary`、`start`、`end`，可选 `all_day`、`location`、`description`、`attendees[]`、`calendar_id`。输出 `operation_id: string`、`version: integer`、`status: "pending"`，不含重复的自然语言说明。
+输入 `summary`、`start`、`end`，可选 `all_day`、`location`、`description`、`calendar_id`。输出 `operation_id: string`、`version: integer`、`status: "pending"`，不含重复的自然语言说明。
 
 复用规则：同一任务中已存在 `pending` 日程操作，且起止时间与标题规范化后相同时复用该操作并关联到本任务，不用本次候选内容覆盖已保存预览；否则新建一份。
 
@@ -64,7 +66,7 @@ Agent 可以查询日程和保存本地预览，但不能直接创建事件；�
 
 ## 3. 预览校验与通知
 
-校验只管格式与字段完整性：`summary` 非空；`start`、`end` 格式合法；非全天日程 `end` 晚于 `start`；全天日程 `end` 不早于 `start`；`attendees` 每项为合法邮箱地址。校验失败返回 `DraftValidationError` 及 `errors[]`，每项含 `field` 与 `message`，不保存数据。词汇与 `mail.md` 一致，此处“草稿”指待确认的日程预览。
+校验只管格式与字段完整性：`summary` 非空；`start`、`end` 格式合法；非全天日程 `end` 晚于 `start`；全天日程 `end` 不早于 `start`。校验失败返回 `DraftValidationError` 及 `errors[]`，每项含 `field` 与 `message`，不保存数据。词汇与 `mail.md` 一致，此处“草稿”指待确认的日程预览。
 
 时间冲突与起始时间早于当前时刻都不是校验失败：冲突由 `calendar_check_conflicts` 的结果和预览展示给用户判断，需要时由 Agent 追问。
 
@@ -94,7 +96,7 @@ Runtime 在发布通知前先保存时间线位置。同一 `operation_id` 后�
 
 确认输入为 `task_id`、`operation_id`、`version`。确认请求不重复携带日程内容，系统从指定已保存版本读取字段；内容修改后旧版本确认失效。日程创建与邮件发送分别确认、分别记录结果。
 
-创建器输入为 `operation_id`、`version`、`summary`、`start`、`end`、`all_day`、`location`、`description`、`attendees`、`calendar_id`。创建时使用由 `operation_id` 确定的事件 UID（与邮件的确定 Message-ID 同一思路），供后续核实。创建前重新读取目标时间范围的日程，冲突时不自动改写已确认内容，而是回到澄清与重新准备。
+创建器输入为 `operation_id`、`version`、`summary`、`start`、`end`、`all_day`、`location`、`description`、`calendar_id`。创建时使用由 `operation_id` 确定的事件 UID（与邮件的确定 Message-ID 同一思路），供后续核实。创建前重新读取目标时间范围的日程；发现冲突时不创建，保存明确失败结果并回到澄清与重新准备。
 
 创建结果：
 
@@ -106,7 +108,7 @@ Runtime 在发布通知前先保存时间线位置。同一 `operation_id` 后�
 
 同一操作只创建一次。重复确认只返回已保存状态；`unknown` 不可直接重试。
 
-核实器输入与创建器相同，但不需要 `version`。它用 `operation_id` 重建事件 UID 并查询目标日历，核对时间、标题与参与人。查不到不能证明未创建，所以核实只能将 `unknown` 升级为 `created`。核实由 `POST /operations/{operation_id}/verification` 显式发起，读接口不做外部调用。
+核实器输入与创建器相同，但不需要 `version`。它用 `operation_id` 重建事件 UID 并查询目标日历，核对时间、标题、地点与描述，并确认没有参与人或重复规则。查不到不能证明未创建，所以核实只能将 `unknown` 升级为 `created`。核实由 `POST /operations/{operation_id}/verification` 显式发起，读接口不做外部调用。
 
 ## 6. 时间线与定向消息
 

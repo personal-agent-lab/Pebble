@@ -13,6 +13,7 @@ from server.config import get_settings
 from server.db import schema_version, session
 from server.gateway.runtime import GatewayRuntime
 from server.sessions.service import SessionStore
+from server.tools.calendar.service import CalendarPreviewStore
 from server.tools.gmail.service import MailDraftStore
 
 
@@ -32,6 +33,10 @@ def get_confirmations(request: Request) -> ConfirmationService:
     return request.app.state.confirmations
 
 
+def get_calendar_previews(request: Request) -> CalendarPreviewStore:
+    return request.app.state.calendar_previews
+
+
 Tasks = Annotated[SessionStore, Depends(get_tasks)]
 
 
@@ -42,6 +47,7 @@ Drafts = Annotated[MailDraftStore, Depends(get_drafts)]
 
 
 Confirmations = Annotated[ConfirmationService, Depends(get_confirmations)]
+CalendarPreviews = Annotated[CalendarPreviewStore, Depends(get_calendar_previews)]
 
 
 router = APIRouter()
@@ -104,7 +110,7 @@ KEEPALIVE_SECONDS = 15
 
 
 class MessageTarget(BaseModel):
-    kind: Literal["mail_draft"]
+    kind: Literal["mail_draft", "calendar_preview"]
     operation_id: str
 
 
@@ -167,6 +173,18 @@ class ConfirmationInput(BaseModel):
     version: int
 
 
+class CalendarPreviewEdit(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_version: int = Field(ge=1)
+    summary: str
+    start: str
+    end: str
+    all_day: bool = False
+    location: str | None = None
+    description: str = ""
+    calendar_id: Literal["primary"] = "primary"
+
+
 @router.get("/operations/{operation_id}/draft", tags=["approvals"])
 def read_draft(operation_id: str, drafts: Drafts, version: int | None = None) -> dict:
     return drafts.get_draft(operation_id, version)
@@ -185,6 +203,22 @@ def edit_draft(operation_id: str, body: DraftEdit, drafts: Drafts) -> dict:
         list(body.to),
         body.subject,
         body.body,
+    )
+
+
+@router.get("/operations/{operation_id}/calendar-preview", tags=["approvals"])
+def read_calendar_preview(
+    operation_id: str, previews: CalendarPreviews, version: int | None = None
+) -> dict:
+    return previews.get_preview(operation_id, version)
+
+
+@router.patch("/operations/{operation_id}/calendar-preview", tags=["approvals"])
+def edit_calendar_preview(
+    operation_id: str, body: CalendarPreviewEdit, previews: CalendarPreviews
+) -> dict:
+    return previews.update_preview(
+        operation_id, body.expected_version, **body.model_dump(exclude={"expected_version"})
     )
 
 

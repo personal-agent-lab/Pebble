@@ -19,6 +19,8 @@ from functools import partial
 from inspect import Parameter, signature
 
 from server.sessions.service import SessionStore
+from server.tools.calendar.service import CalendarPreviewStore
+from server.tools.calendar.tools import CalendarReader
 from server.tools.gmail.client import BaseGmailClient
 from server.tools.gmail.service import MailDraftStore
 from server.tools.registry import SideEffect, ToolDefinition, ToolRegistry, default_registry
@@ -47,6 +49,8 @@ class ToolDeps:
     drafts: MailDraftStore
     tasks: SessionStore
     gmail: BaseGmailClient
+    calendar: CalendarReader | None = None
+    calendar_previews: CalendarPreviewStore | None = None
 
 
 def build_tools(
@@ -60,13 +64,18 @@ def build_tools(
     bound: list[ToolDefinition] = []
     for definition in registry.list_tools():
         injected = {}
+        unavailable = False
         for name, parameter in signature(definition.func).parameters.items():
             if parameter.kind is not Parameter.KEYWORD_ONLY or name == "task_id":
                 continue
             if name not in available:
                 raise RuntimeError(f"工具 {definition.name} 声明的依赖 {name} 不在 ToolDeps 中")
+            if available[name] is None:
+                unavailable = True
+                break
             injected[name] = available[name]
-        bound.append(replace(definition, func=partial(definition.func, **injected)))
+        if not unavailable:
+            bound.append(replace(definition, func=partial(definition.func, **injected)))
     return bound
 
 

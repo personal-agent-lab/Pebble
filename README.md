@@ -8,11 +8,12 @@
 确认操作；任务不依赖始终开启的浏览器页面。新邮件是首版的系统触发源，收到即自动开始处理，
 但邮件只是它能做的事之一。
 
-当前状态：对话链、任务时间线、Gateway 与 Qoder CN/Gmail 生产装配已接通，SQLite schema 为 6。
+当前状态：对话链、任务时间线、Gateway 与 Qoder CN/Gmail/iCloud Calendar 生产装配已接通，SQLite schema 为 7。
 Gmail 支持搜索、单封与完整往来读取、入站附件读取、回复与主动新写邮件；两者共用内嵌草稿卡、
 草稿编辑、最终版本确认、去重发送和结果核实。外发邮件只支持纯文字正文。
-Calendar、个人知识库、Memory、Skills 尚未实现；认证与 HTTPS 远程访问尚未实现，
-目前只能本机和同局域网访问。真实账号验收仍在进行，本地测试通过不代表真实邮件已发送。
+iCloud Calendar 支持查询、详情、冲突检查，以及预览编辑并确认创建单次日程；不邀请参与人。
+个人知识库、Memory、Skills 尚未实现；认证与 HTTPS 远程访问尚未实现，
+目前只能本机和同局域网访问。真实账号验收仍在进行，本地测试通过不代表真实邮件或日程操作成功。
 
 ## 文档
 
@@ -49,12 +50,15 @@ cp .env.example .env
 | `PEBBLE_MODEL_PROVIDER`、`PEBBLE_MODEL_API_KEY`、`PEBBLE_MODEL_BASE_URL` | 自定义模型（BYOK）。供应商、密钥、型号必须同时给全，`BASE_URL` 可选；provider 必须匹配账号的 BYOK 目录 |
 | `PEBBLE_GMAIL_CREDENTIALS_PATH` | Gmail OAuth 桌面应用 JSON，默认 `<data_dir>/credentials.json` |
 | `PEBBLE_GMAIL_TOKEN_PATH` | Gmail 授权结果，默认 `<data_dir>/gmail_token.json` |
+| `PEBBLE_ICLOUD_ACCOUNT` | Apple ID 账号，仅在服务端使用 |
+| `PEBBLE_ICLOUD_PASSWORD_PATH` | Apple App 专用密码文件的绝对路径 |
+| `PEBBLE_ICLOUD_CALENDAR_URL` | 唯一主日历的完整 iCloud CalDAV collection URL |
 | `PEBBLE_BACKEND_URL` | 只给 Vite 开发代理使用，后端不读 |
 
 Gmail 首次启动在浏览器授权读取和发送权限。Key 仅交给 SDK 的模型配置，不进入系统提示或工具结果。
 Qoder CN 与国际版的 SDK、Token 和配置目录不能混用。
 
-生产运行需要有效的 Qoder CN 和 Gmail 凭证；仅测试使用不装配真实依赖的 `create_app()`。
+生产运行需要有效的 Qoder CN、Gmail 和 iCloud Calendar 凭证；仅测试使用不装配真实依赖的 `create_app()`。
 
 ## 启动
 
@@ -104,7 +108,7 @@ npm run dev
 任务列表没有列表级事件流，按 5 秒轮询刷新（页面不可见时暂停），新邮件自动触发的任务无需手动刷新；
 任务详情用 SSE，确认后的发送在后台执行，事件流不携带执行状态，页面对执行结果按 1.5 秒轮询直到
 状态离开 `sending`，SSE 重连后整体重读时间线对账。
-界面只呈现接口能支撑的内容：来源引用面板、日程预览卡与搜索框对应的接口尚未提供，暂不渲染。
+界面只呈现接口能支撑的内容：邮件草稿卡和日程预览卡都可编辑并确认；来源引用面板与搜索框对应的接口尚未提供，暂不渲染。
 
 ## 验证
 
@@ -144,39 +148,40 @@ npm test
 npm run build
 ```
 
-## 本地任务、草稿与确认发送服务
+## 本地任务、预览与确认执行服务
 
 初始化数据库后使用 `server.sessions.service.SessionStore`、`server.sessions.timeline.TimelineStore`、
-`server.tools.gmail.service.MailDraftStore` 和 `server.approval.service.ConfirmationService`。
-它们默认使用实例数据库，也可显式传入 `path=Path(...)`。草稿校验由 `server/tools/gmail/service.py`
-的纯函数在存储内完成；`ConfirmationService` 必须传入 Gmail 同步发送函数，生产代码没有默认成功的
-发送函数。输入输出字段及错误含义见 [Gmail 契约](docs/contracts/mail.md)。
+`server.tools.gmail.service.MailDraftStore`、`server.tools.calendar.service.CalendarPreviewStore` 和
+`server.approval.service.ConfirmationService`。它们默认使用实例数据库，也可显式传入
+`path=Path(...)`。邮件草稿与日程预览分别在对应域内校验；`ConfirmationService` 必须注入实际的
+Gmail 发送或 iCloud 创建函数，生产代码没有默认成功的外部写入。输入输出字段及错误含义见
+[Gmail 契约](docs/contracts/mail.md)和 [Calendar 契约](docs/contracts/calendar.md)。
 
 任务保存用户目标与 SDK 会话关联；操作管理版本与状态；邮件字段和原邮件去重留在邮件能力内。
 跨任务复用同一操作后，各任务看到相同的最新草稿与状态，SDK 会话仍独立。
 
-### 确认发送
+### 确认执行
 
 - `accept_confirmation(task_id, operation_id, version)`：检查版本、保存确认并取得执行权。
-- `execute_accepted(operation_id)`：后台读取已确认版本、发送并保存结果；重复调用不再次发送。
+- `execute_accepted(operation_id)`：后台读取已确认版本、执行并保存结果；重复调用不再次执行。
 - `get_execution(operation_id)`：操作当前状态、确认信息及已保存结果。
 - `get_agent_result(operation_id)`：回传数据；尚无结果或回传任务未关联会话时返回 `None`。
-- `verify_pending(operation_id)`：只读核实 `unknown`，找到已发送证据后更新为 `sent` 并登记回传。
-- `recover_interrupted_executions()`：重启时已开始的发送记 `unknown`，尚未开始的记 `failed`；
-  在数据库初始化后、接受请求前调用，不自动重发。
+- `verify_pending(operation_id)`：只读核实 `unknown`，找到对应外部结果后更新状态并登记回传。
+- `recover_interrupted_executions()`：重启时已开始的外部执行记 `unknown`，尚未开始的记 `failed`；
+  在数据库初始化后、接受请求前调用，不自动重试。
 
-发送函数输入输出见契约第 6 节；异常、中断及不符契约的返回都记 `unknown`，不自动重试，
-`unknown` 可以显式核实，重复确认不会重新发送，也没有重发入口。
+外部执行函数的输入输出见对应契约；异常、中断及不符契约的返回都记 `unknown`，不自动重试，
+`unknown` 可以显式核实，重复确认不会再次产生外部写入。
 
 ## 验证范围
 
 - `tests/storage/`：真实 SQLite 的版本、并发、回滚、恢复与确认去重。
 - `tests/gateway/`：后台调度、SDK 选项装配与事件映射、工具端点与工具边界、执行结果回传、邮件全链路衔接。
 - `tests/api/`：健康检查，以及独立进程的 HTTP/SSE、断线后继续执行与重启。
-- `tests/tools/`：邮件解析、草稿校验、报文构建、发送结果核实与注册表声明。
+- `tests/tools/`：邮件与日历的解析、预览校验、协议内容、结果核实与工具声明。
 
-测试只替换 SDK 子进程与 Gmail 投递这两个外部边界，其余模块、SQLite、HTTP 都是真的。
-SDK 模型响应与 Gmail 投递仍须用明确授权的账号和内容验收；测试通过不代表真实邮件发送成功。
+测试替换 SDK 子进程、Gmail 投递和 iCloud CalDAV 这三个外部边界，其余模块、SQLite、HTTP 都是真的。
+SDK 模型响应、Gmail 投递与 iCloud 读写仍须用明确授权的账号和内容验收；测试通过不代表真实外部操作成功。
 
 触发源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/runtime.py` 的 `MailSource`
 （`start` / `stop` / `error`）。真实 Gmail 检测由 `server/tools/gmail/sync.py` 实现同一接口，

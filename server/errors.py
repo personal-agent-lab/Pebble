@@ -38,7 +38,7 @@ class TaskActiveError(Exception):
 
 
 class DraftValidationError(Exception):
-    """邮件业务校验未通过；`errors` 为契约第 5 节的字段与原因列表。"""
+    """待确认内容校验未通过；`errors` 为字段与原因列表。"""
 
     def __init__(self, errors: list[dict[str, str]]):
         self.errors = errors
@@ -64,5 +64,5 @@ def error_details(error: Exception) -> dict | None:
     if isinstance(error, TaskActiveError):
         return {"error": "task_active", "message": "任务正在运行，结束后才能删除"}
     if isinstance(error, DraftValidationError):
-        return {"error": "invalid_draft", "message": "邮件草稿未通过校验", "errors": error.errors}
+        return {"error": "invalid_draft", "message": "待确认内容未通过校验", "errors": error.errors}
     return None

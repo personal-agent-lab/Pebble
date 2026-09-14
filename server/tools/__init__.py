@@ -4,6 +4,7 @@
 接入新服务时加一行导入即可。
 """
 
+from server.tools.calendar import tools as calendar_tools
 from server.tools.gmail import tools as gmail_tools
 
-__all__ = ["gmail_tools"]
+__all__ = ["calendar_tools", "gmail_tools"]

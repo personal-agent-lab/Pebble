@@ -29,6 +29,7 @@ from server.sessions import runs as repo
 from server.sessions import timeline
 from server.sessions.service import SessionStore, timestamp
 from server.sessions.timeline import TimelineStore
+from server.tools.calendar.service import CalendarPreviewStore
 from server.tools.gmail.service import MailDraftStore
 from server.tools.gmail.trigger import NEW_MAIL_GOAL, new_mail_content
 
@@ -74,7 +75,7 @@ INTERRUPTED_REASON = "上次进程退出时调用尚未结束，已记录中断"
 
 EXECUTION_RESULT_MESSAGE = "系统已完成你此前请求的操作，执行结果见系统提示。请向用户简要汇报。"
 EXECUTION_RESULT_MATERIAL_TITLE = "执行结果（外部操作已结束，请据此向用户汇报）"
-TARGET_DRAFT_MATERIAL_TITLE = "本轮指定修改的邮件草稿"
+TARGET_DRAFT_MATERIAL_TITLE = "本轮指定修改的待确认内容"
 
 
 def execution_result_content(
@@ -106,6 +107,7 @@ class GatewayRuntime:
         self.events = EventHub()
         self._sessions = SessionStore(path)
         self._drafts = MailDraftStore(path)
+        self._calendar_previews = CalendarPreviewStore(path)
         self._timeline = TimelineStore(path)
         self._active: dict[str, asyncio.Task] = {}
         self._sends: dict[str, asyncio.Task] = {}
@@ -153,13 +155,17 @@ class GatewayRuntime:
         self.require_gateway()
         target_operation_id = None
         if target is not None:
-            if target.get("kind") != "mail_draft" or not isinstance(
+            if target.get("kind") not in {"mail_draft", "calendar_preview"} or not isinstance(
                 target.get("operation_id"), str
             ):
                 raise ValueError("消息目标不合法")
             target_operation_id = target["operation_id"]
-            known = {item["operation_id"] for item in self._sessions.list_task_operations(task_id)}
-            if target_operation_id not in known:
+            known = {
+                item["operation_id"]: item["type"]
+                for item in self._sessions.list_task_operations(task_id)
+            }
+            expected_type = "calendar" if target["kind"] == "calendar_preview" else "mail"
+            if known.get(target_operation_id) != expected_type:
                 raise NotFoundError(target_operation_id)
         now = timestamp()
         run_id = str(uuid4())
@@ -291,10 +297,15 @@ class GatewayRuntime:
             target = payload.get("target")
             target_operation_id = target["operation_id"] if target is not None else None
             if target_operation_id is not None:
+                content = (
+                    self._drafts.get_draft(target_operation_id)
+                    if target["kind"] == "mail_draft"
+                    else self._calendar_previews.get_preview(target_operation_id)
+                )
                 material_items.append(
                     Material(
                         TARGET_DRAFT_MATERIAL_TITLE,
-                        self._drafts.get_draft(target_operation_id),
+                        content,
                     )
                 )
             materials = tuple(material_items)
@@ -358,7 +369,13 @@ class GatewayRuntime:
                 )
         elif kind == "draft_saved":
             with session(self.path) as conn, write(conn):
-                published["item_id"] = timeline.ensure_mail_draft(
+                operation = operations.operation(conn, event["operation_id"])
+                ensure = (
+                    timeline.ensure_calendar_preview
+                    if operation["type"] == "calendar"
+                    else timeline.ensure_mail_draft
+                )
+                published["item_id"] = ensure(
                     conn, row["task_id"], row["run_id"], event["operation_id"]
                 )
         elif kind == "done":

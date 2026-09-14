@@ -30,7 +30,7 @@ MCP_MOUNT_PATH = "/mcp"
 TOOL_SERVER_NAME = "pebble"
 TOOL_ERROR_MESSAGE = "工具执行失败"
 UNKNOWN_TOOL_MESSAGE = "本轮没有这个工具"
-TARGET_TOOL_MESSAGE = "本轮只能修改指定邮件草稿，不能新建或操作其他草稿"
+TARGET_TOOL_MESSAGE = "本轮只能读取或修改指定的待确认内容"
 
 
 class ToolServer:
@@ -121,9 +121,15 @@ async def invoke(
     """执行一次工具调用：业务失败按统一错误词汇交回模型，成功时把草稿事件入队。"""
     fields = dict(arguments)
     if target_operation_id is not None and (
-        definition.name in {"gmail_prepare_reply", "gmail_prepare_email"}
+        definition.name in {"gmail_prepare_reply", "gmail_prepare_email", "calendar_prepare_event"}
         or (
-            definition.name in {"gmail_read_draft", "gmail_update_draft"}
+            definition.name
+            in {
+                "gmail_read_draft",
+                "gmail_update_draft",
+                "calendar_read_preview",
+                "calendar_update_preview",
+            }
             and fields.get("operation_id") != target_operation_id
         )
     ):

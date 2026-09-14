@@ -629,7 +629,7 @@ def test_execution_record_constraints(stores):
             ),
             # 执行未结束时结果字段必须为空
             (
-                "UPDATE approval_executions SET message_id = 'm' WHERE operation_id = ?",
+                "UPDATE approval_executions SET result_json = '{}' WHERE operation_id = ?",
                 (operation["operation_id"],),
             ),
         ]

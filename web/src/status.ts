@@ -15,6 +15,8 @@ export const OPERATION_BADGES: Record<OperationStatus, Badge> = {
   pending: { tone: "wait", label: "待确认" },
   sending: { tone: "run", label: "执行中" },
   sent: { tone: "ok", label: "已发送" },
+  creating: { tone: "run", label: "创建中" },
+  created: { tone: "ok", label: "已创建" },
   failed: { tone: "err", label: "已失败" },
   unknown: { tone: "unk", label: "待核实" },
 };
@@ -34,7 +36,7 @@ export function taskBadge(latestRun: Run | null, operations: OperationSummary[])
   if (latestRun !== null && (latestRun.status === "pending" || latestRun.status === "running")) {
     return { tone: "run", label: "处理中" };
   }
-  if (operations.some((operation) => operation.status === "sending")) {
+  if (operations.some((operation) => operation.status === "sending" || operation.status === "creating")) {
     return { tone: "run", label: "执行中" };
   }
   if (operations.some((operation) => operation.status === "unknown")) {

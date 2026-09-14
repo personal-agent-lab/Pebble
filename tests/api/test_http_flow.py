@@ -387,7 +387,7 @@ def test_confirmation_rejects_draft_without_recipients(settings):
         assert response.status_code == 422
         assert response.json() == {
             "error": "invalid_draft",
-            "message": "邮件草稿未通过校验",
+            "message": "待确认内容未通过校验",
             "errors": [{"field": "to", "message": "收件人 (to) 不能为空，填写后才能发送"}],
         }
         assert calls == []

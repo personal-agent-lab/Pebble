@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -108,6 +108,55 @@ SCHEMA_V6 = (
     "ALTER TABLE task_timeline_items DROP COLUMN attachment_ids",
 )
 
+# 日历预览加入现有操作、确认和时间线模型；确认结果改为按域保存的统一 JSON。
+SCHEMA_V7 = (
+    SCHEMA_V1[1]
+    .replace("CREATE TABLE operations", "CREATE TABLE operations_new")
+    .replace("'sending','sent'", "'sending','sent','creating','created'"),
+    "INSERT INTO operations_new SELECT * FROM operations",
+    "DROP TABLE operations",
+    "ALTER TABLE operations_new RENAME TO operations",
+    "CREATE TABLE approval_executions_new (operation_id TEXT PRIMARY KEY "
+    "REFERENCES operations(operation_id), task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "version INTEGER NOT NULL CHECK(version >= 1), confirmed_at TEXT NOT NULL, "
+    "started_at TEXT, completed_at TEXT, result_json TEXT, "
+    "CHECK ((completed_at IS NULL) = (result_json IS NULL)))",
+    "INSERT INTO approval_executions_new "
+    "SELECT e.operation_id,e.task_id,e.version,e.confirmed_at,e.started_at,e.completed_at,"
+    "CASE WHEN e.completed_at IS NULL THEN NULL "
+    "WHEN e.message_id IS NOT NULL THEN json_object('status','sent','message_id',e.message_id) "
+    "ELSE json_object('status',o.status,'reason',e.reason) END "
+    "FROM approval_executions e JOIN operations o ON o.operation_id=e.operation_id",
+    "DROP TABLE approval_executions",
+    "ALTER TABLE approval_executions_new RENAME TO approval_executions",
+    "CREATE TABLE task_timeline_items_new (item_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "run_id TEXT NOT NULL REFERENCES agent_runs(run_id), "
+    "kind TEXT NOT NULL CHECK(kind IN ('text','mail_draft','calendar_preview','error')), "
+    "role TEXT CHECK(role IN ('user','assistant')), text TEXT, "
+    "operation_id TEXT REFERENCES operations(operation_id), created_at TEXT NOT NULL, "
+    "CHECK ((kind = 'text') = (role IS NOT NULL AND text IS NOT NULL)), "
+    "CHECK ((kind IN ('mail_draft','calendar_preview')) = (operation_id IS NOT NULL)), "
+    "CHECK (kind != 'error' OR (role IS NULL AND text IS NOT NULL)))",
+    "INSERT INTO task_timeline_items_new SELECT * FROM task_timeline_items",
+    "DROP TABLE task_timeline_items",
+    "ALTER TABLE task_timeline_items_new RENAME TO task_timeline_items",
+    "CREATE UNIQUE INDEX task_timeline_mail_draft ON task_timeline_items(task_id,operation_id) "
+    "WHERE kind='mail_draft'",
+    "CREATE UNIQUE INDEX task_timeline_calendar_preview "
+    "ON task_timeline_items(task_id,operation_id) "
+    "WHERE kind='calendar_preview'",
+    "CREATE TABLE calendar_previews (operation_id TEXT PRIMARY KEY "
+    "REFERENCES operations(operation_id), "
+    "calendar_id TEXT NOT NULL CHECK(calendar_id='primary'), account TEXT NOT NULL, "
+    "calendar_url TEXT NOT NULL)",
+    "CREATE TABLE calendar_preview_versions (operation_id TEXT NOT NULL "
+    "REFERENCES calendar_previews(operation_id), version INTEGER NOT NULL CHECK(version >= 1), "
+    "summary TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL, "
+    "all_day INTEGER NOT NULL CHECK(all_day IN (0,1)), location TEXT, description TEXT NOT NULL, "
+    "created_at TEXT NOT NULL, PRIMARY KEY(operation_id,version))",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -115,6 +164,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     4: SCHEMA_V4,
     5: SCHEMA_V5,
     6: SCHEMA_V6,
+    7: SCHEMA_V7,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000
@@ -171,6 +221,7 @@ def init_db(path: Path | None = None) -> int:
     target = path or get_settings().db_path
     target.parent.mkdir(parents=True, exist_ok=True)
     with session(target) as conn:
+        conn.execute("PRAGMA foreign_keys=OFF")
         with write(conn):
             conn.execute("CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL)")
             if conn.execute("SELECT COUNT(*) AS n FROM schema_meta").fetchone()["n"] == 0:
@@ -183,4 +234,7 @@ def init_db(path: Path | None = None) -> int:
                     conn.execute(statement)
             if current != SCHEMA_VERSION:
                 conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
+            if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise RuntimeError("Migration foreign key check failed")
+        conn.execute("PRAGMA foreign_keys=ON")
         return schema_version(conn)

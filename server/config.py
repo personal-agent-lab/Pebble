@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     gmail_credentials_path: Path | None = None
     gmail_token_path: Path | None = None
 
+    icloud_account: str | None = None
+    icloud_password_path: Path | None = None
+    icloud_calendar_url: str | None = None
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "pebble.db"

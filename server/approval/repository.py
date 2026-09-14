@@ -6,7 +6,7 @@ from server.errors import NotFoundError
 
 VIEW_SQL = (
     "SELECT o.operation_id, o.version, o.status, e.task_id AS execution_task_id, "
-    "e.version AS confirmed_version, e.confirmed_at, e.message_id, e.reason, e.completed_at, "
+    "e.version AS confirmed_version, e.confirmed_at, e.result_json, e.completed_at, "
     "e.started_at, t.sdk_session_id FROM operations o "
     "LEFT JOIN approval_executions e ON e.operation_id = o.operation_id "
     "LEFT JOIN tasks t ON t.task_id = e.task_id WHERE o.operation_id = ?"
@@ -45,14 +45,12 @@ def complete(
     conn: sqlite3.Connection,
     operation_id: str,
     *,
-    message_id: str | None,
-    reason: str | None,
+    result_json: str,
     completed_at: str,
 ) -> None:
     conn.execute(
-        "UPDATE approval_executions SET message_id = ?, reason = ?, completed_at = ? "
-        "WHERE operation_id = ?",
-        (message_id, reason, completed_at, operation_id),
+        "UPDATE approval_executions SET result_json = ?, completed_at = ? WHERE operation_id = ?",
+        (result_json, completed_at, operation_id),
     )
 
 

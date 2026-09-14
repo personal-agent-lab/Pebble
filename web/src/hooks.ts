@@ -116,7 +116,7 @@ export function useTaskDetail(taskId: string) {
     return subscribeEvents(taskId, onEvent, () => void reload());
   }, [taskId, reload]);
 
-  const executing = items.some((item) => item.kind === "mail_draft" && item.execution.status === "sending");
+  const executing = items.some((item) => (item.kind === "mail_draft" || item.kind === "calendar_preview") && ["sending", "creating"].includes(item.execution.status));
   usePolling(() => void reload(), EXECUTION_POLL_MS, executing);
 
   const send = useCallback(async (

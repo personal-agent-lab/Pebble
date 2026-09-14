@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 
 import { type ApiError, type MessageTarget, type TimelineItem } from "../api";
 import MailDraftCard from "./MailDraftCard";
+import CalendarPreviewCard from "./CalendarPreviewCard";
 import Markdown from "./Markdown";
 
 const STICK_PX = 48;
@@ -32,6 +33,7 @@ function contentSignature(items: TimelineItem[]): string {
   if (last === undefined) return "0";
   const growth = last.kind === "text" ? last.text.length
     : last.kind === "mail_draft" ? `${last.draft.version}:${last.execution.status}`
+    : last.kind === "calendar_preview" ? `${last.preview.version}:${last.execution.status}`
     : last.text.length;
   return `${items.length}:${last.item_id}:${growth}`;
 }
@@ -80,6 +82,8 @@ export default function TimelineFeed({ taskId, items, sendMessage, onChanged }: 
         <span className="error-text">本轮处理失败：{item.text}</span><span className="rule" />
       </div>;
       if (item.kind === "mail_draft") return <MailDraftCard key={item.item_id} taskId={taskId} item={item}
+        sendMessage={sendMessage} onChanged={onChanged} />;
+      if (item.kind === "calendar_preview") return <CalendarPreviewCard key={item.item_id} taskId={taskId} item={item}
         sendMessage={sendMessage} onChanged={onChanged} />;
       const agent = item.role === "assistant";
       const previous = items[index - 1];
