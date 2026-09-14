@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -61,7 +61,30 @@ SCHEMA_V3 = (
     "ALTER TABLE approval_executions ADD COLUMN started_at TEXT",
 )
 
-SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {1: SCHEMA_V1, 2: SCHEMA_V2, 3: SCHEMA_V3}
+# 新邮件与回复共用草稿表；回复的原邮件关联在迁移中原样保留。
+SCHEMA_V4 = (
+    "CREATE TABLE mail_drafts (operation_id TEXT PRIMARY KEY REFERENCES operations(operation_id), "
+    "kind TEXT NOT NULL CHECK(kind IN ('reply','new')), source_message_id TEXT UNIQUE, "
+    "thread_id TEXT, CHECK ((kind = 'reply') = "
+    "(source_message_id IS NOT NULL AND thread_id IS NOT NULL)))",
+    "CREATE TABLE mail_draft_versions (operation_id TEXT NOT NULL "
+    "REFERENCES mail_drafts(operation_id), version INTEGER NOT NULL CHECK(version >= 1), "
+    "recipients TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL, "
+    "created_at TEXT NOT NULL, PRIMARY KEY(operation_id, version))",
+    "INSERT INTO mail_drafts SELECT operation_id, 'reply', source_message_id, thread_id "
+    "FROM mail_reply_drafts",
+    "INSERT INTO mail_draft_versions SELECT * FROM mail_reply_versions",
+    "DROP TABLE mail_reply_versions",
+    "DROP TABLE mail_reply_drafts",
+    "UPDATE operations SET type = 'mail' WHERE type = 'mail_reply'",
+)
+
+SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
+    1: SCHEMA_V1,
+    2: SCHEMA_V2,
+    3: SCHEMA_V3,
+    4: SCHEMA_V4,
+}
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 

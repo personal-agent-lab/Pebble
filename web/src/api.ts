@@ -38,10 +38,11 @@ export type OperationSummary = {
 
 export type Draft = {
   operation_id: string;
+  kind: "reply" | "new";
   version: number;
   status: OperationStatus;
-  source_message_id: string;
-  thread_id: string;
+  source_message_id?: string;
+  thread_id?: string;
   to: string[];
   subject: string;
   body: string;
@@ -173,7 +174,7 @@ export const editDraft = (
   expectedVersion: number,
   fields: { to: string[]; subject: string; body: string },
 ) =>
-  request<{ operation_id: string; version: number }>(`/operations/${operationId}/draft`, {
+  request<{ operation_id: string; version: number; status: "pending" }>(`/operations/${operationId}/draft`, {
     method: "PATCH",
     body: JSON.stringify({ expected_version: expectedVersion, ...fields }),
   });

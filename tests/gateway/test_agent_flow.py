@@ -13,7 +13,7 @@ from server.db import init_db, session, write
 from server.errors import NotFoundError
 from server.gateway.runtime import INTERRUPTED_REASON, GatewayRuntime
 from server.sessions.service import SessionStore
-from server.tools.gmail.service import ReplyDraftStore
+from server.tools.gmail.service import MailDraftStore
 from tests.support import confirm
 from tests.support.agent_double import FakeAgentGateway
 
@@ -65,7 +65,7 @@ class Flow(NamedTuple):
     confirmations: ConfirmationService
     sender: Sender
     tasks: SessionStore
-    drafts: ReplyDraftStore
+    drafts: MailDraftStore
 
 
 @pytest.fixture
@@ -82,7 +82,7 @@ async def flow(settings):
             confirmations=confirmations,
             sender=sender,
             tasks=SessionStore(),
-            drafts=ReplyDraftStore(),
+            drafts=MailDraftStore(),
         )
     finally:
         await service.close()
@@ -149,7 +149,7 @@ async def test_user_request_saves_draft_without_sending(flow):
     assert call["message"] == "请帮我写回复"
     operations = flow.tasks.list_task_operations(task["task_id"])
     assert [(op["version"], op["status"]) for op in operations] == [(1, "pending")]
-    assert flow.drafts.get_reply_draft(operations[0]["operation_id"])["body"] == DRAFT["body"]
+    assert flow.drafts.get_draft(operations[0]["operation_id"])["body"] == DRAFT["body"]
     assert flow.sender.calls == []
     assert flow.service.get_run(run["run_id"])["status"] == "done"
 
@@ -466,7 +466,7 @@ async def test_result_variants_delivered_without_resend(flow, returned):
         calls.append(fields)
         return returned
 
-    flow.confirmations.send_reply = sender
+    flow.confirmations.send_message = sender
     for _ in range(2):
         flow.confirmations.accept_confirmation(task["task_id"], op["operation_id"], 1)
         flow.service.confirm_execution(op["operation_id"])

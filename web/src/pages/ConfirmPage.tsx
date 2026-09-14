@@ -116,7 +116,7 @@ function OperationEditor({ taskId, view, onChanged }: CardProps) {
       <div className="op-head">
         <div className="op-kind">
           {MAIL_ICON}
-          回复邮件草稿
+          {view.draft.kind === "new" ? "新邮件草稿" : "回复邮件草稿"}
         </div>
         <StatusBadge badge={operationBadge(status)} />
       </div>
@@ -315,7 +315,7 @@ export default function ConfirmPage() {
             <div className="empty">
               <div className="empty-title">没有待确认内容</div>
               <div className="empty-sub">
-                Agent 准备好回复草稿后会保存到这里；回到任务对话继续处理。
+                Agent 准备好邮件草稿后会保存到这里；回到任务对话继续处理。
               </div>
             </div>
           </div>

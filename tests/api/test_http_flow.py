@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from server.db import session
 from server.main import create_app
 from server.sessions.service import SessionStore
-from server.tools.gmail.service import ReplyDraftStore
+from server.tools.gmail.service import MailDraftStore
 from tests.support.agent_double import FakeAgentGateway
 from tests.support.gmail_double import send
 
@@ -30,7 +30,7 @@ def build_fixture_app() -> FastAPI:
     模拟邮件检测：启动时同一邮件重复投递，验证服务端持久去重。
     """
     gateway = FakeAgentGateway()
-    app = create_app(gateway=gateway, send_reply=send)
+    app = create_app(gateway=gateway, send_message=send)
 
     async def reply(turn):
         yield {"type": "session", "sdk_session_id": turn.sdk_session_id or "test-session"}
@@ -42,7 +42,7 @@ def build_fixture_app() -> FastAPI:
         }
         if operations:
             operation = operations[0]
-            saved = app.state.drafts.update_reply_draft(
+            saved = app.state.drafts.update_draft(
                 operation["operation_id"], operation["version"], **fields
             )
         else:
@@ -241,6 +241,7 @@ def test_http_sse_flow_and_process_restart(settings, outcome, monkeypatch):
         assert sent[0] == {
             "operation_id": oid,
             "version": 4,
+            "kind": "reply",
             "source_message_id": "fixture-mail",
             "thread_id": "fixture-thread",
             **final,
@@ -292,7 +293,7 @@ def test_missing_dependencies_reject_before_mutation(settings):
         assert (
             client.post(f"/api/tasks/{tid}/messages", json={"message": "你好"}).status_code == 503
         )
-        drafts = ReplyDraftStore()
+        drafts = MailDraftStore()
         op = drafts.save_reply_draft(tid, "m", "thread", ["a@example.com"], "主题", "正文")
         assert (
             client.post(
@@ -301,7 +302,7 @@ def test_missing_dependencies_reject_before_mutation(settings):
             ).status_code
             == 503
         )
-        assert drafts.get_reply_draft(op["operation_id"])["status"] == "pending"
+        assert drafts.get_draft(op["operation_id"])["status"] == "pending"
         with session() as conn:
             assert conn.execute("SELECT COUNT(*) FROM agent_runs").fetchone()[0] == 0
             assert conn.execute("SELECT COUNT(*) FROM approval_executions").fetchone()[0] == 0
@@ -320,7 +321,7 @@ def test_verification_route_upgrades_and_delivers(settings):
         calls.append(fields)
         return {"status": "sent", "message_id": "gmail-9"}
 
-    app = create_app(send_reply=send, verify_reply=verify)
+    app = create_app(send_message=send, verify_message=verify)
     with TestClient(app) as client:
         tid = client.post("/api/tasks", json={"goal": "测试"}).json()["task_id"]
         drafts = app.state.drafts
@@ -340,8 +341,16 @@ def test_verification_route_upgrades_and_delivers(settings):
         assert verified["status"] == "sent"
         assert verified["result"] == {"status": "sent", "message_id": "gmail-9"}
         assert verified["confirmation"] == unknown["confirmation"]
-        # 第二次调用是核实，不是重发：证据字段不含操作标识与版本。
-        assert set(calls[1]) == {"source_message_id", "thread_id", "to", "subject", "body"}
+        # 第二次调用是核实，不是重发；操作标识用来重建 Message-ID。
+        assert set(calls[1]) == {
+            "operation_id",
+            "kind",
+            "source_message_id",
+            "thread_id",
+            "to",
+            "subject",
+            "body",
+        }
 
         assert client.post(f"/api/operations/{oid}/verification").json() == verified
         assert len(calls) == 2
@@ -351,7 +360,7 @@ def test_verification_of_unconfirmed_operation_calls_nothing(settings):
     """只有待核实结果才需要核实：其余状态原样返回，不调用外部接口，也不需要核实依赖。"""
     with TestClient(create_app()) as client:
         tid = client.post("/api/tasks", json={"goal": "测试"}).json()["task_id"]
-        op = ReplyDraftStore().save_reply_draft(tid, "m", "t", ["a@example.com"], "主题", "正文")
+        op = MailDraftStore().save_reply_draft(tid, "m", "t", ["a@example.com"], "主题", "正文")
         oid = op["operation_id"]
 
         response = client.post(f"/api/operations/{oid}/verification")

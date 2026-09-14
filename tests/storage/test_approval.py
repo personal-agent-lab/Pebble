@@ -22,7 +22,7 @@ from server.errors import (
 )
 from server.main import create_app
 from server.sessions.service import SessionStore
-from server.tools.gmail.service import ReplyDraftStore
+from server.tools.gmail.service import MailDraftStore
 from tests.support import confirm
 
 FINAL = {
@@ -54,7 +54,7 @@ class Sender:
 @pytest.fixture
 def stores(settings):
     init_db()
-    return SessionStore(), ReplyDraftStore()
+    return SessionStore(), MailDraftStore()
 
 
 def prepare(stores, source="m1"):
@@ -73,7 +73,7 @@ def run_python(code: str, *args: str) -> subprocess.CompletedProcess:
 def test_confirm_sends_exact_confirmed_version(stores):
     task, operation = prepare(stores)
     drafts = stores[1]
-    second = drafts.update_reply_draft(
+    second = drafts.update_draft(
         operation["operation_id"], 1, **{**FINAL, "subject": "回复：活动邀请"}
     )
     final = {
@@ -81,7 +81,7 @@ def test_confirm_sends_exact_confirmed_version(stores):
         "subject": "回复：活动邀请（确认）",
         "body": "  最终版：\n\n我参加。\n",
     }
-    third = drafts.update_reply_draft(operation["operation_id"], second["version"], **final)
+    third = drafts.update_draft(operation["operation_id"], second["version"], **final)
     assert third["version"] == 3
 
     sender = Sender()
@@ -92,6 +92,7 @@ def test_confirm_sends_exact_confirmed_version(stores):
         {
             "operation_id": operation["operation_id"],
             "version": 3,
+            "kind": "reply",
             "source_message_id": "m1",
             "thread_id": "thread-1",
             "to": final["to"],
@@ -108,15 +109,47 @@ def test_confirm_sends_exact_confirmed_version(stores):
     assert response["result"] == {"status": "sent", "message_id": "sent-1"}
     assert service.get_execution(operation["operation_id"]) == response
 
-    assert drafts.get_reply_draft(operation["operation_id"], 1)["subject"] == FINAL["subject"]
-    assert drafts.get_reply_draft(operation["operation_id"], 1)["to"] == FINAL["to"]
-    assert drafts.get_reply_draft(operation["operation_id"], 2)["subject"] == "回复：活动邀请"
+    assert drafts.get_draft(operation["operation_id"], 1)["subject"] == FINAL["subject"]
+    assert drafts.get_draft(operation["operation_id"], 1)["to"] == FINAL["to"]
+    assert drafts.get_draft(operation["operation_id"], 2)["subject"] == "回复：活动邀请"
+
+
+def test_new_email_uses_same_versioned_confirmation(stores):
+    tasks, drafts = stores
+    task = tasks.create_task("给老师写邮件")
+    operation = drafts.save_email_draft(
+        task["task_id"], ["professor@example.edu"], "初稿主题", "初稿正文"
+    )
+    final = {
+        "to": ["professor@example.edu"],
+        "subject": "咨询见面时间",
+        "body": "老师您好，请问周五是否方便？",
+    }
+    version = drafts.update_draft(operation["operation_id"], 1, **final)
+    sender = Sender()
+
+    response = confirm(
+        ConfirmationService(sender), task["task_id"], operation["operation_id"], version["version"]
+    )
+
+    assert sender.calls == [
+        {
+            "operation_id": operation["operation_id"],
+            "version": 2,
+            "kind": "new",
+            "source_message_id": None,
+            "thread_id": None,
+            **final,
+        }
+    ]
+    assert response["status"] == "sent"
+    assert drafts.get_draft(operation["operation_id"])["kind"] == "new"
 
 
 def test_confirm_rejects_missing_objects_and_stale_version(stores):
     task, operation = prepare(stores)
     drafts = stores[1]
-    drafts.update_reply_draft(operation["operation_id"], 1, **FINAL)
+    drafts.update_draft(operation["operation_id"], 1, **FINAL)
     sender = Sender()
     service = ConfirmationService(sender)
 
@@ -195,7 +228,7 @@ def test_edit_and_confirm_race(stores):
     def try_edit() -> str:
         barrier.wait(timeout=5)
         try:
-            drafts.update_reply_draft(operation["operation_id"], 1, **edited)
+            drafts.update_draft(operation["operation_id"], 1, **edited)
             return "edited"
         except (NotEditableError, VersionConflictError) as error:
             return type(error).__name__
@@ -219,11 +252,11 @@ def test_edit_and_confirm_race(stores):
         assert sender.calls[0]["version"] == 1
         assert sender.calls[0]["body"] == FINAL["body"]
         assert edit_result == "NotEditableError"
-        assert drafts.get_reply_draft(operation["operation_id"])["body"] == FINAL["body"]
+        assert drafts.get_draft(operation["operation_id"])["body"] == FINAL["body"]
     else:
         assert confirm_result == "VersionConflictError"
         assert edit_result == "edited"
-        current = drafts.get_reply_draft(operation["operation_id"])
+        current = drafts.get_draft(operation["operation_id"])
         assert (current["version"], current["body"]) == (2, edited["body"])
 
 
@@ -328,7 +361,7 @@ def test_claim_rollback_leaves_no_trace(stores, monkeypatch):
     with pytest.raises(RuntimeError):
         confirm(service, task["task_id"], operation["operation_id"], 1)
     assert sender.calls == []
-    assert stores[1].get_reply_draft(operation["operation_id"])["status"] == "pending"
+    assert stores[1].get_draft(operation["operation_id"])["status"] == "pending"
     with session() as conn:
         assert conn.execute("SELECT COUNT(*) FROM approval_executions").fetchone()[0] == 0
 
@@ -530,10 +563,10 @@ def test_upgrade_from_v1_preserves_records(settings):
             )
 
     assert init_db() == SCHEMA_VERSION
-    tasks, drafts = SessionStore(), ReplyDraftStore()
+    tasks, drafts = SessionStore(), MailDraftStore()
     assert tasks.get_task("t1")["sdk_session_id"] == "sdk-old"
-    assert drafts.get_reply_draft("o1", 1)["body"] == "第一版"
-    assert drafts.get_reply_draft("o1", 2)["body"] == "第二版"
+    assert drafts.get_draft("o1", 1)["body"] == "第一版"
+    assert drafts.get_draft("o1", 2)["body"] == "第二版"
 
     sender = Sender()
     response = confirm(ConfirmationService(sender), "t1", "o1", 2)
@@ -541,10 +574,10 @@ def test_upgrade_from_v1_preserves_records(settings):
     assert response["confirmation"]["task_id"] == "t1"
 
     assert init_db() == SCHEMA_VERSION
-    assert drafts.get_reply_draft("o1", 1)["body"] == "第一版"
+    assert drafts.get_draft("o1", 1)["body"] == "第一版"
     assert ConfirmationService(sender).get_execution("o1") == response
     assert tasks.list_task_operations("t1") == [
-        {"operation_id": "o1", "type": "mail_reply", "version": 2, "status": "sent"}
+        {"operation_id": "o1", "type": "mail", "version": 2, "status": "sent"}
     ]
 
 
@@ -613,8 +646,16 @@ def test_verify_upgrades_unknown_to_sent_with_confirmed_content(stores):
 
     assert verified["status"] == "sent"
     assert verified["result"] == {"status": "sent", "message_id": "gmail-9"}
-    # 核实只拿已确认版本的内容做证据，不带操作标识与版本，也不触发发送。
-    assert verifier.calls == [{"source_message_id": "m1", "thread_id": "thread-1", **FINAL}]
+    # 核实只拿已确认版本的内容做证据，操作标识用来重建 Message-ID。
+    assert verifier.calls == [
+        {
+            "operation_id": operation["operation_id"],
+            "kind": "reply",
+            "source_message_id": "m1",
+            "thread_id": "thread-1",
+            **FINAL,
+        }
+    ]
     assert verified["confirmation"]["task_id"] == task["task_id"]
 
 

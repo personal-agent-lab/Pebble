@@ -1,79 +1,79 @@
-"""tests/test_gmail_tools.py: 测试 Gmail 只读查询工具与注册属性。"""
+"""Gmail 只读工具的统一输出与附件交付。"""
 
 from server.tools.gmail.tools import (
-    format_thread_transcript,
+    get_attachment,
     get_email_detail,
     get_email_thread,
-    query_emails,
+    search_emails,
 )
-from server.tools.registry import SideEffect, default_registry
+from server.tools.registry import SideEffect, ToolFileResult, default_registry
 from tests.support.gmail_double import MockGmailClient
 
 
 def test_gmail_tools_registered_as_readonly() -> None:
-    tool_names = ["gmail_query_emails", "gmail_get_thread", "gmail_get_message"]
-    for name in tool_names:
-        t = default_registry.get_tool(name)
-        assert t is not None
-        assert t.side_effect == SideEffect.READONLY
-        assert t.description != ""
+    for name in ("gmail_search", "gmail_get_thread", "gmail_get_message", "gmail_get_attachment"):
+        definition = default_registry.get_tool(name)
+        assert definition is not None
+        assert definition.side_effect == SideEffect.READONLY
 
 
-def test_query_emails_returns_summaries() -> None:
-    gmail = MockGmailClient()
-    results = query_emails(query="评审", gmail=gmail)
-
+def test_search_returns_uniform_message_summaries() -> None:
+    results = search_emails(query="评审", gmail=MockGmailClient())
     assert len(results) == 1
-    item = results[0]
-    assert item["id"] == "msg_invite_001"
-    assert item["thread_id"] == "thread_invite_001"
-    assert item["from"] == "Alice <alice@example.com>"
-    assert "架构讨论" in item["subject"]
-    assert "诚邀" in item["snippet"]
+    assert results[0] == {
+        "message_id": "msg_invite_001",
+        "thread_id": "thread_invite_001",
+        "rfc_message_id": "<invite-001@example.com>",
+        "from": "Alice <alice@example.com>",
+        "to": ["user@example.com"],
+        "cc": [],
+        "subject": "项目进展评审与架构讨论邀请",
+        "snippet": "诚邀您参加下周二下午 2 点的项目进展评审会议...",
+        "received_at": "2026-09-12T10:00:00+08:00",
+        "attachments": [
+            {
+                "attachment_id": "attachment_invite_001",
+                "filename": "会议说明.txt",
+                "mime_type": "text/plain",
+                "size": 30,
+            }
+        ],
+    }
 
 
-def test_get_email_thread_returns_structured_and_transcript_context() -> None:
+def test_get_thread_returns_each_message_once() -> None:
     gmail = MockGmailClient()
-    # 模拟在线程内已有一轮回复
-    gmail.raw_send_reply(
+    gmail.raw_send_message(
         to=["alice@example.com"],
         subject="Re: 项目进展评审与架构讨论邀请",
         body="确认可以按时出席会议。",
         thread_id="thread_invite_001",
         in_reply_to_rfc_id="<invite-001@example.com>",
     )
-
-    thread_data = get_email_thread(thread_id="thread_invite_001", gmail=gmail)
-
-    assert thread_data["thread_id"] == "thread_invite_001"
-    assert thread_data["total_messages"] == 2
-
-    # 验证结构化列表按顺序排序
-    msgs = thread_data["messages"]
-    assert len(msgs) == 2
-    assert msgs[0]["sequence"] == 1
-    assert msgs[0]["id"] == "msg_invite_001"
-    assert msgs[1]["sequence"] == 2
-    assert msgs[1]["id"].startswith("mock_sent_")
-
-    # 验证时间线文本（注入模型上下文）
-    transcript = thread_data["transcript"]
-    assert "共 2 封" in transcript
-    assert "【第 1 封往来" in transcript
-    assert "发件人: Alice <alice@example.com>" in transcript
-    assert "【第 2 封往来" in transcript
-    assert "确认可以按时出席会议。" in transcript
+    result = get_email_thread(thread_id="thread_invite_001", gmail=gmail)
+    assert set(result) == {"thread_id", "messages"}
+    assert [item["message_id"] for item in result["messages"]] == [
+        "msg_invite_001",
+        gmail.sent_log[0]["id"],
+    ]
+    assert result["messages"][1]["body"] == "确认可以按时出席会议。"
 
 
-def test_format_thread_transcript_empty() -> None:
-    assert "暂无" in format_thread_transcript([])
-
-
-def test_get_email_detail_returns_single_message() -> None:
-    gmail = MockGmailClient()
-    detail = get_email_detail(message_id="msg_invite_001", gmail=gmail)
-
-    assert detail["id"] == "msg_invite_001"
-    assert detail["from"] == "Alice <alice@example.com>"
+def test_get_message_includes_attachment_metadata() -> None:
+    detail = get_email_detail(message_id="msg_invite_001", gmail=MockGmailClient())
+    assert detail["message_id"] == "msg_invite_001"
     assert detail["to"] == ["user@example.com"]
     assert "第二会议室" in detail["body"]
+    assert detail["attachments"][0]["attachment_id"] == "attachment_invite_001"
+
+
+def test_get_attachment_returns_original_file() -> None:
+    result = get_attachment(
+        message_id="msg_invite_001",
+        attachment_id="attachment_invite_001",
+        gmail=MockGmailClient(),
+    )
+    assert isinstance(result, ToolFileResult)
+    assert result.filename == "会议说明.txt"
+    assert result.mime_type == "text/plain"
+    assert result.data == "请提前准备项目进展。".encode()

@@ -19,8 +19,8 @@ from server.config import Settings
 from server.db import init_db
 from server.main import create_app
 from server.sessions.service import SessionStore
-from server.tools.gmail.sender import send_reply
-from server.tools.gmail.service import ReplyDraftStore
+from server.tools.gmail.sender import send_message
+from server.tools.gmail.service import MailDraftStore
 from server.tools.gmail.sync import GmailSource
 from tests.support.gmail_double import MockGmailClient
 from tests.support.mcp_http import mcp_session, tool_payload
@@ -30,7 +30,7 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
     """从新邮件分析到用户确认发送：脚本化 SDK 经工具端点调用真实工具，其余全是真的。"""
     init_db()
     tasks = SessionStore()
-    drafts = ReplyDraftStore()
+    drafts = MailDraftStore()
     gmail = MockGmailClient()
     tool_server = ToolServer()
     gateway = QoderGateway(
@@ -83,7 +83,6 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
                         "gmail_prepare_reply",
                         {
                             "source_message_id": "msg_invite_001",
-                            "thread_id": "thread_invite_001",
                             "to": ["alice@example.com"],
                             "subject": "Re: 邀请",
                             "body": "谢谢邀请。",
@@ -93,10 +92,10 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
                 yield self.say("草稿已保存，请审核。")
             elif self.message == "询问会议链接":
                 current = await self.call(
-                    "gmail_read_reply_draft", {"operation_id": operation["operation_id"]}
+                    "gmail_read_draft", {"operation_id": operation["operation_id"]}
                 )
                 await self.call(
-                    "gmail_update_reply_draft",
+                    "gmail_update_draft",
                     {
                         "operation_id": current["operation_id"],
                         "expected_version": current["version"],
@@ -114,7 +113,7 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
     monkeypatch.setattr(agent_client, "QoderSDKClient", SDK)
     app = create_app(
         gateway=gateway,
-        send_reply=partial(send_reply, client=gmail),
+        send_message=partial(send_message, client=gmail),
         tasks=tasks,
         drafts=drafts,
         tool_server=tool_server,
@@ -146,7 +145,7 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
             assert response.status_code == 202
             wait()
         oid = operation["operation_id"]
-        current = drafts.get_reply_draft(oid)
+        current = drafts.get_draft(oid)
         assert current["version"] == 2
         assert "会议链接" in current["body"]
         assert not gmail.sent_log
@@ -156,7 +155,7 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
             f"/api/operations/{oid}/draft", json={"expected_version": 2, **edited}
         )
         assert response.status_code == 200, response.text
-        assert drafts.get_reply_draft(oid, 1)["body"] == "谢谢邀请。"
+        assert drafts.get_draft(oid, 1)["body"] == "谢谢邀请。"
         endpoint = f"/api/tasks/{tid}/confirmations"
         assert http.post(endpoint, json={"operation_id": oid, "version": 2}).status_code == 409
         assert not gmail.sent_log
@@ -214,7 +213,7 @@ def test_tools_bind_assembled_dependencies_without_global_state(settings, tmp_pa
         path = tmp_path / f"{name}.db"
         init_db(path)
         tasks = SessionStore(path)
-        drafts = ReplyDraftStore(path)
+        drafts = MailDraftStore(path)
         task_id = tasks.create_task(f"{name} 的任务")["task_id"]
         tools = {
             definition.name: definition
@@ -229,7 +228,6 @@ def test_tools_bind_assembled_dependencies_without_global_state(settings, tmp_pa
         saved.append(
             tools["gmail_prepare_reply"](
                 source_message_id="msg_invite_001",
-                thread_id="thread_invite_001",
                 to=["alice@example.com"],
                 subject="Re: 邀请",
                 body=f"{name} 的草稿。",
@@ -240,4 +238,4 @@ def test_tools_bind_assembled_dependencies_without_global_state(settings, tmp_pa
     # 同一原邮件在两套装配里各自建立操作，说明去重作用于各自的存储而不是进程全局。
     assert saved[0]["operation_id"] != saved[1]["operation_id"]
     for (name, _, drafts, _), result in zip(toolsets, saved, strict=True):
-        assert drafts.get_reply_draft(result["operation_id"])["body"] == f"{name} 的草稿。"
+        assert drafts.get_draft(result["operation_id"])["body"] == f"{name} 的草稿。"

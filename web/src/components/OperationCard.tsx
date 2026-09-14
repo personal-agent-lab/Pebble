@@ -28,7 +28,7 @@ export default function OperationCard({ taskId, view }: Props) {
     <div className="op-card" data-component="PendingOpCard">
       <div className="op-head">
         {MAIL_ICON}
-        <span className="t">回复邮件草稿</span>
+        <span className="t">{draft?.kind === "new" ? "新邮件草稿" : "回复邮件草稿"}</span>
         <StatusBadge badge={operationBadge(status)} />
       </div>
       <div className="op-body">

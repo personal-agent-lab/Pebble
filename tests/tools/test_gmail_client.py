@@ -49,9 +49,9 @@ def test_mock_client_search_messages() -> None:
     assert len(empty_results) == 0
 
 
-def test_mock_client_raw_send_reply_and_verify() -> None:
+def test_mock_client_raw_send_message_and_verify() -> None:
     client = MockGmailClient()
-    res = client.raw_send_reply(
+    res = client.raw_send_message(
         to=["alice@example.com"],
         subject="Re: 项目进展评审与架构讨论邀请",
         body="确认可以按时出席会议。",
@@ -263,6 +263,46 @@ def test_google_api_client_nested_multipart_parsing() -> None:
     assert msg.body_text == "嵌套纯文本正文"
 
 
+def test_google_api_client_reads_nested_attachment() -> None:
+    mock_service = MagicMock()
+    client = GoogleApiGmailClient(
+        credentials_path=MagicMock(),
+        token_path=MagicMock(),
+        service=mock_service,
+    )
+    raw_payload = {
+        "id": "message-attachment",
+        "threadId": "thread-attachment",
+        "payload": {
+            "mimeType": "multipart/mixed",
+            "headers": [],
+            "parts": [
+                {
+                    "mimeType": "application/pdf",
+                    "filename": "invoice.pdf",
+                    "body": {"attachmentId": "attachment-1", "size": 12},
+                }
+            ],
+        },
+    }
+    mock_service.users().messages().get().execute.return_value = raw_payload
+    mock_service.users().messages().attachments().get().execute.return_value = {
+        "data": base64.urlsafe_b64encode(b"pdf-content").decode().rstrip("=")
+    }
+
+    message = client.get_message("message-attachment")
+    assert message.attachments[0].filename == "invoice.pdf"
+    attachment = client.get_attachment("message-attachment", "attachment-1")
+    assert attachment.mime_type == "application/pdf"
+    assert attachment.size == len(b"pdf-content")
+    assert attachment.data == b"pdf-content"
+    assert mock_service.users().messages().attachments().get.call_args.kwargs == {
+        "userId": "me",
+        "messageId": "message-attachment",
+        "id": "attachment-1",
+    }
+
+
 def test_google_api_client_send_raw_message_passes_thread_and_raw() -> None:
     """真实客户端只投递 sender 构建好的报文，不自行拼装邮件头。"""
     mock_service = MagicMock()
@@ -294,7 +334,7 @@ def test_google_api_client_send_raw_message_passes_thread_and_raw() -> None:
 
 def test_client_protocol_excludes_unconfirmed_send_paths() -> None:
     """生产客户端不提供绕开确认内容的发送入口，也不按主题猜测发送结果。"""
-    for name in ("raw_send_reply", "verify_message_sent"):
+    for name in ("raw_send_message", "verify_message_sent"):
         assert not hasattr(GoogleApiGmailClient, name)
         assert name not in BaseGmailClient.__protocol_attrs__
 

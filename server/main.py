@@ -16,17 +16,17 @@ from server.approval.service import ConfirmationService
 from server.db import init_db
 from server.gateway.runtime import GatewayRuntime, MailSource
 from server.sessions.service import SessionStore
-from server.tools.gmail.service import ReplyDraftStore
+from server.tools.gmail.service import MailDraftStore
 
 
 def create_app(
     *,
     gateway=None,
-    send_reply=None,
-    verify_reply=None,
+    send_message=None,
+    verify_message=None,
     mail_source: MailSource | None = None,
     tasks: SessionStore | None = None,
-    drafts: ReplyDraftStore | None = None,
+    drafts: MailDraftStore | None = None,
     tool_server: ToolServer | None = None,
 ) -> FastAPI:
     """装配应用。
@@ -35,8 +35,8 @@ def create_app(
     而工具要在构造 gateway 之前绑定依赖。未传入时就地构造。
     """
     tasks = tasks if tasks is not None else SessionStore()
-    drafts = drafts if drafts is not None else ReplyDraftStore()
-    confirmations = ConfirmationService(send_reply, verify_reply)
+    drafts = drafts if drafts is not None else MailDraftStore()
+    confirmations = ConfirmationService(send_message, verify_message)
     agent = GatewayRuntime(gateway, confirmations=confirmations)
 
     @asynccontextmanager
@@ -75,12 +75,12 @@ def create_production_app() -> FastAPI:
     from server.agent.toolset import ToolDeps
     from server.config import get_settings
     from server.tools.gmail.client import create_gmail_client
-    from server.tools.gmail.sender import send_reply, verify_reply
+    from server.tools.gmail.sender import send_message, verify_message
     from server.tools.gmail.sync import GmailSource
 
     settings = get_settings()
     tasks = SessionStore()
-    drafts = ReplyDraftStore()
+    drafts = MailDraftStore()
     # 三处用途各自构造客户端：检测在自己的顺序轮询里，工具随模型并发调用，发送与核实同为
     # Confirmation 串行调用故共用一个；不共享其余 HTTP 连接，凭证缺失在这里就失败。
     tool_client = create_gmail_client(settings)
@@ -90,8 +90,8 @@ def create_production_app() -> FastAPI:
         gateway=QoderGateway(
             ToolDeps(drafts=drafts, tasks=tasks, gmail=tool_client), tool_server, settings=settings
         ),
-        send_reply=partial(send_reply, client=confirmation_client),
-        verify_reply=partial(verify_reply, client=confirmation_client),
+        send_message=partial(send_message, client=confirmation_client),
+        verify_message=partial(verify_message, client=confirmation_client),
         mail_source=GmailSource(create_gmail_client(settings)),
         tasks=tasks,
         drafts=drafts,

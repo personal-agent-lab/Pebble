@@ -13,7 +13,7 @@ from server.config import get_settings
 from server.db import schema_version, session
 from server.gateway.runtime import GatewayRuntime
 from server.sessions.service import SessionStore
-from server.tools.gmail.service import ReplyDraftStore
+from server.tools.gmail.service import MailDraftStore
 
 
 def get_tasks(request: Request) -> SessionStore:
@@ -24,7 +24,7 @@ def get_agent(request: Request) -> GatewayRuntime:
     return request.app.state.agent
 
 
-def get_drafts(request: Request) -> ReplyDraftStore:
+def get_drafts(request: Request) -> MailDraftStore:
     return request.app.state.drafts
 
 
@@ -38,7 +38,7 @@ Tasks = Annotated[SessionStore, Depends(get_tasks)]
 Agent = Annotated[GatewayRuntime, Depends(get_agent)]
 
 
-Drafts = Annotated[ReplyDraftStore, Depends(get_drafts)]
+Drafts = Annotated[MailDraftStore, Depends(get_drafts)]
 
 
 Confirmations = Annotated[ConfirmationService, Depends(get_confirmations)]
@@ -154,7 +154,7 @@ class ConfirmationInput(BaseModel):
 
 @router.get("/operations/{operation_id}/draft", tags=["approvals"])
 def read_draft(operation_id: str, drafts: Drafts, version: int | None = None) -> dict:
-    return drafts.get_reply_draft(operation_id, version)
+    return drafts.get_draft(operation_id, version)
 
 
 @router.patch("/operations/{operation_id}/draft", tags=["approvals"])
@@ -164,7 +164,7 @@ def edit_draft(operation_id: str, body: DraftEdit, drafts: Drafts) -> dict:
     工具路径另有归属检查，限制模型只能读写本会话任务的草稿，防邮件正文里的指令越界；
     那不是用户授权检查，与本接口不同是有意的。用户身份检查随正式 Web 接入一起补。
     """
-    return drafts.update_reply_draft(
+    return drafts.update_draft(
         operation_id, body.expected_version, list(body.to), body.subject, body.body
     )
 

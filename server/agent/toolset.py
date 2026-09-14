@@ -20,7 +20,7 @@ from inspect import Parameter, signature
 
 from server.sessions.service import SessionStore
 from server.tools.gmail.client import BaseGmailClient
-from server.tools.gmail.service import ReplyDraftStore
+from server.tools.gmail.service import MailDraftStore
 from server.tools.registry import SideEffect, ToolDefinition, ToolRegistry, default_registry
 
 
@@ -44,7 +44,7 @@ ALLOWED_EFFECTS: dict[TurnKind, frozenset[SideEffect]] = {
 class ToolDeps:
     """工具运行所需的装配依赖，一个字段对应一类服务。"""
 
-    drafts: ReplyDraftStore
+    drafts: MailDraftStore
     tasks: SessionStore
     gmail: BaseGmailClient
 

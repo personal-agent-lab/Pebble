@@ -1,10 +1,11 @@
-"""tests/test_gmail_validator.py: 测试 Gmail 回复草稿业务校验纯函数。"""
+"""tests/test_gmail_validator.py: 测试 Gmail 邮件草稿业务校验纯函数。"""
 
-from server.tools.gmail.service import is_valid_email_address, validate_reply_draft
+from server.tools.gmail.service import is_valid_email_address, validate_mail_draft
 
 
-def test_validate_reply_draft_valid_inputs() -> None:
-    res = validate_reply_draft(
+def test_validate_mail_draft_valid_inputs() -> None:
+    res = validate_mail_draft(
+        kind="reply",
         source_message_id="msg_123",
         thread_id="thread_456",
         to=["recipient@example.com"],
@@ -16,8 +17,9 @@ def test_validate_reply_draft_valid_inputs() -> None:
     assert res["errors"] == []
 
 
-def test_validate_reply_draft_valid_multiple_and_rfc_addresses() -> None:
-    res = validate_reply_draft(
+def test_validate_mail_draft_valid_multiple_and_rfc_addresses() -> None:
+    res = validate_mail_draft(
+        kind="reply",
         source_message_id="msg_123",
         thread_id="thread_456",
         to=["Alice <alice@example.com>", "bob.smith+tag@work-domain.co.uk"],
@@ -29,8 +31,9 @@ def test_validate_reply_draft_valid_multiple_and_rfc_addresses() -> None:
     assert res["errors"] == []
 
 
-def test_validate_reply_draft_rejects_string_recipients() -> None:
-    res = validate_reply_draft(
+def test_validate_mail_draft_rejects_string_recipients() -> None:
+    res = validate_mail_draft(
+        kind="reply",
         source_message_id="msg_123",
         thread_id="thread_456",
         to="user1@example.com, user2@example.com",
@@ -42,9 +45,10 @@ def test_validate_reply_draft_rejects_string_recipients() -> None:
     assert [error["field"] for error in res["errors"]] == ["to"]
 
 
-def test_validate_reply_draft_missing_source_or_thread_id() -> None:
+def test_validate_mail_draft_missing_source_or_thread_id() -> None:
     # 缺失测试
-    res = validate_reply_draft(
+    res = validate_mail_draft(
+        kind="reply",
         source_message_id="   ",
         thread_id="",
         to=["recipient@example.com"],
@@ -58,7 +62,8 @@ def test_validate_reply_draft_missing_source_or_thread_id() -> None:
     assert "thread_id" in fields
 
     # 包含空白非法字符测试
-    res_invalid_chars = validate_reply_draft(
+    res_invalid_chars = validate_mail_draft(
+        kind="reply",
         source_message_id="msg id with spaces",
         thread_id="thread\tid",
         to=["recipient@example.com"],
@@ -70,9 +75,10 @@ def test_validate_reply_draft_missing_source_or_thread_id() -> None:
     assert any("不合法" in m for m in err_msgs)
 
 
-def test_validate_reply_draft_empty_or_invalid_recipient() -> None:
+def test_validate_mail_draft_empty_or_invalid_recipient() -> None:
     # 1. 空收件人
-    res_empty = validate_reply_draft(
+    res_empty = validate_mail_draft(
+        kind="reply",
         source_message_id="msg_123",
         thread_id="thread_456",
         to=[],
@@ -83,7 +89,8 @@ def test_validate_reply_draft_empty_or_invalid_recipient() -> None:
     assert any(e["field"] == "to" for e in res_empty["errors"])
 
     # 2. 格式非法的收件人
-    res_malformed = validate_reply_draft(
+    res_malformed = validate_mail_draft(
+        kind="reply",
         source_message_id="msg_123",
         thread_id="thread_456",
         to=["valid@example.com", "not-an-email", "@missing-user.com"],
@@ -95,8 +102,9 @@ def test_validate_reply_draft_empty_or_invalid_recipient() -> None:
     assert len(to_errors) == 2
 
 
-def test_validate_reply_draft_empty_subject_and_body() -> None:
-    res = validate_reply_draft(
+def test_validate_mail_draft_empty_subject_and_body() -> None:
+    res = validate_mail_draft(
+        kind="reply",
         source_message_id="msg_123",
         thread_id="thread_456",
         to=["recipient@example.com"],
@@ -110,16 +118,17 @@ def test_validate_reply_draft_empty_subject_and_body() -> None:
     assert "body" in fields
 
 
-def test_validate_reply_draft_is_pure_function() -> None:
+def test_validate_mail_draft_is_pure_function() -> None:
     args = {
+        "kind": "reply",
         "source_message_id": "msg_123",
         "thread_id": "thread_456",
         "to": ["user@example.com"],
         "subject": "主题",
         "body": "正文",
     }
-    res1 = validate_reply_draft(**args)
-    res2 = validate_reply_draft(**args)
+    res1 = validate_mail_draft(**args)
+    res2 = validate_mail_draft(**args)
     assert res1 == res2
     assert res1["valid"] is True
 

@@ -28,6 +28,21 @@ class SideEffect(StrEnum):
 
 
 @dataclass(frozen=True)
+class ToolFileResult:
+    """工具返回的文件。
+
+    结构化信息作为文本交给 Agent，原始字节作为文件内容交付，
+    避免把大段 base64 当普通文本塞进模型上下文。
+    """
+
+    uri: str
+    filename: str
+    mime_type: str
+    data: bytes
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class ToolDefinition:
     """结构化工具定义。"""
 

@@ -74,7 +74,7 @@ Pebble/
 │   │   ├── registry.py       # 工具定义、副作用声明与统一注册
 │   │   ├── gmail/
 │   │   │   ├── tools.py      # 给模型的查询与草稿工具
-│   │   │   ├── service.py    # 回复草稿的业务校验、存储与版本去重
+│   │   │   ├── service.py    # 邮件草稿的业务校验、存储与版本管理
 │   │   │   ├── sender.py     # 确认后发送与结果核实，只由 Confirmation 调用
 │   │   │   ├── client.py     # Gmail 协议与认证
 │   │   │   └── sync.py       # Gmail 增量检测与游标
@@ -140,7 +140,7 @@ Gmail、Calendar、Personal KB 都通过相同入口注册，没有专属于某�
 
 | 工具 | 首版能力与关键约束 |
 | --- | --- |
-| Gmail | 查询邮件及线程、准备回复、确认后发送、核实发送结果；回复草稿保存在本地；按来信身份保存处理和发送记录 |
+| Gmail | 搜索邮件，读取单封、完整往来及附件，准备回复或主动新邮件，确认后发送并核实结果；草稿保存在本地 |
 | Calendar | 查询 iCloud 日程、检查冲突、准备预览、确认后创建；正确处理时区和已有重复/全天日程；执行前检查目标时间 |
 | Personal KB | 保存、索引、检索和更新资料，归档任务来源及结果；引用带资料版本和原文位置，更新后旧引用仍可定位 |
 
@@ -164,7 +164,7 @@ Gmail、Calendar、Personal KB 都通过相同入口注册，没有专属于某�
 
 程序通过数据库原子状态更新取得执行权，随后在事务外调用工具。重复确认返回已有状态，不能重复调用。确认和执行不依赖浏览器连接保持打开。SDK 工具权限不代替业务确认；等待用户时返回已保存的待确认状态，不让权限回调一直等待浏览器端响应。执行结果保存后作为输入交回对应 Agent 会话。
 
-邮件回复的确认执行在 `approval/` 中实现，记录保存在 `approval_executions`（schema 2 建立，schema 3 增加发送开始时间）：操作标识为主键，记录首次成功确认的任务（结果回传目标）、确认版本、确认时间及结果字段；操作状态仍用 `operations.status`，不复制一套状态。一次确认按以下顺序处理：
+邮件的确认执行在 `approval/` 中实现，新邮件与回复共用 `approval_executions`（schema 2 建立，schema 3 增加发送开始时间）：操作标识为主键，记录首次成功确认的任务（结果回传目标）、确认版本、确认时间及结果字段；操作状态仍用 `operations.status`，不复制一套状态。一次确认按以下顺序处理：
 
 1. 写事务内检查任务与操作存在、确认版本等于当前版本；已有执行记录时直接返回已有状态，不再次发送。
 2. 首次确认要求操作处于 `pending`：同一事务写入确认记录并将状态置为 `sending`，随后返回已接受状态。
@@ -276,7 +276,7 @@ HTTP/SSE 断开不取消工作。同步发送通过 `asyncio.to_thread`，正常
 待处理输入继续运行；已有确认但进程遗留未完成的发送不自动重发：已经调用过发送函数的记
 unknown 等待核实，`started_at` 仍为空即从未进入执行阶段，是明确未发送，记 failed。
 
-schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`。
+schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`。schema 4 将回复专用草稿表收敛为新邮件与回复共用的 `mail_drafts` 和 `mail_draft_versions`。
 接受确认与后台开始发送分别原子处理，发送开始标记防止重复调用；保存发送结果和登记一次
 回传共用事务。Confirmation 依赖 sessions 的调用记录存取，不依赖 SDK 或 api 实现。
 Agent 历史由 SDK 的 read_history 返回；Gateway 不保存另一份模型对话历史。
@@ -315,7 +315,7 @@ DependencyUnavailableError。
 
 ### 工具装配当前实现
 
-回复草稿的业务校验是本仓纯函数，不设注入接口：`ReplyDraftStore` 直接调用，测试需要控制校验
+新邮件与回复草稿共用同一业务校验和 `MailDraftStore`，不设注入接口；测试需要控制校验
 时机或结果时替换模块属性。工具实现把 Gmail 客户端、草稿存储和任务存储声明为仅关键字参数，
 参数名与 `agent/toolset.py` 的 `ToolDeps` 字段一致，装配期按名字绑定，registry 不把仅关键字
 参数放进模型可见的 schema。进程内没有工具依赖的全局单例：
@@ -324,13 +324,13 @@ Gmail 客户端是必需的装配参数，测试显式注入替身。
 
 工具清单与模型可见范围都由注册时的副作用声明决定，不是手写清单：`agent/toolset.py` 遍历注册表
 绑定依赖，声明了无法装配的依赖在装配期就失败；筛选只有 `agent/toolset.py` 的 `exposed_tools` 一处，
-EXTERNAL_WRITE 不在任何一轮的允许集合内，新邮件轮只允许 READONLY。回复草稿的业务校验只在 `ReplyDraftStore` 内做一次，且在按原邮件去重
+EXTERNAL_WRITE 不在任何一轮的允许集合内，新邮件轮只允许 READONLY。草稿业务校验只在 `MailDraftStore` 内做一次；回复草稿在按原邮件去重
 之后，符合契约 §4 复用已有操作时候选内容不参与校验。工具端点（`agent/mcp.py`）把已实现的契约错误按
 `server/errors.py` 的名称与字段交回模型，与 HTTP 响应体同一套词汇；调用不在当轮清单里的工具按
 不存在处理，不解释原因。
 
-发送结果为 unknown 时由 `Confirmation.verify_pending` 用 Gmail 的 `verify_reply` 只读核实：输入是
-已确认版本的内容证据，不含操作标识与版本，也不重发。查不到不等于未发送，所以核实只把 unknown
+发送结果为 unknown 时由 `Confirmation.verify_pending` 用 Gmail 的 `verify_message` 只读核实：输入是
+已确认版本的内容证据和用于重建确定 Message-ID 的操作标识，不重发。查不到不等于未发送，所以核实只把 unknown
 升级为 sent，不下明确失败的结论；升级后的结果按核实专用去重键另登记一次回传，原结果的回传
 尚未结束时不再登记。核实由 `POST /operations/{operation_id}/verification` 显式发起，
 读接口不做外部调用。

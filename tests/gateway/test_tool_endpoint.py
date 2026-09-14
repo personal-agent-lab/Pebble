@@ -1,6 +1,7 @@
 """工具端点：每一轮按一次性令牌登记当轮工具，模型只能看到并调用这些工具。"""
 
 import asyncio
+import base64
 
 import httpx
 
@@ -8,14 +9,13 @@ from server.agent.mcp import ToolServer
 from server.agent.toolset import ALLOWED_EFFECTS, ToolDeps, TurnKind, build_tools, exposed_tools
 from server.db import init_db
 from server.sessions.service import SessionStore
-from server.tools.gmail.service import ReplyDraftStore
+from server.tools.gmail.service import MailDraftStore
 from tests.support.gmail_double import MockGmailClient
 from tests.support.mcp_http import mcp_session, tool_payload
 
 BASE_URL = "http://127.0.0.1:8000"
 DRAFT = {
     "source_message_id": "msg_invite_001",
-    "thread_id": "thread_invite_001",
     "to": ["alice@example.com"],
     "subject": "Re: 邀请",
     "body": "谢谢邀请，我准时参加。",
@@ -25,7 +25,7 @@ DRAFT = {
 def build(settings):
     init_db()
     tasks = SessionStore()
-    tools = build_tools(ToolDeps(drafts=ReplyDraftStore(), tasks=tasks, gmail=MockGmailClient()))
+    tools = build_tools(ToolDeps(drafts=MailDraftStore(), tasks=tasks, gmail=MockGmailClient()))
     return tools, tasks
 
 
@@ -52,6 +52,20 @@ def test_turn_endpoint_exposes_only_its_own_tools(settings):
                 )
                 assert read.isError is False
                 assert tool_payload(read)["subject"]
+
+                attachment = await session.call_tool(
+                    "gmail_get_attachment",
+                    {
+                        "message_id": "msg_invite_001",
+                        "attachment_id": "attachment_invite_001",
+                    },
+                )
+                assert attachment.isError is False
+                assert tool_payload(attachment)["filename"] == "会议说明.txt"
+                assert attachment.content[1].resource.mimeType == "text/plain"
+                assert base64.b64decode(attachment.content[1].resource.blob) == (
+                    "请提前准备项目进展。".encode()
+                )
 
                 # 同名工具在别的轮次可见，本轮调用按不存在处理，不解释原因。
                 blocked = await session.call_tool("gmail_prepare_reply", dict(DRAFT))

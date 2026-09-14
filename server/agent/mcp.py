@@ -8,6 +8,7 @@ CLI 只连接真实传输（stdio/sse/http/...），SDK 的进程内 `sdk` 类�
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -16,12 +17,12 @@ from uuid import uuid4
 
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-from mcp.types import CallToolResult, TextContent, Tool
+from mcp.types import BlobResourceContents, CallToolResult, EmbeddedResource, TextContent, Tool
 from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
 
 from server.errors import error_details
-from server.tools.registry import ToolDefinition
+from server.tools.registry import ToolDefinition, ToolFileResult
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,21 @@ async def invoke(
                 "operation_id": result["operation_id"],
                 "version": result["version"],
             }
+        )
+    if isinstance(result, ToolFileResult):
+        metadata = {**result.metadata, "filename": result.filename, "mime_type": result.mime_type}
+        return CallToolResult(
+            content=[
+                TextContent(type="text", text=json.dumps(metadata, ensure_ascii=False)),
+                EmbeddedResource(
+                    type="resource",
+                    resource=BlobResourceContents(
+                        uri=result.uri,
+                        mimeType=result.mime_type,
+                        blob=base64.b64encode(result.data).decode("ascii"),
+                    ),
+                ),
+            ]
         )
     return CallToolResult(
         content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]

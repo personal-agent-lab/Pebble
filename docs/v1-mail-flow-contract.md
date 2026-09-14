@@ -1,310 +1,123 @@
-# 第一条邮件链：接口字段契约
+# Gmail 工具与确认发送契约
 
-本文仅定义接口输入、输出与字段语义。任务表示用户目标，一个任务可关联多项操作；邮件字段属于回复草稿。
+本文定义 Gmail 工具的输入、输出和发送边界。Agent 可以读邮件和保存本地草稿，但不能直接发送；发送只能在用户确认已保存的确切版本后由 Confirmation 执行。
 
-## 1. 通用字段
+## 1. Agent 可见工具
 
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `task_id` | string | 用户任务标识，与邮件身份无关 |
-| `sdk_session_id` | string 或 null | 任务关联的 Agent 会话标识，尚未关联时为 null |
-| `operation_id` | string | 一项操作的标识；不同任务可关联同一操作 |
-| `version` | integer | 草稿内容版本，从 1 开始 |
-| `expected_version` | integer | 本次编辑所依据的版本 |
-| `status` | string | 回复操作的当前状态，取值见第 8 节 |
-| `created_at` | string | 带时区的 ISO 8601 创建时间 |
-
-## 2. 任务接口
-
-### 创建任务
+### `gmail_search`
 
 输入：
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `goal` | string | 用户目标 |
+| `query` | string | Gmail 搜索条件 |
+| `max_results` | integer | 最多返回数，默认 10 |
 
-输出为任务记录：
-
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `task_id` | string | 任务标识 |
-| `goal` | string | 用户目标 |
-| `sdk_session_id` | string 或 null | 关联的 Agent 会话标识 |
-| `created_at` | string | 创建时间 |
-
-### 读取任务与任务列表
-
-- 任务详情输入：`task_id`；输出：任务记录。
-- 任务列表无输入字段；输出：任务记录数组，按创建时间倒序，同时间按 `task_id` 升序。
-
-### 关联 Agent 会话
-
-输入：`task_id`、`sdk_session_id`（非 null）。输出：关联后的任务记录。
-
-相同会话标识表示同一关联；与已有会话标识不同时为会话关联冲突。
-
-### 读取任务关联操作
-
-输入：`task_id`。输出为操作摘要数组，无关联操作时为空数组：
+输出为邮件摘要数组。每项包含：
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `operation_id` | string | 操作标识 |
-| `type` | string | 操作类型，本邮件契约取 `mail_reply` |
-| `version` | integer | 当前草稿版本 |
-| `status` | string | 当前操作状态 |
+| `message_id` | string | Gmail 邮件 ID |
+| `thread_id` | string | Gmail 往来 ID |
+| `rfc_message_id` | string | 邮件头中的 Message-ID |
+| `from` | string | 发件人 |
+| `to` | string[] | 收件人 |
+| `cc` | string[] | 抄送人 |
+| `subject` | string | 主题 |
+| `snippet` | string | Gmail 摘要 |
+| `received_at` | string | 带时区的 ISO 8601 时间 |
+| `attachments` | object[] | 附件信息，结构见下文 |
 
-同一操作出现在不同任务的结果中时，表示共享同一份草稿及当前状态，不改变各任务的会话关联。
+搜索结果与单封邮件使用同一组字段名，但不返回正文。邮件详情读取失败时整次调用失败，不返回一半完整的混合结果。
 
-## 3. 用户消息与 Agent 事件
+### `gmail_get_message`
 
-### 新邮件输入
+输入：`message_id: string`。
 
-输入：`task_id: string`、`sdk_session_id: string | null`、`source_message_id: string`、
-`thread_id: string`。邮件标识用于定位待分析的新邮件；输出为下述 Agent 事件。
-每封新邮件对应一个任务，同一邮件的重复通知对应原任务；同线程的不同邮件对应不同任务。
-用户选择准备回复属于普通消息，不代表确认发送。
+输出为上述邮件字段，并增加 `body: string` 表示纯文本正文。
 
-### 用户消息输入
+### `gmail_get_thread`
 
-消息输入：
+输入：`thread_id: string`。
 
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `task_id` | string | 当前任务 |
-| `message` | string | 用户消息原文 |
-| `sdk_session_id` | string 或 null | 当前任务的会话标识；首次尚未关联时为 null |
+输出包含 `thread_id: string` 和 `messages: object[]`。`messages` 是按时间正序排列的完整邮件，每封均含 `body`。不另外返回拼接文本或邮件总数；它们都可由 `messages` 直接得到。
 
-事件输出：
+### `gmail_get_attachment`
 
-| `type` | 其他字段 | 含义 |
-| --- | --- | --- |
-| `session` | `sdk_session_id: string` | 本轮关联的会话 |
-| `text` | `text: string` | 新增回复文本片段 |
-| `done` | 无 | Agent 本轮正常结束 |
-| `error` | `message: string` | Agent 本轮失败及原因 |
+输入 `message_id: string` 和 `attachment_id: string`。输出的文本信息包含 `message_id`、`attachment_id`、`filename`、`mime_type`、`size`，附件原始字节作为 MCP 文件内容交付，不放进 JSON 或普通文本。
 
-`session` 先于本轮文本事件；会话建立失败时返回 `error`。`text` 可出现多次，按顺序拼接。
-一轮以 `done` 或 `error` 之一结束；二者不表示邮件发送结果。
+邮件中的 `attachments[]` 每项包含 `attachment_id: string`、`filename: string`、`mime_type: string`、`size: integer`。
 
-## 4. 回复草稿
-
-### 保存或复用回复草稿
+### `gmail_prepare_reply`
 
 输入：
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `task_id` | string | 本次任务 |
-| `source_message_id` | string | 被回复的 Gmail 原邮件 ID |
-| `thread_id` | string | 原邮件所在的 Gmail 线程 ID |
-| `to` | string[] | 完整收件人地址列表，顺序保留 |
-| `subject` | string | 完整主题，包含原有空白 |
-| `body` | string | 完整正文，包含原有换行与空白 |
+| `source_message_id` | string | 被回复的 Gmail 邮件 ID |
+| `to` | string[] | 完整收件人列表 |
+| `subject` | string | 完整主题 |
+| `body` | string | 完整正文 |
 
-输出：`operation_id`、`version`、`status`。
+`thread_id` 不由 Agent 传入，工具根据原邮件读取，避免原邮件与往来不匹配。同一原邮件已有回复操作时复用它，不用本次候选内容覆盖已保存草稿。
 
-首次保存返回第 1 版、`pending` 状态。同一原邮件已有回复操作时，返回该操作的当前版本与状态，
-表示本次任务关联已有操作；输入的候选内容不代表已保存内容。原邮件 ID 的复用语义仅适用于邮件回复。
+### `gmail_prepare_email`
 
-### 编辑回复草稿
+输入 `to: string[]`、`subject: string`、`body: string`。用于不依赖已有邮件的新邮件，每次成功调用新建一份待审阅草稿。
 
-输入：
+`gmail_prepare_reply` 和 `gmail_prepare_email` 的输出均为 `operation_id: string`、`version: integer`、`status: "pending"`。输出不含重复的自然语言说明。工具只保存本地草稿，不发送。
 
-| 字段 | 类型 | 含义 |
+### `gmail_read_draft`
+
+输入 `operation_id: string`，只能读取与当前任务关联的草稿。
+
+- 回复草稿包含 `operation_id`、`kind: "reply"`、`version`、`status`、`source_message_id`、`thread_id`、`to`、`subject`、`body`。
+- 新邮件草稿包含 `operation_id`、`kind: "new"`、`version`、`status`、`to`、`subject`、`body`，不含原邮件和往来标识。
+
+### `gmail_update_draft`
+
+输入 `operation_id: string`、`expected_version: integer`、`to: string[]`、`subject: string`、`body: string`。输出 `operation_id`、新 `version`、`status: "pending"`。
+
+仅 `pending` 草稿可修改；版本不匹配时拒绝，历史版本不改写。
+
+## 2. 草稿校验与通知
+
+新邮件和回复共用收件人、主题和正文校验。回复额外校验原邮件与往来标识。校验失败返回 `DraftValidationError` 及 `errors[]`，每项含 `field` 和 `message`，不保存数据。
+
+草稿创建、复用或修改成功后，工具端点发出：
+
+```json
+{"type":"draft_saved","operation_id":"op_123","version":2}
+```
+
+通知表示草稿可读取，不表示邮件已发送。
+
+## 3. 确认、发送与核实
+
+确认输入为 `task_id`、`operation_id`、`version`。确认请求不重复携带邮件内容；系统从指定已保存版本读取发送字段。内容修改后旧版本确认失效。
+
+发送器输入为 `operation_id`、`version`、`kind: "reply" | "new"`、`source_message_id: string | null`、`thread_id: string | null`、`to`、`subject`、`body`。回复发送前再读取原邮件，校验它仍属于已保存的往来，并使用原邮件 Message-ID 构建 In-Reply-To。新邮件的两个关联字段为 null，不传 Gmail `threadId`。
+
+发送结果：
+
+| `status` | 其他字段 | 含义 |
 | --- | --- | --- |
-| `operation_id` | string | 待编辑操作 |
-| `expected_version` | integer | 本次编辑依据的版本 |
-| `to` | string[] | 修改后的完整收件人列表 |
-| `subject` | string | 修改后的完整主题 |
-| `body` | string | 修改后的完整正文 |
+| `sent` | `message_id: string` | Gmail 已返回明确成功证据 |
+| `failed` | `reason: string` | 已明确未发送成功 |
+| `unknown` | `reason: string` | 已进入执行，但现有证据不足以判定是否发送 |
 
-输出：`operation_id`、`version`，其中 `version` 为本次保存后的新版本。
+同一操作只发送一次。重复确认只返回已保存状态；`unknown` 不可直接重发。
 
-仅 `pending` 表示可编辑状态。成功编辑的版本为原版本加 1；旧版本内容保持原样。
-原邮件 ID、线程 ID 不属于编辑字段。用户手动修改和 Agent 重写使用相同字段契约。
+核实器输入与发送器相同，但不需要 `version`。它用 `operation_id` 重建确定的 Message-ID，并核对已发送邮件的标识、收件人、主题、正文；回复还要核对往来和 In-Reply-To。查不到不能证明未发送，所以核实只能将 `unknown` 升级为 `sent`。
 
-### 读取回复草稿
-
-输入：`operation_id`、可选 `version`；未指定版本表示当前版本。
-
-输出：
-
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `operation_id` | string | 操作标识 |
-| `version` | integer | 本次读取的内容版本 |
-| `status` | string | 操作当前状态，即使读取历史版本也不是历史状态 |
-| `source_message_id` | string | 原邮件 ID |
-| `thread_id` | string | Gmail 线程 ID |
-| `to` | string[] | 对应版本的完整收件人列表 |
-| `subject` | string | 对应版本的完整主题 |
-| `body` | string | 对应版本的完整正文 |
-
-### 草稿通知
-
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `type` | string | 固定为 `draft_saved` |
-| `operation_id` | string | 可读取的操作 |
-| `version` | integer | 本次保存或复用返回的版本 |
-
-通知适用于新建、编辑及复用，表示可以读取草稿；不代表一定新增了版本，也不代表邮件已发送。
-
-## 5. 邮件业务校验
-
-输入：`source_message_id`、`thread_id`、`to`、`subject`、`body`，类型及含义同第 4 节。
-
-输出：
-
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `valid` | boolean | 候选内容是否满足邮件业务要求 |
-| `errors` | object[] | 校验原因列表；通过时为空数组 |
-| `errors[].field` | string | 未通过校验的字段名 |
-| `errors[].message` | string | 原因说明 |
-
-输出不含改写后的邮件内容；校验通过不表示已保存、已确认或已发送。
-草稿业务校验由 `server/tools/gmail/service.py` 实现；Gmail 回复报文及线程关联由 `sender.py` 处理。
-
-## 6. 确认与发送
-
-### 确认输入
-
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `task_id` | string | 用户本次确认所在任务，也是此次执行结果的回传任务 |
-| `operation_id` | string | 用户确认的操作 |
-| `version` | integer | 用户审阅并确认的已保存版本 |
-
-确认输入不含邮件正文。确认只对应指定操作及版本，不适用于修改后的新版本。
-同一操作的重复确认表示查询已有状态，不代表新的发送；也不改变已确定的结果回传任务。
-
-### 确认响应
-
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `operation_id` | string | 操作标识 |
-| `version` | integer | 操作当前版本；确认后不再变化 |
-| `status` | string | 操作当前状态，取值见第 8 节 |
-| `confirmation` | object 或 null | 尚未确认时为 null；确认后含 `task_id`、`version`、`confirmed_at` |
-| `result` | object 或 null | 尚无结果时为 null，否则为下文发送结果结构 |
-
-`confirmation.task_id` 为首次成功确认的任务；`confirmation.version` 为用户确认的已保存版本。
-重复确认返回首次确认的信息，不产生新记录，也不改变结果回传任务。
-
-### 发送输入
-
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `operation_id` | string | 本次执行操作 |
-| `version` | integer | 已确认的内容版本 |
-| `source_message_id` | string | 原邮件 ID |
-| `thread_id` | string | Gmail 线程 ID |
-| `to` | string[] | 已确认版本的完整收件人列表 |
-| `subject` | string | 已确认版本的完整主题 |
-| `body` | string | 已确认版本的完整正文 |
-
-### 发送结果
-
-| `status` | 必需字段 | 含义 |
-| --- | --- | --- |
-| `sent` | `message_id: string` | 已确认发送成功，附 Gmail 已发送邮件 ID |
-| `failed` | `reason: string` | 明确未发送成功，附实际原因 |
-| `unknown` | `reason: string` | 操作已经进入执行阶段，但现有证据不足以确定外部发送是否发生或成功；附不确定原因 |
-
-`unknown` 表示发送结果不确定，不是通用错误状态。调用发送函数前因版本冲突、对象不存在等被拒绝，不属于 `unknown`。
-进入执行阶段后中断、调用超时或收到无法解释的发送返回，均可能无法确定实际发送结果；未分类异常或未查到邮件本身不表示明确失败。
-`unknown` 不表示可以直接重发，重复确认仅返回已有状态，不重新发送。后续核实取得明确证据后，结果才可更新为 `sent` 或 `failed`。
-核实后的结果沿用此结构。
-
-### 核实输入
-
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `source_message_id` | string | 原邮件 ID |
-| `thread_id` | string | Gmail 线程 ID |
-| `to` | string[] | 已确认版本的完整收件人列表 |
-| `subject` | string | 已确认版本的完整主题 |
-| `body` | string | 已确认版本的完整正文 |
-
-内容字段是比对证据，不是重新发送的参数；核实不含操作标识与版本，也不发送任何邮件。
-输出沿用发送结果结构。核实只在状态为 `unknown` 时进行，其余状态直接返回当前状态。
-查不到匹配的已发送邮件不等于未发送，所以核实永远不返回 `failed`：结果只能由 `unknown`
-升级为 `sent`，保持 `unknown` 时原因不变。核实可重复发起，已升级为 `sent` 后不再调用外部接口。
-
-## 7. 执行结果交回 Agent
-
-输入：
-
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `task_id` | string | 本次确认所在任务；共享操作的创建任务不决定回传目标 |
-| `sdk_session_id` | string | 该任务关联的 Agent 会话 |
-| `operation_id` | string | 已执行操作 |
-| `version` | integer | 对应确认版本 |
-| `result` | object | 已保存的实际执行结果，结构见第 6 节 |
-
-输出：第 3 节的 Agent 事件。
-
-后续核实结果仍对应本次确认任务，按核实专用去重标识另登记一次回传；原结果的回传尚未结束时
-不再登记，它读到的已经是升级后的结果。其他关联任务读取相同操作状态，不因此产生向其他会话回传的输入。
-Agent 的 `done` / `error` 描述后续会话结果，不改写 `result` 中的邮件结果。
-结果保存后可按 `operation_id` 读取上述输入字段作为待回传数据；尚无结果或回传任务尚未关联会话时没有数据，稍后关联后即可读取。
-
-## 8. 回复操作状态与接口错误
-
-### 操作状态
+## 4. 状态和错误
 
 | `status` | 含义 |
 | --- | --- |
-| `pending` | 草稿已保存，等待确认，可编辑 |
+| `pending` | 草稿已保存，等待审阅和确认，可编辑 |
 | `sending` | 已确认，正在执行 |
 | `sent` | 已确认发送成功 |
-| `failed` | 明确发送失败 |
-| `unknown` | 已进入执行阶段，无法确定外部发送是否发生或成功，结果待核实 |
+| `failed` | 已明确发送失败 |
+| `unknown` | 无法确定是否已发送，等待核实 |
 
-已确认但进程退出时尚未开始发送的操作没有进入执行阶段，是明确未发送，按 `failed` 记录，不是 `unknown`。
-
-这些状态属于回复操作，不表示整个用户任务的状态。
-
-### 已实现接口错误
-
-以下名称标识当前接口错误，不规定传输方式或 HTTP 状态码。
-
-| 名称 | 附带字段 | 含义 |
-| --- | --- | --- |
-| `NotFoundError` | 无约定结构化字段 | 任务、操作或指定草稿版本不存在 |
-| `VersionConflictError` | `current_version: integer` | 当前版本与编辑依据版本不同 |
-| `NotEditableError` | `status: string` | 操作当前不可编辑 |
-| `SessionConflictError` | 无约定结构化字段 | 任务已关联不同会话 |
-| `DraftValidationError` | `errors: object[]` | 邮件校验失败，元素为第 5 节的字段与原因 |
-
-未返回成功结果不表示草稿已保存或邮件未发送；邮件实际结果以第 6 节结果字段为准。
-
-## 9. 后台调用与历史字段
-
-用户消息被接受后的输出为调用记录；任务详情增加 `latest_run`，尚无调用时为 null。
-调用状态与回复操作状态分别表达，不相互替代。
-
-| 字段 | 类型 | 含义 |
-| --- | --- | --- |
-| `run_id` | string | 一轮 Agent 输入的调用标识 |
-| `task_id` | string | 所属任务 |
-| `kind` | string | `new_mail`、`message` 或 `execution_result` |
-| `status` | string | `pending`、`running`、`done`、`error` 或 `interrupted` |
-| `error` | string 或 null | 调用失败或中断原因 |
-| `created_at` | string | 接受时间 |
-| `started_at` | string 或 null | 开始时间 |
-| `finished_at` | string 或 null | 结束或识别为中断的时间 |
-
-`pending` 表示尚未开始，`running` 表示正在调用，`interrupted` 表示调用中断且无法确认完整结束。
-发给网页的 Agent 事件增加 `run_id`，表示事件所属调用。重复确认不产生新的发送或结果回传。
-
-历史读取输入：`task_id`、`sdk_session_id`（可空）；输出为按顺序排列的消息数组。
-每条消息含 `role: string`（`user` 或 `assistant`）、`text: string`。
-网页历史响应含 `task_id`、`sdk_session_id`、`messages`；尚无会话时 `messages` 为空数组。
-
-依赖未接入错误为 `unavailable`，附 `message: string`，表示相关工作未被接受，
-不属于邮件的 failed 或 unknown 结果。
+任务关联的邮件操作 `type` 统一为 `mail`。草稿流程已实现的错误包括 `NotFoundError`、`VersionConflictError`（附 `current_version`）、`NotEditableError`（附 `status`）和 `DraftValidationError`（附 `errors[]`）。

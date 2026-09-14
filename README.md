@@ -4,8 +4,8 @@
 程序负责保证确认、持久化与去重。单用户单实例部署，PC 和手机浏览器都能发起任务、编辑草稿和确认操作；任务不依赖浏览器页面保持开启。
 
 当前状态：任务、草稿版本、确认执行、Gateway、网页与 Qoder CN/Gmail
-生产装配已连接，SQLite schema 为 3。支持新邮件增量检测、任务历史、SSE、Agent 草稿修改、
-网页编辑及最终版本确认。待核实的发送结果可显式核实实际结果并回传原会话。
+生产装配已连接，SQLite schema 为 4。Gmail 支持搜索、单封与完整往来读取、附件读取、
+回复与主动新写邮件；两者共用草稿编辑、最终版本确认、去重发送和结果核实。
 生产入口不使用模拟邮箱或内存草稿；真实账号七步验收仍在进行，
 本地测试通过不代表真实邮件已发送。Memory、Skill、KB 和认证部署仍未完成。
 
@@ -120,7 +120,7 @@ npm run build
 ## 本地任务、草稿与确认发送服务
 
 初始化数据库后使用 `server.sessions.service.SessionStore`、
-`server.tools.gmail.service.ReplyDraftStore` 和 `server.approval.service.ConfirmationService`。
+`server.tools.gmail.service.MailDraftStore` 和 `server.approval.service.ConfirmationService`。
 三者默认使用实例数据库，也可显式传入 `path=Path(...)`。草稿校验由 `server/tools/gmail/service.py`
 的纯函数在存储内完成；`ConfirmationService` 必须传入 Gmail 同步发送函数，生产代码没有
 默认成功的发送函数。输入输出字段及错误含义见
@@ -166,7 +166,7 @@ Gmail 首次启动记录当前 historyId，随后每 10 秒检测新增的收件
 同步位置，不静默跳过缺口。常规检测错误保留游标，在下一轮重新查询。
 
 新邮件轮次仅开放邮件读取工具。用户要求起草后，SDK 才可调用准备、读取及更新草稿工具；
-更新使用当前已保存版本，直接编辑与 Agent 修改共用 ReplyDraftStore 的版本控制。草稿保存事件交给网页。
+更新使用当前已保存版本，直接编辑与 Agent 修改共用 MailDraftStore 的版本控制。草稿保存事件交给网页。
 发送函数仅由 Confirmation 调用，执行结果回到确认任务的原 SDK 会话。
 
 模型经应用进程内的 MCP 端点（server 名 `pebble`）调用工具，内置工具与本机设置关闭：每轮登记一个

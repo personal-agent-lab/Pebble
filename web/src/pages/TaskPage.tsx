@@ -46,7 +46,7 @@ function ResultRow({ view, execution }: { view: OperationView; execution: Execut
     <div className="res-row">
       <div className={`res-ic ${tone}`}>{result?.status === "sent" ? OK_ICON : ERR_ICON}</div>
       <div className="res-body">
-        <div className="res-title">回复邮件草稿</div>
+        <div className="res-title">{view.draft?.kind === "new" ? "新邮件草稿" : "回复邮件草稿"}</div>
         <div className="res-detail">
           {result === null && "已确认，正在执行。执行中内容不能原地修改。"}
           {result?.status === "sent" && (

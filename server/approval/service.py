@@ -31,31 +31,34 @@ NOT_STARTED_REASON = "确认后尚未开始发送即中断，未进入执行阶�
 VERIFIED_DELIVERY_SUFFIX = ":verified"
 
 
-class ReplySender(Protocol):
+class MailSender(Protocol):
     def __call__(
         self,
         *,
         operation_id: str,
         version: int,
-        source_message_id: str,
-        thread_id: str,
+        kind: str,
         to: list[str],
         subject: str,
         body: str,
+        source_message_id: str | None = None,
+        thread_id: str | None = None,
     ) -> dict: ...
 
 
-class ReplyVerifier(Protocol):
+class MailVerifier(Protocol):
     """只读核实已确认版本的实际结果；内容字段是比对证据，不是重新发送的参数。"""
 
     def __call__(
         self,
         *,
-        source_message_id: str,
-        thread_id: str,
+        operation_id: str,
+        kind: str,
         to: list[str],
         subject: str,
         body: str,
+        source_message_id: str | None = None,
+        thread_id: str | None = None,
     ) -> dict: ...
 
 
@@ -126,12 +129,12 @@ def register_delivery(
 class ConfirmationService:
     def __init__(
         self,
-        send_reply: ReplySender | None,
-        verify_reply: ReplyVerifier | None = None,
+        send_message: MailSender | None,
+        verify_message: MailVerifier | None = None,
         path: Path | None = None,
     ):
-        self.send_reply = send_reply
-        self.verify_reply = verify_reply
+        self.send_message = send_message
+        self.verify_message = verify_message
         self.path = path
 
     def accept_confirmation(self, task_id: str, operation_id: str, version: int) -> dict:
@@ -166,18 +169,20 @@ class ConfirmationService:
                 return execution_response(row)
             version = row["confirmed_version"]
             draft = mail.draft(conn, operation_id, version)
-        if self.verify_reply is None:
+        if self.verify_message is None:
             raise DependencyUnavailableError("邮件结果核实尚未接入")
-        result = self._verify(draft)
+        result = self._verify(operation_id, draft)
         if result["status"] == "sent":
             self._upgrade(operation_id, result)
         return self.get_execution(operation_id)
 
-    def _verify(self, draft: dict) -> dict:
+    def _verify(self, operation_id: str, draft: dict) -> dict:
         try:
-            returned = self.verify_reply(
-                source_message_id=draft["source_message_id"],
-                thread_id=draft["thread_id"],
+            returned = self.verify_message(
+                operation_id=operation_id,
+                kind=draft["kind"],
+                source_message_id=draft.get("source_message_id"),
+                thread_id=draft.get("thread_id"),
                 to=list(draft["to"]),
                 subject=draft["subject"],
                 body=draft["body"],
@@ -264,7 +269,7 @@ class ConfirmationService:
                 return False
             if row["status"] != "pending":
                 raise NotEditableError(row["status"])
-            if self.send_reply is None:
+            if self.send_message is None:
                 raise DependencyUnavailableError("邮件发送尚未接入")
             now = timestamp()
             repo.insert(conn, operation_id, task_id, version, now)
@@ -284,11 +289,12 @@ class ConfirmationService:
 
     def _send(self, operation_id: str, version: int, draft: dict) -> dict:
         try:
-            returned = self.send_reply(
+            returned = self.send_message(
                 operation_id=operation_id,
                 version=version,
-                source_message_id=draft["source_message_id"],
-                thread_id=draft["thread_id"],
+                kind=draft["kind"],
+                source_message_id=draft.get("source_message_id"),
+                thread_id=draft.get("thread_id"),
                 to=list(draft["to"]),
                 subject=draft["subject"],
                 body=draft["body"],

@@ -11,8 +11,9 @@ import html
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from email.header import decode_header, make_header
-from email.utils import getaddresses
+from email.utils import getaddresses, parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -43,13 +44,27 @@ class GmailMessage:
     subject: str
     snippet: str
     body_text: str
-    date: str
+    received_at: str
     cc_addrs: list[str] = field(default_factory=list)
     body_html: str = ""
     internal_date_ms: int = 0
     labels: list[str] = field(default_factory=list)
     in_reply_to: str = ""
     references: str = ""
+    attachments: list[GmailAttachment] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class GmailAttachment:
+    attachment_id: str
+    filename: str
+    mime_type: str
+    size: int
+
+
+@dataclass(frozen=True)
+class GmailAttachmentContent(GmailAttachment):
+    data: bytes = b""
 
 
 @dataclass(frozen=True)
@@ -61,7 +76,7 @@ class SendReplyResult:
 class BaseGmailClient(Protocol):
     """Gmail 客户端抽象协议。"""
 
-    def send_raw_message(self, raw: str, thread_id: str) -> SendReplyResult:
+    def send_raw_message(self, raw: str, thread_id: str | None = None) -> SendReplyResult:
         """发送已构建的 MIME；仅供内部审批执行器调用。"""
         ...
 
@@ -75,6 +90,10 @@ class BaseGmailClient(Protocol):
 
     def search_messages(self, query: str, max_results: int = 10) -> list[dict[str, str]]:
         """按搜索词查询邮件列表。"""
+        ...
+
+    def get_attachment(self, message_id: str, attachment_id: str) -> GmailAttachmentContent:
+        """读取指定邮件的附件原始内容。"""
         ...
 
     def get_profile(self) -> dict:
@@ -181,6 +200,44 @@ class MimeParser:
 
         return plain_body, html_body
 
+    @staticmethod
+    def extract_attachments(payload: dict[str, Any]) -> list[GmailAttachment]:
+        attachments: list[GmailAttachment] = []
+
+        def _walk(part: dict[str, Any]) -> None:
+            body = part.get("body", {})
+            attachment_id = body.get("attachmentId", "")
+            filename = part.get("filename", "")
+            if attachment_id and filename:
+                attachments.append(
+                    GmailAttachment(
+                        attachment_id=attachment_id,
+                        filename=filename,
+                        mime_type=part.get("mimeType", "application/octet-stream"),
+                        size=int(body.get("size", 0)),
+                    )
+                )
+            for child in part.get("parts", []):
+                _walk(child)
+
+        _walk(payload)
+        return attachments
+
+
+def received_at(header_date: str, internal_date_ms: int) -> str:
+    """将邮件头日期收敛为带时区的 ISO 8601；头无效时使用 Gmail 内部时间。"""
+    if header_date:
+        try:
+            parsed = parsedate_to_datetime(header_date)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            return parsed.isoformat()
+        except (TypeError, ValueError, OverflowError):
+            pass
+    if internal_date_ms > 0:
+        return datetime.fromtimestamp(internal_date_ms / 1000, tz=UTC).isoformat()
+    return ""
+
 
 class GoogleApiGmailClient(BaseGmailClient):
     """使用真实 Google API Client 与 OAuth2 认证的 Gmail 实现。"""
@@ -255,13 +312,14 @@ class GoogleApiGmailClient(BaseGmailClient):
             subject=subject,
             snippet=snippet,
             body_text=body_text,
-            date=date,
+            received_at=received_at(date, internal_date_ms),
             cc_addrs=cc_addrs,
             body_html=body_html,
             internal_date_ms=internal_date_ms,
             labels=labels,
             in_reply_to=headers.get("in-reply-to", ""),
             references=headers.get("references", ""),
+            attachments=MimeParser.extract_attachments(payload),
         )
 
     def get_message(self, message_id: str) -> GmailMessage:
@@ -291,15 +349,44 @@ class GoogleApiGmailClient(BaseGmailClient):
         )
         return [{"id": m["id"], "threadId": m["threadId"]} for m in res.get("messages", [])]
 
-    def send_raw_message(self, raw: str, thread_id: str) -> SendReplyResult:
+    def get_attachment(self, message_id: str, attachment_id: str) -> GmailAttachmentContent:
+        message = self.get_message(message_id)
+        metadata = next(
+            (item for item in message.attachments if item.attachment_id == attachment_id), None
+        )
+        if metadata is None:
+            raise KeyError(f"邮件 {message_id} 中不存在附件 {attachment_id}")
         result = (
             self.get_service()
             .users()
             .messages()
-            .send(userId="me", body={"raw": raw, "threadId": thread_id})
+            .attachments()
+            .get(userId="me", messageId=message_id, id=attachment_id)
+            .execute()
+        )
+        encoded = result.get("data", "")
+        padded = encoded + "=" * (-len(encoded) % 4)
+        data = base64.urlsafe_b64decode(padded.encode("ascii"))
+        return GmailAttachmentContent(
+            attachment_id=metadata.attachment_id,
+            filename=metadata.filename,
+            mime_type=metadata.mime_type,
+            size=len(data),
+            data=data,
+        )
+
+    def send_raw_message(self, raw: str, thread_id: str | None = None) -> SendReplyResult:
+        body = {"raw": raw}
+        if thread_id is not None:
+            body["threadId"] = thread_id
+        result = (
+            self.get_service()
+            .users()
+            .messages()
+            .send(userId="me", body=body)
             .execute(num_retries=0)
         )
-        return SendReplyResult(result.get("id", ""), result.get("threadId", thread_id))
+        return SendReplyResult(result.get("id", ""), result.get("threadId", thread_id or ""))
 
     def get_profile(self) -> dict:
         return self.get_service().users().getProfile(userId="me").execute()

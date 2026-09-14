@@ -29,7 +29,7 @@ from server.errors import DependencyUnavailableError
 from server.gateway.agent_contract import Turn
 from server.gateway.runtime import execution_result_content
 from server.sessions.service import SessionStore
-from server.tools.gmail.service import ReplyDraftStore
+from server.tools.gmail.service import MailDraftStore
 from server.tools.gmail.trigger import new_mail_content
 from server.tools.registry import SideEffect, ToolDefinition
 from tests.support.gmail_double import MockGmailClient
@@ -37,7 +37,6 @@ from tests.support.mcp_http import mcp_session, tool_payload
 
 DRAFT = {
     "source_message_id": "msg_invite_001",
-    "thread_id": "thread_invite_001",
     "to": ["alice@example.com"],
     "subject": "Re: 邀请",
     "body": "谢谢邀请，我准时参加。",
@@ -58,7 +57,7 @@ def make_gateway(settings, *, gmail=None, **overrides) -> QoderGateway:
     init_db()
     return QoderGateway(
         ToolDeps(
-            drafts=ReplyDraftStore(),
+            drafts=MailDraftStore(),
             tasks=SessionStore(),
             gmail=gmail or MockGmailClient(),
         ),
@@ -101,7 +100,7 @@ def test_new_mail_turn_sees_only_readonly_tools(settings):
     readonly = exposed_tools(gateway.tools, allowed=ALLOWED_EFFECTS[TurnKind.NEW_MAIL])
     assert options.allowed_tools == [f"mcp__pebble__{tool.name}" for tool in readonly]
     visible = {name.rsplit("__", 1)[-1] for name in options.allowed_tools}
-    assert not {"gmail_prepare_reply", "gmail_update_reply_draft"} & visible
+    assert not {"gmail_prepare_reply", "gmail_update_draft"} & visible
     # 内置工具与本机设置关闭：模型只能连本轮登记的 MCP 端点。
     assert options.tools == []
     assert options.setting_sources == []
@@ -121,7 +120,7 @@ def test_message_turn_allows_drafting_and_resumes_session(settings):
     options = options_for(gateway, TurnKind.MESSAGE, sdk_session_id="session-1")
 
     names = {name.rsplit("__", 1)[-1] for name in options.allowed_tools}
-    assert "gmail_prepare_reply" in names and "gmail_update_reply_draft" in names
+    assert "gmail_prepare_reply" in names and "gmail_update_draft" in names
     assert options.resume == "session-1"
     assert options.include_partial_messages is True
     assert options.cwd == gateway.workspace
@@ -131,7 +130,7 @@ def test_message_turn_allows_drafting_and_resumes_session(settings):
 def test_external_write_tools_are_never_visible_to_the_model(settings, kind):
     gateway = make_gateway(settings)
     send_now = ToolDefinition(
-        name="gmail_send_reply",
+        name="gmail_send_message",
         description="真实发送邮件；只由 Confirmation 调用。",
         func=lambda **_: None,
         side_effect=SideEffect.EXTERNAL_WRITE,
@@ -239,7 +238,7 @@ def test_unregistered_provider_fails_at_assembly(settings):
 def test_missing_token_refuses_the_turn(settings):
     init_db()
     gateway = QoderGateway(
-        ToolDeps(drafts=ReplyDraftStore(), tasks=SessionStore(), gmail=MockGmailClient()),
+        ToolDeps(drafts=MailDraftStore(), tasks=SessionStore(), gmail=MockGmailClient()),
         ToolServer(),
         settings=Settings(data_dir=settings.data_dir, _env_file=None),
     )
@@ -305,7 +304,7 @@ def run_tools(gateway: QoderGateway, monkeypatch, *calls: ToolCall, task_id="tas
 
 def test_draft_saved_precedes_following_text(settings, monkeypatch):
     tasks = SessionStore()
-    drafts = ReplyDraftStore()
+    drafts = MailDraftStore()
     init_db()
     task_id = tasks.create_task("处理新收到的邮件")["task_id"]
     gateway = QoderGateway(
@@ -341,7 +340,7 @@ def test_draft_saved_precedes_following_text(settings, monkeypatch):
     assert [event["type"] for event in events] == ["session", "draft_saved", "text", "text", "done"]
     saved = events[1]
     assert saved["version"] == 1
-    assert drafts.get_reply_draft(saved["operation_id"])["body"] == DRAFT["body"]
+    assert drafts.get_draft(saved["operation_id"])["body"] == DRAFT["body"]
     # 增量输出已经送过，整段文本不再重复；调用参数与用户消息原样传给模型。
     assert "".join(event.get("text", "") for event in events) == "草稿已保存"
     assert captured["message"] == "帮我写一封回信"
@@ -455,7 +454,7 @@ def test_tool_boundary_returns_structured_business_errors(settings, monkeypatch)
         gateway,
         monkeypatch,
         ToolCall(
-            "gmail_update_reply_draft",
+            "gmail_update_draft",
             {
                 "operation_id": created["operation_id"],
                 "expected_version": 7,
@@ -477,7 +476,7 @@ def test_tool_boundary_returns_structured_business_errors(settings, monkeypatch)
     _, (hidden,) = run_tools(
         gateway,
         monkeypatch,
-        ToolCall("gmail_read_reply_draft", {"operation_id": created["operation_id"]}),
+        ToolCall("gmail_read_draft", {"operation_id": created["operation_id"]}),
         task_id=other_task,
     )
     assert hidden.isError is True
@@ -544,7 +543,7 @@ def test_history_reads_persisted_transcript(settings):
                 "role": "assistant",
                 "content": [
                     {"type": "thinking", "thinking": "不展示"},
-                    {"type": "tool_use", "id": "t1", "name": "gmail_read_reply_draft", "input": {}},
+                    {"type": "tool_use", "id": "t1", "name": "gmail_read_draft", "input": {}},
                     {"type": "text", "text": "草稿已准备好"},
                 ],
             },
