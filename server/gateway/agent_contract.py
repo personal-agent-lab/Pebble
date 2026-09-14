@@ -43,6 +43,8 @@ class AgentProtocolError(Exception):
 class AgentGateway(Protocol):
     def stream_turn(self, turn: Turn) -> AsyncIterator[AgentEvent]: ...
 
+    async def generate_title(self, text: str) -> str: ...
+
 
 def checked_event(event: object) -> AgentEvent:
     """收敛 Agent 事件到契约结构；不符契约时按协议错误处理。"""

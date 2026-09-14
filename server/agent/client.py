@@ -29,6 +29,7 @@ from qodercn_agent_sdk import (
 
 from server.agent import context
 from server.agent.mcp import TOOL_SERVER_NAME, ToolServer
+from server.agent.prompt import TITLE_PROMPT
 from server.agent.toolset import (
     ALLOWED_EFFECTS,
     ToolDeps,
@@ -37,7 +38,7 @@ from server.agent.toolset import (
 )
 from server.config import Settings, get_settings
 from server.errors import DependencyUnavailableError
-from server.gateway.agent_contract import AgentEvent, Turn
+from server.gateway.agent_contract import AgentEvent, AgentProtocolError, Turn
 from server.tools.registry import ToolDefinition
 
 CONFIG_DIR_ENV = "QODERCN_CONFIG_DIR"
@@ -82,6 +83,23 @@ class QoderGateway:
     def stream_turn(self, turn: Turn) -> AsyncIterator[AgentEvent]:
         """执行一轮调用；消息与材料由调用方组装，网关不区分触发来源。"""
         return self._stream(turn)
+
+    async def generate_title(self, text: str) -> str:
+        """一次性标题生成：无工具、不接续会话，也不进入任务的对话历史。"""
+        parts: list[str] = []
+        async with QoderSDKClient(self._title_options()) as client:
+            await client.query(text)
+            async for message in client.receive_response():
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock) and block.text.strip():
+                            parts.append(block.text)
+                elif isinstance(message, ResultMessage):
+                    if message.is_error:
+                        detail = (message.result or "").strip() or MODEL_ERROR_MESSAGE
+                        raise AgentProtocolError(detail)
+                    return "".join(parts).strip()
+        raise AgentProtocolError(NO_TERMINAL_MESSAGE)
 
     # ---------- 调用执行 ----------
 
@@ -148,6 +166,22 @@ class QoderGateway:
             cwd=self.workspace,
             resume=turn.sdk_session_id,
             include_partial_messages=True,
+            auth=self._auth(),
+            **self._model_options(),
+        )
+
+    def _title_options(self) -> QoderAgentOptions:
+        return QoderAgentOptions(
+            tools=[],
+            allowed_tools=[],
+            mcp_servers={},
+            allowed_mcp_server_names=[],
+            strict_mcp_config=True,
+            setting_sources=[],
+            skills=[],
+            system_prompt=TITLE_PROMPT,
+            cwd=self.workspace,
+            include_partial_messages=False,
             auth=self._auth(),
             **self._model_options(),
         )

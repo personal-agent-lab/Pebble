@@ -14,6 +14,7 @@ from qodercn_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, Te
 from server.agent import client as agent_client
 from server.agent.client import QoderGateway
 from server.agent.mcp import TOOL_SERVER_NAME, ToolServer
+from server.agent.prompt import TITLE_PROMPT
 from server.agent.toolset import ToolDeps, build_tools
 from server.config import Settings
 from server.db import init_db
@@ -50,7 +51,9 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
         def __init__(self, options):
             self.options = options
             self.sid = options.resume or str(uuid4())
-            sessions.append(self.sid)
+            self.is_title = options.system_prompt == TITLE_PROMPT
+            if not self.is_title:
+                sessions.append(self.sid)
 
         async def __aenter__(self):
             return self
@@ -73,6 +76,10 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
 
         async def receive_response(self):
             yield SystemMessage("init", {"session_id": self.sid})
+            if self.is_title:
+                yield self.say("邀请回复")
+                yield ResultMessage("success", 1, 1, False, 1, self.sid)
+                return
             turns.append(self.message)
             if self.message.startswith("收到新邮件"):
                 message = await self.call("gmail_get_message", {"message_id": "msg_invite_001"})

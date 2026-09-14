@@ -309,6 +309,8 @@ git 提交遵循 `AGENTS.md` 的约定：当前分支、英文 `[Module] Descrip
 
 `gateway/runtime.py` 使用 FastAPI lifespan 所在事件循环管理异步任务，保留任务引用；每个任务按 `agent_runs` 的插入顺序启动就绪输入，不同任务独立执行。尚无会话的结果回传等待会话建立。HTTP/SSE 断开不取消工作，只取消订阅。同步发送通过 `asyncio.to_thread`，正常关闭先等待发送落盘，再取消仍在运行的 Agent 调用；下次启动将运行中调用记为 interrupted，不自动重放。待处理输入继续运行；已有确认但进程遗留未完成的发送不自动重发：已经调用过发送函数的记 unknown 等待核实，`started_at` 仍为空即从未进入执行阶段，是明确未发送，记 failed。
 
+任务创建时以触发文案或用户首句作为目标；首个调用成功结束后，运行时把该轮对话文本交给一次性的无工具模型调用生成不超过 12 字的短标题，改写任务目标。生成失败或为空时保留原目标；该调用不接续任务会话，也不进入对话历史。
+
 schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`。schema 4 将回复专用草稿表收敛为新邮件与回复共用的 `mail_drafts` 和 `mail_draft_versions`。schema 5 增加 `task_timeline_items`。schema 6 移除上传文件与草稿版本、时间线上的附件绑定，外发邮件只支持纯文字。
 
 接受确认与后台开始发送分别原子处理，发送开始标记防止重复调用；保存发送结果和登记一次回传共用事务。Confirmation 依赖 sessions 的调用记录存取，不依赖 SDK 或 api 实现。Gateway 在转发 SSE 前先把用户文字、Agent 文字、草稿位置和错误写入应用时间线，事件携带持久化后的 `item_id` 与 `run_id`。网页只读取 `GET /tasks/{task_id}/timeline`；SDK 历史不作为展示接口，也不需要前端解析模型自然语言或拼接操作列表。

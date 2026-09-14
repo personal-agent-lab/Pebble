@@ -46,6 +46,19 @@ def append_assistant_text(conn: sqlite3.Connection, task_id: str, run_id: str, d
     return insert_text(conn, task_id, run_id, "assistant", delta)
 
 
+ROLE_LABELS = {"user": "用户", "assistant": "助手"}
+
+
+def run_text(conn: sqlite3.Connection, run_id: str) -> str:
+    """一轮的全部对话文本，按时间顺序带角色标注；无文本时为空串。"""
+    rows = conn.execute(
+        "SELECT role, text FROM task_timeline_items "
+        "WHERE run_id = ? AND kind = 'text' ORDER BY rowid",
+        (run_id,),
+    ).fetchall()
+    return "\n".join(f"{ROLE_LABELS.get(row['role'], row['role'])}：{row['text']}" for row in rows)
+
+
 def ensure_mail_draft(
     conn: sqlite3.Connection, task_id: str, run_id: str, operation_id: str
 ) -> str:

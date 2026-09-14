@@ -20,9 +20,11 @@ class FakeAgentGateway:
     （例如保存草稿并以 draft_saved 通知实际版本）。
     """
 
-    def __init__(self, *, session_prefix: str = "fake"):
+    def __init__(self, *, session_prefix: str = "fake", title: str = "替身标题"):
         self.session_prefix = session_prefix
+        self.title = title
         self.calls: list[dict[str, Any]] = []
+        self.title_calls: list[str] = []
         self._handlers: dict[str, Handler] = {}
         self._sessions = count(1)
         self._lock = threading.Lock()
@@ -36,6 +38,11 @@ class FakeAgentGateway:
     def calls_of(self, kind: str) -> list[dict[str, Any]]:
         with self._lock:
             return [call for call in self.calls if call["kind"] == kind]
+
+    async def generate_title(self, text: str) -> str:
+        with self._lock:
+            self.title_calls.append(text)
+        return self.title
 
     async def stream_turn(self, turn: Turn) -> AsyncIterator[AgentEvent]:
         async for event in self._stream(turn):

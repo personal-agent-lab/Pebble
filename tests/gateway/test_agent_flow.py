@@ -27,8 +27,12 @@ def anyio_backend():
 
 async def drain(service):
     async with asyncio.timeout(5):
-        while service._active or service._sends:
-            await asyncio.gather(*list(service._active.values()), *list(service._sends.values()))
+        while service._active or service._sends or service._titles:
+            await asyncio.gather(
+                *list(service._active.values()),
+                *list(service._sends.values()),
+                *list(service._titles),
+            )
 
 
 DRAFT = {
@@ -582,3 +586,51 @@ async def test_shutdown_interrupts_agent_without_replaying(flow):
         assert len(flow.gateway.calls_of("message")) == 1
     finally:
         await restarted.close()
+
+
+async def test_first_run_rewrites_goal_with_generated_title(flow):
+    task = flow.service.accept_new_mail("m1", "thread-1")
+    await drain(flow.service)
+
+    assert flow.tasks.get_task(task["task_id"])["goal"] == flow.gateway.title
+    assert len(flow.gateway.title_calls) == 1
+    assert "新邮件 m1 的摘要与建议" in flow.gateway.title_calls[0]
+
+    flow.service.submit_message(task["task_id"], "请帮我写回复")
+    await drain(flow.service)
+    assert flow.tasks.get_task(task["task_id"])["goal"] == flow.gateway.title
+    assert len(flow.gateway.title_calls) == 1  # 只有首个调用生成标题
+
+
+async def test_message_task_title_includes_user_text(flow):
+    task = flow.tasks.create_task("请你写一封邮件，向导师请假")
+    flow.service.submit_message(task["task_id"], "请你写一封邮件，向导师请假")
+    await drain(flow.service)
+
+    assert flow.tasks.get_task(task["task_id"])["goal"] == flow.gateway.title
+    assert "用户：请你写一封邮件，向导师请假" in flow.gateway.title_calls[0]
+    assert "助手：收到：请你写一封邮件，向导师请假" in flow.gateway.title_calls[0]
+
+
+async def test_failed_first_run_keeps_original_goal(flow):
+    async def failing(**kwargs):
+        yield {"type": "session", "sdk_session_id": "s-err"}
+        yield {"type": "error", "message": "模型调用失败"}
+
+    flow.gateway.handle("new_mail", failing)
+    task = flow.service.accept_new_mail("m1", "thread-1")
+    await drain(flow.service)
+
+    assert flow.tasks.get_task(task["task_id"])["goal"] == "处理新收到的邮件"
+    assert flow.gateway.title_calls == []
+
+
+async def test_title_failure_keeps_original_goal(flow):
+    async def raise_title(text):
+        raise RuntimeError("标题服务不可用")
+
+    flow.gateway.generate_title = raise_title
+    task = flow.service.accept_new_mail("m1", "thread-1")
+    await drain(flow.service)
+
+    assert flow.tasks.get_task(task["task_id"])["goal"] == "处理新收到的邮件"

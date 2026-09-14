@@ -26,6 +26,10 @@ def bind_session(conn: sqlite3.Connection, task_id: str, sdk_session_id: str) ->
     conn.execute("UPDATE tasks SET sdk_session_id = ? WHERE task_id = ?", (sdk_session_id, task_id))
 
 
+def update_goal(conn: sqlite3.Connection, task_id: str, goal: str) -> None:
+    conn.execute("UPDATE tasks SET goal = ? WHERE task_id = ?", (goal, task_id))
+
+
 def operation(conn: sqlite3.Connection, operation_id: str) -> dict:
     row = conn.execute(
         "SELECT * FROM operations WHERE operation_id = ?", (operation_id,)

@@ -242,10 +242,9 @@ class GatewayRuntime:
         # 同步发送已经在线程池中开始，正常关闭时等待结果落盘。
         if self._sends:
             await asyncio.gather(*list(self._sends.values()), return_exceptions=True)
-        active = list(self._active.values())
-        for task in active:
+        for task in [*self._active.values(), *self._titles]:
             task.cancel()
-        await asyncio.gather(*active, return_exceptions=True)
+        await asyncio.gather(*[*self._active.values(), *self._titles], return_exceptions=True)
 
     # ---------- 调用执行 ----------
 
@@ -364,6 +363,7 @@ class GatewayRuntime:
                 )
         elif kind == "done":
             self._finish(row["run_id"], "done", None)
+            self._schedule_retitle(row)
         elif kind == "error":
             with session(self.path) as conn, write(conn):
                 repo.finish(conn, row["run_id"], "error", event["message"], timestamp())
@@ -375,6 +375,37 @@ class GatewayRuntime:
     def _bind_session(self, task_id: str, sdk_session_id: str) -> None:
         self._sessions.bind_sdk_session(task_id, sdk_session_id)
         self.kick()
+
+    # ---------- 任务标题 ----------
+
+    def _schedule_retitle(self, row: dict) -> None:
+        """任务首个调用成功结束后，用模型的短标题替换创建时的初始文案。"""
+        if self.gateway is None:
+            return
+        with session(self.path) as conn:
+            runs = repo.runs(conn, row["task_id"])
+            if not runs or runs[0]["run_id"] != row["run_id"]:
+                return
+            text = timeline.run_text(conn, row["run_id"])
+        if not text.strip():
+            return
+        task = asyncio.create_task(self._retitle(row["task_id"], text))
+        self._titles.add(task)
+        task.add_done_callback(self._titles.discard)
+
+    async def _retitle(self, task_id: str, text: str) -> None:
+        try:
+            title = (await self.gateway.generate_title(text)).strip()
+            if not title:
+                return
+            with session(self.path) as conn, write(conn):
+                try:
+                    operations.task(conn, task_id)
+                except NotFoundError:
+                    return  # 任务在标题生成期间被删除
+                operations.update_goal(conn, task_id, title)
+        except Exception:
+            logging.getLogger(__name__).exception("标题落盘失败，保留任务原目标文案")
 
     def _finish(self, run_id: str, status: str, error: str | None) -> None:
         with session(self.path) as conn, write(conn):
