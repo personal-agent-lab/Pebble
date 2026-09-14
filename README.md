@@ -1,23 +1,28 @@
-# Pebble 
+# Pebble
 
-持续运行的个人 Agent。一个常驻 Python 服务，由单个 Agent 按用户目标组合工具（Gmail、iCloud Calendar、个人资料库）完成真实事务，
-程序负责保证确认、持久化与去重。单用户单实例部署，PC 和手机浏览器都能发起任务、编辑草稿和确认操作；任务不依赖浏览器页面保持开启。
+对话优先的个人助手 Agent。你可以随时和它对话——聊天、提问、交办事项；它按你的目标自主组合工具
+（Gmail、iCloud Calendar、个人知识库，后续更多）完成真实事务，并在会话之间记住你的偏好（Memory）、
+复用沉淀下来的流程（Skills）。程序负责保证外部写操作的确认、持久化与去重。
 
-当前状态：任务、草稿版本、确认执行、Gateway、网页与 Qoder CN/Gmail
-生产装配已连接，SQLite schema 为 5。Gmail 支持搜索、单封与完整往来读取、附件读取、
-回复与主动新写邮件；两者共用内嵌草稿卡、草稿编辑、最终版本确认、附件发送、去重发送和结果核实。
-生产入口不使用模拟邮箱或内存草稿；真实账号七步验收仍在进行，
-本地测试通过不代表真实邮件已发送。Memory、Skill、KB 和认证部署仍未完成。
+单用户单实例部署，服务常驻。PC 与手机浏览器共用同一套响应式界面：发起任务、查看进度、编辑草稿、
+确认操作；任务不依赖始终开启的浏览器页面。新邮件是首版的系统触发源，收到即自动开始处理，
+但邮件只是它能做的事之一。
+
+当前状态：对话链、任务时间线、Gateway 与 Qoder CN/Gmail 生产装配已接通，SQLite schema 为 6。
+Gmail 支持搜索、单封与完整往来读取、入站附件读取、回复与主动新写邮件；两者共用内嵌草稿卡、
+草稿编辑、最终版本确认、去重发送和结果核实。外发邮件只支持纯文字正文。
+Calendar、个人知识库、Memory、Skills 尚未实现；认证与 HTTPS 远程访问尚未实现，
+目前只能本机和同局域网访问。真实账号验收仍在进行，本地测试通过不代表真实邮件已发送。
 
 ## 文档
 
 - `docs/v1-spec.md`：需求范围、产品行为、验收标准。内容冲突时以此为准。
-- `docs/v1-design.md`：组件划分、交付阶段、验证要求、当前实现。
-- `docs/v1-mail-flow-contract.md`：第一条邮件链的接口字段与语义。
+- `docs/v1-design.md`：组件划分、交付阶段、验证要求、当前实现与已知偏差。
+- `docs/contracts/mail.md`：Gmail 工具、同步触发、确认发送与核实的字段与语义（已实现）。
+- `docs/contracts/calendar.md`、`docs/contracts/personal-kb.md`、`docs/contracts/skills.md`：
+  对应域的约定，尚未实现。
 
-设计文档第 2 节的组件表是目标结构，`server/sessions/`、`server/tools/gmail/` 与 `server/approval/`
-已实现本地存储；HTTP 接口位于 `server/api/`，后台调用管理位于 `server/gateway/`，调用记录位于 `server/sessions/`，
-`server/agent/` 装配 Qoder CN SDK；SDK 会话负责模型上下文恢复，网页使用应用持久化的有序时间线。
+设计文档第 2 节的组件表与代码结构是目标结构，第 10 节记录已实现部分与已知偏差。
 
 ## 前置依赖
 
@@ -33,15 +38,23 @@
 cp .env.example .env
 ```
 
-`.env` 不进 Git。Qoder CN 使用 `QODERCN_PERSONAL_ACCESS_TOKEN`。
-Gmail 使用 `PEBBLE_GMAIL_CREDENTIALS_PATH` 指向 OAuth 桌面应用 JSON；首次启动在浏览器授权
-读取和发送权限，授权结果保存到实例目录的 `gmail_token.json`。
-自定义模型使用 `PEBBLE_MODEL_PROVIDER`、`PEBBLE_QODER_MODEL`、`PEBBLE_MODEL_API_KEY`，
-可选 `PEBBLE_MODEL_BASE_URL`；provider 必须匹配账号的 BYOK 目录。Key 仅交给 SDK 的模型配置，
-不进入系统提示或工具结果。Qoder CN 与国际版的 SDK、Token 和配置目录不能混用。
+`.env` 不进 Git。
 
-默认数据目录为 `<仓库根>/.data`，监听 `127.0.0.1:8000`。生产运行需要有效的 Qoder CN
-和 Gmail 凭证；仅测试使用不装配真实依赖的 `create_app()`。
+| 变量 | 含义 |
+| --- | --- |
+| `PEBBLE_DATA_DIR` | 实例数据目录，默认 `<仓库根>/.data` |
+| `PEBBLE_HOST`、`PEBBLE_PORT` | 监听地址与端口，默认 `127.0.0.1:8000` |
+| `QODERCN_PERSONAL_ACCESS_TOKEN` | Qoder CN 访问令牌，注意没有 `PEBBLE_` 前缀 |
+| `PEBBLE_QODER_MODEL` | 托管模型型号 |
+| `PEBBLE_MODEL_PROVIDER`、`PEBBLE_MODEL_API_KEY`、`PEBBLE_MODEL_BASE_URL` | 自定义模型（BYOK）。供应商、密钥、型号必须同时给全，`BASE_URL` 可选；provider 必须匹配账号的 BYOK 目录 |
+| `PEBBLE_GMAIL_CREDENTIALS_PATH` | Gmail OAuth 桌面应用 JSON，默认 `<data_dir>/credentials.json` |
+| `PEBBLE_GMAIL_TOKEN_PATH` | Gmail 授权结果，默认 `<data_dir>/gmail_token.json` |
+| `PEBBLE_BACKEND_URL` | 只给 Vite 开发代理使用，后端不读 |
+
+Gmail 首次启动在浏览器授权读取和发送权限。Key 仅交给 SDK 的模型配置，不进入系统提示或工具结果。
+Qoder CN 与国际版的 SDK、Token 和配置目录不能混用。
+
+生产运行需要有效的 Qoder CN 和 Gmail 凭证；仅测试使用不装配真实依赖的 `create_app()`。
 
 ## 启动
 
@@ -67,25 +80,36 @@ npm run dev
 页面在 `http://127.0.0.1:5173`，Vite 把 `/api` 代理到后端；`host` 已开放局域网，
 手机连同一网络后可用 Vite 打印的 Network 地址直接访问。
 
+## 远程访问
+
+规格要求手机不与服务在同一局域网也能完整使用（HTTPS + 单用户认证，见 `docs/v1-spec.md` §4.6）。
+该能力属于交付阶段 6，尚未实现：当前服务只监听本机，认证与来源校验都没有接入，
+因此只能在本机和同局域网内测试，不要暴露到公网。
+
+设计只固定安全要求，不固定传输方案；反向隧道、反向代理加域名或私有网络的选定结果与配置步骤
+会在实现后写回本节。
+
 ## 网页
 
-`web/` 是 TypeScript + React + Vite 单页应用，路由为 `/tasks`（发起新任务）和
+`web/` 是 TypeScript + React + Vite 单页应用，路由为 `/tasks`（任务列表与发起新任务）和
 `/tasks/:taskId`（统一时间线、完整草稿卡与逐项执行结果）。
-视觉设计系统 token 见 `src/styles/tokens.css`。
+视觉设计系统 token 见 `src/styles/tokens.css`，分种子、原语与语义三层。
 断点 900px：以上为侧栏布局，以下折叠为底部 tab，两端功能一致。
 任务列表就是导航本身：PC 在侧栏，手机在任务页内，默认列最近 5 条，其余折在「展开显示」后面。
-邮件草稿固定在 Agent 生成时的对话位置，卡片内展示完整正文和附件，并支持直接编辑、定向对话修改与最终确认。
+
+邮件草稿固定在 Agent 生成时的对话位置，卡片内展示完整正文，并支持直接编辑、定向对话修改与最终确认。
 未保存的修改不能确认，确认绑定卡片当前展示的草稿版本；发送状态和结果继续显示在原卡片上。
 编辑收件人时每行填写一个地址，可保留显示名。
 
 任务列表没有列表级事件流，按 5 秒轮询刷新（页面不可见时暂停），新邮件自动触发的任务无需手动刷新；
-确认后的发送在后台执行，事件流不携带执行状态，页面对执行结果按 1.5 秒轮询直到状态离开 `sending`。
-界面只呈现接口能支撑的内容：设计稿中的来源引用面板、日程预览卡与搜索框对应的接口尚未提供，暂不渲染。
+任务详情用 SSE，确认后的发送在后台执行，事件流不携带执行状态，页面对执行结果按 1.5 秒轮询直到
+状态离开 `sending`，SSE 重连后整体重读时间线对账。
+界面只呈现接口能支撑的内容：来源引用面板、日程预览卡与搜索框对应的接口尚未提供，暂不渲染。
 
 ## 验证
 
-浏览器打开 `http://127.0.0.1:5173`，应看到任务列表（PC 在左侧侧栏）。后端不可达时页面显示「无法连接服务」
-并提供重试，不白屏。
+浏览器打开 `http://127.0.0.1:5173`，应看到任务列表（PC 在左侧侧栏）。后端不可达时页面显示
+「无法连接服务」并提供重试，不白屏。
 
 或直接请求接口：
 
@@ -112,22 +136,21 @@ uv run --project server ruff format --config server/pyproject.toml server tests
 `ruff` 需要显式给 `--config`：`tests/` 在仓库根，向上找不到 `server/pyproject.toml`，
 否则会退回默认规则，与 `server/` 不一致。
 
-前端类型检查与构建（`web/` 内执行）：
+前端类型检查、测试与构建（`web/` 内执行）：
 
 ```bash
 npm run typecheck
+npm test
 npm run build
 ```
 
 ## 本地任务、草稿与确认发送服务
 
 初始化数据库后使用 `server.sessions.service.SessionStore`、`server.sessions.timeline.TimelineStore`、
-`server.uploads.UploadStore`、`server.tools.gmail.service.MailDraftStore` 和
-`server.approval.service.ConfirmationService`。它们默认使用实例数据库，也可显式传入
-`path=Path(...)`。上传内容保存在实例目录的 `uploads/` 中，SQLite 保存不可变文件元数据；草稿校验由 `server/tools/gmail/service.py`
-的纯函数在存储内完成；`ConfirmationService` 必须传入 Gmail 同步发送函数，生产代码没有
-默认成功的发送函数。输入输出字段及错误含义见
-[邮件接口字段契约](docs/v1-mail-flow-contract.md)。
+`server.tools.gmail.service.MailDraftStore` 和 `server.approval.service.ConfirmationService`。
+它们默认使用实例数据库，也可显式传入 `path=Path(...)`。草稿校验由 `server/tools/gmail/service.py`
+的纯函数在存储内完成；`ConfirmationService` 必须传入 Gmail 同步发送函数，生产代码没有默认成功的
+发送函数。输入输出字段及错误含义见 [Gmail 契约](docs/contracts/mail.md)。
 
 任务保存用户目标与 SDK 会话关联；操作管理版本与状态；邮件字段和原邮件去重留在邮件能力内。
 跨任务复用同一操作后，各任务看到相同的最新草稿与状态，SDK 会话仍独立。
@@ -137,7 +160,7 @@ npm run build
 - `accept_confirmation(task_id, operation_id, version)`：检查版本、保存确认并取得执行权。
 - `execute_accepted(operation_id)`：后台读取已确认版本、发送并保存结果；重复调用不再次发送。
 - `get_execution(operation_id)`：操作当前状态、确认信息及已保存结果。
-- `get_agent_result(operation_id)`：契约第 7 节的回传数据；尚无结果或回传任务未关联会话时返回 `None`。
+- `get_agent_result(operation_id)`：回传数据；尚无结果或回传任务未关联会话时返回 `None`。
 - `verify_pending(operation_id)`：只读核实 `unknown`，找到已发送证据后更新为 `sent` 并登记回传。
 - `recover_interrupted_executions()`：重启时已开始的发送记 `unknown`，尚未开始的记 `failed`；
   在数据库初始化后、接受请求前调用，不自动重发。
@@ -148,29 +171,31 @@ npm run build
 ## 验证范围
 
 - `tests/storage/`：真实 SQLite 的版本、并发、回滚、恢复与确认去重。
-- `tests/gateway/`：后台调度、SDK 选项装配与事件映射、工具端点与工具边界、执行结果回传。
-- `tests/api/test_http_flow.py`：独立进程的 HTTP/SSE、断线后继续执行与重启。
-- `tests/tools/`：邮件解析、草稿校验、报文构建与发送结果核实。
+- `tests/gateway/`：后台调度、SDK 选项装配与事件映射、工具端点与工具边界、执行结果回传、邮件全链路衔接。
+- `tests/api/`：健康检查，以及独立进程的 HTTP/SSE、断线后继续执行与重启。
+- `tests/tools/`：邮件解析、草稿校验、报文构建、发送结果核实与注册表声明。
 
 测试只替换 SDK 子进程与 Gmail 投递这两个外部边界，其余模块、SQLite、HTTP 都是真的。
 SDK 模型响应与 Gmail 投递仍须用明确授权的账号和内容验收；测试通过不代表真实邮件发送成功。
 
-新邮件来源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/runtime.py` 的
-`MailSource`（`start` / `stop` / `error`）。真实 Gmail 检测由 `server/tools/gmail/sync.py` 实现同一接口，生产工厂统一装配。
+触发源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/runtime.py` 的 `MailSource`
+（`start` / `stop` / `error`）。真实 Gmail 检测由 `server/tools/gmail/sync.py` 实现同一接口，
+生产工厂统一装配。
 
 ## 生产装配
 
 生产入口为 `server.main:create_production_app`（Uvicorn factory），上面的 `python -m server.main`
-已使用该入口。`create_app()` 保留为显式依赖注入的应用构造函数，供测试使用。
+已使用该入口。`create_app()` 保留为显式依赖注入的应用构造函数，供测试使用。启动顺序为
+初始化数据库 → 恢复中断的发送 → 恢复调用调度 → 启动邮件检测；关闭时先停检测再等发送落盘。
 
-Gmail 首次启动记录当前 historyId，随后每 10 秒检测新增的收件箱邮件；首次启动前的旧邮件
-不会批量触发。跨进程游标保存在 `.data/gmail_sync.json`。邮件成功交给 Gateway 的持久化任务入口后
-才推进游标，重复通知由 Gateway 去重。游标失效明确停止检测，health 显示原因，需要核对后重新建立
-同步位置，不静默跳过缺口。常规检测错误保留游标，在下一轮重新查询。
+Gmail 首次启动记录当前 historyId，随后每 10 秒检测新增的收件箱邮件；首次启动前的旧邮件不会批量触发。
+跨进程游标保存在 `.data/gmail_sync.json`。邮件成功交给 Gateway 的持久化任务入口后才推进游标，
+重复通知由 Gateway 去重。游标失效明确停止检测，health 显示原因，需要核对后重新建立同步位置，
+不静默跳过缺口。常规检测错误保留游标，在下一轮重新查询。
 
 新邮件轮次仅开放邮件读取工具。用户要求起草后，SDK 才可调用准备、读取及更新草稿工具；
-更新使用当前已保存版本，直接编辑与 Agent 修改共用 MailDraftStore 的版本控制。草稿保存事件交给网页。
-发送函数仅由 Confirmation 调用，执行结果回到确认任务的原 SDK 会话。
+更新使用当前已保存版本，直接编辑与 Agent 修改共用 `MailDraftStore` 的版本控制。
+草稿保存事件交给网页。发送函数仅由 Confirmation 调用，执行结果回到确认任务的原 SDK 会话。
 
 模型经应用进程内的 MCP 端点（server 名 `pebble`）调用工具，内置工具与本机设置关闭：每轮登记一个
 一次性路径供 qodercli 子进程按回环地址连接，轮次结束即撤销。每轮独立启动一次 qodercli 子进程，
@@ -179,6 +204,5 @@ Gmail 首次启动记录当前 historyId，随后每 10 秒检测新增的收件
 
 联合测试 `tests/gateway/test_integrated_mail.py` 覆盖实际模块衔接、Agent 修改与手动编辑、
 旧版本拒绝、最终内容一致性、重复确认、结果会话关联与游标推进；`tests/gateway/test_agent_stream.py`
-覆盖选项装配、事件映射与工具边界；`tests/api/test_http_flow.py` 覆盖上传、内嵌时间线、原卡片更新和附件确认发送。
-其中 SDK 模型响应和 Gmail 投递仍为测试边界替身；
-真实验收结果需另行记录。
+覆盖选项装配、事件映射与工具边界；`tests/api/test_http_flow.py` 覆盖内嵌时间线、原卡片更新和确认发送。
+其中 SDK 模型响应和 Gmail 投递仍为测试边界替身；真实验收结果需另行记录。
