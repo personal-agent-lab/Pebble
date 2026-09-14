@@ -28,14 +28,3 @@ export function useTasks(): TaskListValue {
   if (value === null) throw new Error("useTasks 必须在 TaskListProvider 内使用");
   return value;
 }
-
-/** 全部任务中待确认操作的总数；列表未读到时按 0 计，不显示占位数字。 */
-export function pendingTotal(entries: TaskEntry[] | null): number {
-  return (
-    entries?.reduce(
-      (total, entry) =>
-        total + entry.operations.filter((operation) => operation.status === "pending").length,
-      0,
-    ) ?? 0
-  );
-}

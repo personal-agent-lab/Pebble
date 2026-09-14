@@ -143,6 +143,8 @@ export const listTasks = () => request<Task[]>("/tasks");
 export const createTask = (goal: string) =>
   request<Task>("/tasks", { method: "POST", body: JSON.stringify({ goal }) });
 export const getTask = (taskId: string) => request<TaskDetail>(`/tasks/${taskId}`);
+export const deleteTask = (taskId: string) =>
+  request<void>(`/tasks/${taskId}`, { method: "DELETE" });
 export const listOperations = (taskId: string) =>
   request<OperationSummary[]>(`/tasks/${taskId}/operations`);
 export const getTimeline = (taskId: string) => request<Timeline>(`/tasks/${taskId}/timeline`);

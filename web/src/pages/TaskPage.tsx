@@ -44,11 +44,15 @@ export default function TaskPage() {
   </div></AppShell>;
 
   const badge = taskBadge(detail.task?.latest_run ?? null, detail.operations);
+  // 顶栏标题与侧栏取同一份任务列表：首个调用结束后模型会把目标改写成短标题，
+  // 而详情只在事件到达时重读，改写落盘晚于结束事件，靠列表轮询对齐两处文案。
+  const listed = tasks.entries?.find((entry) => entry.task.task_id === taskId)?.task ?? null;
+  const title = listed?.goal ?? detail.task?.goal ?? null;
   return <AppShell serviceError={detail.error}>
     <div className="chat-top">
       <button type="button" className="back" onClick={() => navigate("/tasks")} aria-label="返回任务列表">{BACK_ICON}</button>
       <div style={{ minWidth: 0, flex: 1 }}>
-        <h2>{detail.task?.goal ?? "读取中…"}</h2>
+        <h2 title={title ?? undefined}>{title ?? "读取中…"}</h2>
         <div className="sub">{detail.task !== null && `开始 ${shortTime(detail.task.created_at)}`}</div>
       </div>
       <StatusBadge badge={badge} />

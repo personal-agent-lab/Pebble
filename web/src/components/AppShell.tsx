@@ -1,9 +1,10 @@
-import { useState, type ReactNode } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
-import type { ApiError } from "../api";
+import { ApiError, deleteTask } from "../api";
+import { useSeen } from "../seen";
 import { taskBadge } from "../status";
-import { pendingTotal, useTasks } from "../tasks";
+import { useTasks } from "../tasks";
 
 type Props = {
   serviceError?: ApiError | null;
@@ -21,6 +22,14 @@ const COMPOSE_ICON = (
   <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 20h9" />
     <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+  </svg>
+);
+
+const MORE_ICON = (
+  <svg className="i" viewBox="0 0 24 24" fill="currentColor">
+    <circle cx="5" cy="12" r="1.7" />
+    <circle cx="12" cy="12" r="1.7" />
+    <circle cx="19" cy="12" r="1.7" />
   </svg>
 );
 
@@ -74,12 +83,12 @@ function writeExpanded(expanded: boolean): void {
 }
 
 /** 手机底部 tab 用的任务入口：没有子列表，整个任务分区都算在内。 */
-function TasksLink({ pending }: { pending: number }) {
+function TasksLink({ unread }: { unread: number }) {
   return (
     <NavLink to="/tasks" className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
       {TASKS_ICON}
       任务
-      {pending > 0 && <span className="nav-count">{pending} 待确认</span>}
+      {unread > 0 && <span className="nav-count">{unread} 待确认</span>}
     </NavLink>
   );
 }
@@ -99,21 +108,151 @@ function Placeholders() {
 }
 
 /**
+ * 条目右侧的三点菜单：悬浮出现，收起时只放“删除对话”，确认后整条任务连同记录一起删除。
+ * 删除失败（如任务仍在运行）把原因留在菜单里，不弹全局提示。
+ */
+function TaskItemMenu({ taskId, onDeleted }: { taskId: string; onDeleted: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+
+  const close = () => {
+    setOpen(false);
+    setConfirming(false);
+    setFailure(null);
+  };
+
+  /** 侧栏任务区自己会滚动，弹层留在流里会被裁掉：改用 fixed，坐标在打开时按按钮量一次。 */
+  const openMenu = () => {
+    const rect = button.current?.getBoundingClientRect();
+    if (rect === undefined) return;
+    // 用 clientWidth 而不是 innerWidth：后者含滚动条宽度，fixed 的右边界不含，经典滚动条下会偏。
+    setAnchor({ top: rect.bottom + 4, right: document.documentElement.clientWidth - rect.right });
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (root.current !== null && !root.current.contains(event.target as Node)) close();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    // 量出来的坐标不跟随滚动与窗口变化：菜单是一次性操作，位置会失效就直接收起。
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open]);
+
+  const remove = async () => {
+    if (busy) return;
+    setBusy(true);
+    setFailure(null);
+    try {
+      await deleteTask(taskId);
+      close();
+      onDeleted();
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error.message : String(error));
+      setConfirming(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="nav-task-menu" ref={root}>
+      <button
+        type="button"
+        ref={button}
+        className="nav-task-more"
+        aria-label="更多操作"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => (open ? close() : openMenu())}
+      >
+        {MORE_ICON}
+      </button>
+      {open && anchor !== null && (
+        <div
+          className="task-menu"
+          role="menu"
+          style={{ position: "fixed", top: anchor.top, right: anchor.right }}
+        >
+          {failure !== null && <div className="task-menu-error">{failure}</div>}
+          {confirming ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                className="task-menu-item danger"
+                disabled={busy}
+                onClick={() => void remove()}
+              >
+                确认删除
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="task-menu-item"
+                disabled={busy}
+                onClick={() => setConfirming(false)}
+              >
+                取消
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              className="task-menu-item danger"
+              onClick={() => setConfirming(true)}
+            >
+              删除对话
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * 任务列表本身就是导航，列表项直接进入对应任务。
  *
  * 默认只列最近几条，其余折在“展开显示”后面——这是索引不是总览，
- * 状态与时间留在任务页；只有待确认会在行内标出，因为它需要用户动作。
+ * 状态与时间留在任务页；行内只标出没读过的待确认，因为它需要用户动作，
+ * 点进去读过就不再提醒（真实状态仍在任务页顶部）。
  * PC 放在侧栏，手机没有侧栏，同一组件直接出现在任务页里。
  */
 export function TaskLinks() {
-  const { entries } = useTasks();
+  const { entries, reload } = useTasks();
+  const seen = useSeen();
   const [expanded, setExpanded] = useState(readExpanded);
   const { pathname } = useLocation();
+  const navigate = useNavigate();
 
   const toggle = () => {
     const next = !expanded;
     setExpanded(next);
     writeExpanded(next);
+  };
+
+  const onDeleted = async (taskId: string) => {
+    await reload();
+    if (pathname.startsWith(`/tasks/${taskId}`)) navigate("/tasks");
   };
 
   const all = entries ?? [];
@@ -129,17 +268,23 @@ export function TaskLinks() {
         {entries !== null && all.length === 0 && <div className="nav-note">还没有任务</div>}
         {visible.map((entry) => {
           const badge = taskBadge(entry.latestRun, entry.operations);
+          const unread = seen.unread(entry.task.task_id, entry.operations);
           return (
-            <NavLink
-              key={entry.task.task_id}
-              to={`/tasks/${entry.task.task_id}`}
-              title={`${entry.task.goal} · ${badge.label}`}
-              className={({ isActive }) => `nav-task${isActive ? " active" : ""}`}
-            >
-              <span className="t">{entry.task.goal}</span>
-              {badge.tone === "wait" && <span className="nav-dot wait" aria-hidden />}
-              <span className="sr-only">{badge.label}</span>
-            </NavLink>
+            <div className="nav-task-row" key={entry.task.task_id}>
+              <NavLink
+                to={`/tasks/${entry.task.task_id}`}
+                title={`${entry.task.goal} · ${badge.label}`}
+                className={({ isActive }) => `nav-task${isActive ? " active" : ""}`}
+              >
+                <span className="t">{entry.task.goal}</span>
+                {unread > 0 && <span className="nav-dot wait" aria-hidden />}
+                <span className="sr-only">{badge.label}</span>
+              </NavLink>
+              <TaskItemMenu
+                taskId={entry.task.task_id}
+                onDeleted={() => void onDeleted(entry.task.task_id)}
+              />
+            </div>
           );
         })}
       </div>
@@ -156,14 +301,14 @@ export function TaskLinks() {
 /** 侧栏任务区：分区标题 + 任务列表，标题右侧是发起新任务的入口。 */
 function SidebarTasks() {
   const { entries } = useTasks();
-  const pending = pendingTotal(entries);
+  const unread = useSeen().unreadTotal(entries);
 
   return (
     <div className="nav-group">
       <div className="nav-head">
         {TASKS_ICON}
         <span className="nav-head-title">任务</span>
-        {pending > 0 && <span className="nav-head-count">{pending} 待确认</span>}
+        {unread > 0 && <span className="nav-head-count">{unread} 待确认</span>}
         <NavLink
           to="/tasks"
           end
@@ -182,6 +327,7 @@ function SidebarTasks() {
 /** PC 侧栏 / 手机底部 tab 共用同一组导航项，两端功能一致。 */
 export default function AppShell({ serviceError, children }: Props) {
   const { entries, error } = useTasks();
+  const unread = useSeen().unreadTotal(entries);
   const offline = serviceError?.offline === true || error?.offline === true;
 
   return (
@@ -210,7 +356,7 @@ export default function AppShell({ serviceError, children }: Props) {
       <div className="main">{children}</div>
 
       <nav className="tabbar">
-        <TasksLink pending={pendingTotal(entries)} />
+        <TasksLink unread={unread} />
         <Placeholders />
       </nav>
     </div>
