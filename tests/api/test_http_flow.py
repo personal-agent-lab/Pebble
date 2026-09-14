@@ -1,6 +1,5 @@
 """真实 HTTP/SSE 与独立进程验收；外部 Agent/Gmail 仅使用测试替身。"""
 
-import hashlib
 import json
 import os
 import socket
@@ -40,7 +39,6 @@ def build_fixture_app() -> FastAPI:
             "to": ["a@example.com", "b@example.com"],
             "subject": " 回复：邀请 ",
             "body": turn.message,
-            "attachment_ids": [],
         }
         if operations:
             operation = operations[0]
@@ -205,7 +203,6 @@ def test_http_sse_flow_and_process_restart(settings, outcome, monkeypatch):
             "to": ["b@example.com", "a@example.com"],
             "subject": " 最终主题 ",
             "body": "你好，\n\n  我参加。\n",
-            "attachment_ids": [],
         }
         assert (
             request(f"/operations/{oid}/draft", {"expected_version": 3, **final}, "PATCH")[1][
@@ -250,7 +247,6 @@ def test_http_sse_flow_and_process_restart(settings, outcome, monkeypatch):
             "to": final["to"],
             "subject": final["subject"],
             "body": final["body"],
-            "attachments": [],
         }
         assert execution["confirmation"]["task_id"] == tid
         with session() as conn:
@@ -300,7 +296,7 @@ def test_missing_dependencies_reject_before_mutation(settings):
             client.post(f"/api/tasks/{tid}/messages", json={"message": "你好"}).status_code == 503
         )
         drafts = MailDraftStore()
-        op = drafts.save_reply_draft(tid, "m", "thread", ["a@example.com"], "主题", "正文", [])
+        op = drafts.save_reply_draft(tid, "m", "thread", ["a@example.com"], "主题", "正文")
         assert (
             client.post(
                 f"/api/tasks/{tid}/confirmations",
@@ -313,127 +309,6 @@ def test_missing_dependencies_reject_before_mutation(settings):
             assert conn.execute("SELECT COUNT(*) FROM agent_runs").fetchone()[0] == 0
             assert conn.execute("SELECT COUNT(*) FROM approval_executions").fetchone()[0] == 0
         assert len(SessionStore().list_tasks()) == 1
-
-
-def test_inline_mail_card_full_flow_with_uploaded_attachment(settings):
-    """上传到原卡片发送是一条 HTTP 全链路；只替换 Agent 决策和 Gmail 投递。"""
-    gateway = FakeAgentGateway()
-    sent = []
-
-    def sender(**fields):
-        sent.append(fields)
-        return {"status": "sent", "message_id": "gmail-inline-1"}
-
-    app = create_app(gateway=gateway, send_message=sender)
-    with TestClient(app) as client:
-        task_id = client.post("/api/tasks", json={"goal": "发送证明邮件"}).json()["task_id"]
-        content = b"immutable proof"
-        uploaded = client.post(
-            f"/api/tasks/{task_id}/uploads",
-            files={"file": ("../proof.pdf", content, "application/pdf")},
-        ).json()
-        assert uploaded["filename"] == "proof.pdf"
-        assert uploaded["sha256"] == hashlib.sha256(content).hexdigest()
-
-        async def create_draft(turn):
-            yield {"type": "session", "sdk_session_id": "inline-session"}
-            yield {"type": "text", "text": "我先整理邮件内容。"}
-            attachments = next(
-                material.content for material in turn.materials if "上传的附件" in material.title
-            )
-            saved = app.state.drafts.save_email_draft(
-                turn.task_id,
-                ["office@example.edu"],
-                "提交证明文件",
-                "请查收附件。",
-                [attachments[0]["file_id"]],
-            )
-            yield {"type": "draft_saved", **saved}
-            yield {"type": "text", "text": "你可以直接编辑，或告诉我如何修改。"}
-            yield {"type": "done"}
-
-        gateway.handle("message", create_draft)
-        response = client.post(
-            f"/api/tasks/{task_id}/messages",
-            json={"message": "写一封邮件", "attachment_ids": [uploaded["file_id"]]},
-        )
-        assert response.status_code == 202
-        wait_for(
-            lambda: client.get(f"/api/tasks/{task_id}").json()["latest_run"]["status"] == "done"
-        )
-        first = client.get(f"/api/tasks/{task_id}/timeline").json()["items"]
-        assert [item["kind"] for item in first] == ["text", "text", "mail_draft", "text"]
-        card = first[2]
-        assert card["draft"]["attachments"] == [uploaded]
-
-        direct = client.patch(
-            f"/api/operations/{card['operation_id']}/draft",
-            json={
-                "expected_version": 1,
-                "to": card["draft"]["to"],
-                "subject": "正式提交证明文件",
-                "body": card["draft"]["body"],
-                "attachment_ids": [uploaded["file_id"]],
-            },
-        )
-        assert direct.json()["version"] == 2
-
-        async def revise_draft(turn):
-            assert turn.target_operation_id == card["operation_id"]
-            current = app.state.drafts.get_draft(card["operation_id"])
-            saved = app.state.drafts.update_draft(
-                card["operation_id"],
-                current["version"],
-                current["to"],
-                current["subject"],
-                "您好，\n\n请查收附件。",
-                [uploaded["file_id"]],
-            )
-            yield {"type": "draft_saved", **saved}
-            yield {"type": "text", "text": "已更新原邮件草稿。"}
-            yield {"type": "done"}
-
-        gateway.handle("message", revise_draft)
-        response = client.post(
-            f"/api/tasks/{task_id}/messages",
-            json={
-                "message": "语气更正式",
-                "target": {"kind": "mail_draft", "operation_id": card["operation_id"]},
-            },
-        )
-        assert response.status_code == 202
-        wait_for(
-            lambda: client.get(f"/api/tasks/{task_id}").json()["latest_run"]["status"] == "done"
-        )
-        second = client.get(f"/api/tasks/{task_id}/timeline").json()["items"]
-        cards = [item for item in second if item["kind"] == "mail_draft"]
-        assert len(cards) == 1
-        assert cards[0]["item_id"] == card["item_id"]
-        assert cards[0]["draft"]["version"] == 3
-
-        for _ in range(2):
-            assert (
-                client.post(
-                    f"/api/tasks/{task_id}/confirmations",
-                    json={"operation_id": card["operation_id"], "version": 3},
-                ).status_code
-                == 202
-            )
-        wait_for(
-            lambda: (
-                client.get(f"/api/operations/{card['operation_id']}/execution").json()["status"]
-                == "sent"
-            )
-        )
-        assert len(sent) == 1
-        assert sent[0]["to"] == ["office@example.edu"]
-        assert sent[0]["subject"] == "正式提交证明文件"
-        assert sent[0]["body"] == "您好，\n\n请查收附件。"
-        assert sent[0]["attachments"][0] == {**uploaded, "data": content}
-        final = client.get(f"/api/tasks/{task_id}/timeline").json()["items"]
-        final_card = next(item for item in final if item["kind"] == "mail_draft")
-        assert final_card["execution"]["status"] == "sent"
-        assert final_card["execution"]["result"]["message_id"] == "gmail-inline-1"
 
 
 def test_verification_route_upgrades_and_delivers(settings):
@@ -452,7 +327,7 @@ def test_verification_route_upgrades_and_delivers(settings):
     with TestClient(app) as client:
         tid = client.post("/api/tasks", json={"goal": "测试"}).json()["task_id"]
         drafts = app.state.drafts
-        op = drafts.save_reply_draft(tid, "m", "t", ["a@example.com"], "主题", "正文", [])
+        op = drafts.save_reply_draft(tid, "m", "t", ["a@example.com"], "主题", "正文")
         oid = op["operation_id"]
         client.post(f"/api/tasks/{tid}/confirmations", json={"operation_id": oid, "version": 1})
 
@@ -477,7 +352,6 @@ def test_verification_route_upgrades_and_delivers(settings):
             "to",
             "subject",
             "body",
-            "attachments",
         }
 
         assert client.post(f"/api/operations/{oid}/verification").json() == verified
@@ -488,7 +362,7 @@ def test_verification_of_unconfirmed_operation_calls_nothing(settings):
     """只有待核实结果才需要核实：其余状态原样返回，不调用外部接口，也不需要核实依赖。"""
     with TestClient(create_app()) as client:
         tid = client.post("/api/tasks", json={"goal": "测试"}).json()["task_id"]
-        op = MailDraftStore().save_reply_draft(tid, "m", "t", ["a@example.com"], "主题", "正文", [])
+        op = MailDraftStore().save_reply_draft(tid, "m", "t", ["a@example.com"], "主题", "正文")
         oid = op["operation_id"]
 
         response = client.post(f"/api/operations/{oid}/verification")

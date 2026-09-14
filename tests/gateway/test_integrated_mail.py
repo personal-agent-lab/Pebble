@@ -86,7 +86,6 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
                             "to": ["alice@example.com"],
                             "subject": "Re: 邀请",
                             "body": "谢谢邀请。",
-                            "attachment_ids": [],
                         },
                     )
                 )
@@ -103,9 +102,6 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
                         "to": current["to"],
                         "subject": current["subject"],
                         "body": current["body"] + "\n请提供会议链接。",
-                        "attachment_ids": [
-                            attachment["file_id"] for attachment in current["attachments"]
-                        ],
                     },
                 )
                 yield self.say("已按你的要求补充。")
@@ -157,7 +153,7 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
         edited["body"] += "\n用户审核后的结尾  "
         response = http.patch(
             f"/api/operations/{oid}/draft",
-            json={"expected_version": 2, "attachment_ids": [], **edited},
+            json={"expected_version": 2, **edited},
         )
         assert response.status_code == 200, response.text
         assert drafts.get_draft(oid, 1)["body"] == "谢谢邀请。"
@@ -172,7 +168,6 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
         assert http.post(endpoint, json={"operation_id": oid, "version": 3}).status_code == 202
         assert len(gmail.sent_log) == 1
         assert {key: gmail.sent_log[0][key] for key in edited} == edited
-        assert gmail.sent_log[0]["attachments"] == []
         assert len(set(sessions)) == 1
         assert len(turns) == 4
 
@@ -237,7 +232,6 @@ def test_tools_bind_assembled_dependencies_without_global_state(settings, tmp_pa
                 to=["alice@example.com"],
                 subject="Re: 邀请",
                 body=f"{name} 的草稿。",
-                attachment_ids=[],
                 task_id=task_id,
             )
         )

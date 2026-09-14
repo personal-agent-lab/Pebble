@@ -29,7 +29,6 @@ FINAL = {
     "to": ["alice@example.com", "b@example.com", "c@example.com"],
     "subject": " 回复：活动邀请 ",
     "body": "你好，\n\n我参加。\n\n谢谢！\n",
-    "attachment_ids": [],
 }
 
 _SENT = object()
@@ -81,7 +80,6 @@ def test_confirm_sends_exact_confirmed_version(stores):
         "to": ["zoe@example.com", "alice@example.com", "c@example.com"],
         "subject": "回复：活动邀请（确认）",
         "body": "  最终版：\n\n我参加。\n",
-        "attachment_ids": [],
     }
     third = drafts.update_draft(operation["operation_id"], second["version"], **final)
     assert third["version"] == 3
@@ -100,7 +98,6 @@ def test_confirm_sends_exact_confirmed_version(stores):
             "to": final["to"],
             "subject": final["subject"],
             "body": final["body"],
-            "attachments": [],
         }
     ]
     assert response["operation_id"] == operation["operation_id"]
@@ -121,13 +118,12 @@ def test_new_email_uses_same_versioned_confirmation(stores):
     tasks, drafts = stores
     task = tasks.create_task("给老师写邮件")
     operation = drafts.save_email_draft(
-        task["task_id"], ["professor@example.edu"], "初稿主题", "初稿正文", []
+        task["task_id"], ["professor@example.edu"], "初稿主题", "初稿正文"
     )
     final = {
         "to": ["professor@example.edu"],
         "subject": "咨询见面时间",
         "body": "老师您好，请问周五是否方便？",
-        "attachment_ids": [],
     }
     version = drafts.update_draft(operation["operation_id"], 1, **final)
     sender = Sender()
@@ -146,7 +142,6 @@ def test_new_email_uses_same_versioned_confirmation(stores):
             "to": final["to"],
             "subject": final["subject"],
             "body": final["body"],
-            "attachments": [],
         }
     ]
     assert response["status"] == "sent"
@@ -663,7 +658,6 @@ def test_verify_upgrades_unknown_to_sent_with_confirmed_content(stores):
             "to": FINAL["to"],
             "subject": FINAL["subject"],
             "body": FINAL["body"],
-            "attachments": [],
         }
     ]
     assert verified["confirmation"]["task_id"] == task["task_id"]

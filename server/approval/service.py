@@ -22,7 +22,6 @@ from server.sessions import repository as operations
 from server.sessions import runs as agent_runs
 from server.sessions.service import timestamp
 from server.tools.gmail import service as mail
-from server.uploads import UploadStore
 
 RECOVERED_REASON = "发送调用未完成即中断，结果待核实"
 
@@ -42,7 +41,6 @@ class MailSender(Protocol):
         to: list[str],
         subject: str,
         body: str,
-        attachments: list[dict],
         source_message_id: str | None = None,
         thread_id: str | None = None,
     ) -> dict: ...
@@ -59,7 +57,6 @@ class MailVerifier(Protocol):
         to: list[str],
         subject: str,
         body: str,
-        attachments: list[dict],
         source_message_id: str | None = None,
         thread_id: str | None = None,
     ) -> dict: ...
@@ -139,7 +136,6 @@ class ConfirmationService:
         self.send_message = send_message
         self.verify_message = verify_message
         self.path = path
-        self.uploads = UploadStore(path)
 
     def accept_confirmation(self, task_id: str, operation_id: str, version: int) -> dict:
         """接受确认：写事务内检查版本、保存确认并取得执行权，返回当前状态。
@@ -182,7 +178,6 @@ class ConfirmationService:
 
     def _verify(self, operation_id: str, draft: dict) -> dict:
         try:
-            attachments = self.uploads.contents(draft["attachments"])
             returned = self.verify_message(
                 operation_id=operation_id,
                 kind=draft["kind"],
@@ -191,7 +186,6 @@ class ConfirmationService:
                 to=list(draft["to"]),
                 subject=draft["subject"],
                 body=draft["body"],
-                attachments=attachments,
             )
         except Exception as error:  # 核实失败不能证明未发送，保持待核实
             return {"status": "unknown", "reason": f"核实调用异常：{error!r}"}
@@ -295,7 +289,6 @@ class ConfirmationService:
 
     def _send(self, operation_id: str, version: int, draft: dict) -> dict:
         try:
-            attachments = self.uploads.contents(draft["attachments"])
             returned = self.send_message(
                 operation_id=operation_id,
                 version=version,
@@ -305,7 +298,6 @@ class ConfirmationService:
                 to=list(draft["to"]),
                 subject=draft["subject"],
                 body=draft["body"],
-                attachments=attachments,
             )
         except Exception as error:  # 超时与普通异常都只说明结果待核实
             return {"status": "unknown", "reason": f"发送调用异常：{error!r}"}

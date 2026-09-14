@@ -17,7 +17,6 @@ from server.db import init_db
 from server.gateway.runtime import GatewayRuntime, MailSource
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
-from server.uploads import UploadStore
 
 
 def create_app(
@@ -39,7 +38,6 @@ def create_app(
     drafts = drafts if drafts is not None else MailDraftStore()
     confirmations = ConfirmationService(send_message, verify_message)
     agent = GatewayRuntime(gateway, confirmations=confirmations)
-    uploads = UploadStore()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -63,7 +61,6 @@ def create_app(
     app.state.tasks = tasks
     app.state.drafts = drafts
     app.state.confirmations = confirmations
-    app.state.uploads = uploads
     app.state.agent = agent
     app.state.mail_source = mail_source
     install_error_handlers(app)

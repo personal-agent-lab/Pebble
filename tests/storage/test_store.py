@@ -25,7 +25,6 @@ CONTENT = {
     "to": ["alice@example.com", "b@example.com"],
     "subject": " 回复：活动 ",
     "body": "你好\n\n谢谢！\n",
-    "attachment_ids": [],
 }
 
 
@@ -82,7 +81,6 @@ def test_versions_reuse_and_sessions(stores):
         assert {key: result[key] for key in ("to", "subject", "body")} == {
             key: content[key] for key in ("to", "subject", "body")
         }
-        assert result["attachments"] == []
     for current_task in (task, other):
         assert tasks.list_task_operations(current_task["task_id"])[0]["version"] == 2
     assert tasks.get_task(task["task_id"])["sdk_session_id"] == "sdk1"
@@ -250,9 +248,9 @@ drafts = MailDraftStore()
 t = tasks.create_task("跨进程目标")
 tasks.bind_sdk_session(t["task_id"], "sdk-persisted")
 o = drafts.save_reply_draft(
-    t["task_id"], "m1", "thread1", ["a@x.com", "b@x.com"], "主题", "第一版", []
+    t["task_id"], "m1", "thread1", ["a@x.com", "b@x.com"], "主题", "第一版"
 )
-drafts.update_draft(o["operation_id"], 1, ["a@x.com", "b@x.com"], "主题", "第二版\\n正文", [])
+drafts.update_draft(o["operation_id"], 1, ["a@x.com", "b@x.com"], "主题", "第二版\\n正文")
 result = {"task": tasks.get_task(t["task_id"]),
           "draft": drafts.get_draft(o["operation_id"]),
           "ops": tasks.list_task_operations(t["task_id"])}

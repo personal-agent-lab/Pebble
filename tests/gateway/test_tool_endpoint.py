@@ -19,7 +19,6 @@ DRAFT = {
     "to": ["alice@example.com"],
     "subject": "Re: 邀请",
     "body": "谢谢邀请，我准时参加。",
-    "attachment_ids": [],
 }
 
 
@@ -118,8 +117,8 @@ def test_targeted_turn_can_only_update_selected_draft(settings):
     tools, tasks = build(settings)
     task_id = tasks.create_task("修改邮件")["task_id"]
     drafts = MailDraftStore()
-    target = drafts.save_email_draft(task_id, ["a@example.com"], "主题", "正文", [])
-    other = drafts.save_email_draft(task_id, ["b@example.com"], "其他", "正文", [])
+    target = drafts.save_email_draft(task_id, ["a@example.com"], "主题", "正文")
+    other = drafts.save_email_draft(task_id, ["b@example.com"], "其他", "正文")
     server = ToolServer()
     drafting = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
 
@@ -139,7 +138,6 @@ def test_targeted_turn_can_only_update_selected_draft(settings):
                     "to": ["c@example.com"],
                     "subject": "新建",
                     "body": "正文",
-                    "attachment_ids": [],
                 },
             )
             assert tool_payload(created)["error"] == "wrong_target"
@@ -155,7 +153,6 @@ def test_targeted_turn_can_only_update_selected_draft(settings):
                     "to": ["a@example.com"],
                     "subject": "已更新",
                     "body": "正文",
-                    "attachment_ids": [],
                 },
             )
             assert tool_payload(updated)["version"] == 2

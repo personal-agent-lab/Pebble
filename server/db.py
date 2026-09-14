@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -101,12 +101,20 @@ SCHEMA_V5 = (
     "ON task_timeline_items(task_id, operation_id) WHERE kind = 'mail_draft'",
 )
 
+# 邮件只支持纯文字：移除上传文件与草稿、时间线上的附件绑定。
+SCHEMA_V6 = (
+    "DROP TABLE uploaded_files",
+    "ALTER TABLE mail_draft_versions DROP COLUMN attachment_ids",
+    "ALTER TABLE task_timeline_items DROP COLUMN attachment_ids",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
     3: SCHEMA_V3,
     4: SCHEMA_V4,
     5: SCHEMA_V5,
+    6: SCHEMA_V6,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

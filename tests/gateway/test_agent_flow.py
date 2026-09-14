@@ -35,7 +35,6 @@ DRAFT = {
     "to": ["alice@example.com"],
     "subject": "回复：活动邀请",
     "body": "你好，\n\n我参加。\n",
-    "attachment_ids": [],
 }
 
 
@@ -165,7 +164,6 @@ async def test_timeline_preserves_text_draft_text_and_updates_card_in_place(flow
                 DRAFT["to"],
                 DRAFT["subject"],
                 DRAFT["body"],
-                [],
             )
             yield {"type": "draft_saved", **saved}
             yield {"type": "text", "text": "请直接在卡片里审阅。"}
@@ -198,7 +196,6 @@ async def test_timeline_preserves_text_draft_text_and_updates_card_in_place(flow
                 current["to"],
                 current["subject"],
                 current["body"] + "\n更正式。",
-                [],
             )
             yield {"type": "draft_saved", **saved}
             yield {"type": "text", "text": "已更新原草稿。"}

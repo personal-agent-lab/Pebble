@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -14,7 +14,6 @@ from server.db import schema_version, session
 from server.gateway.runtime import GatewayRuntime
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
-from server.uploads import UploadStore
 
 
 def get_tasks(request: Request) -> SessionStore:
@@ -33,10 +32,6 @@ def get_confirmations(request: Request) -> ConfirmationService:
     return request.app.state.confirmations
 
 
-def get_uploads(request: Request) -> UploadStore:
-    return request.app.state.uploads
-
-
 Tasks = Annotated[SessionStore, Depends(get_tasks)]
 
 
@@ -47,9 +42,6 @@ Drafts = Annotated[MailDraftStore, Depends(get_drafts)]
 
 
 Confirmations = Annotated[ConfirmationService, Depends(get_confirmations)]
-
-
-Uploads = Annotated[UploadStore, Depends(get_uploads)]
 
 
 router = APIRouter()
@@ -114,7 +106,6 @@ class MessageTarget(BaseModel):
 class MessageInput(BaseModel):
     message: str = Field(min_length=1)
     target: MessageTarget | None = None
-    attachment_ids: list[str] = Field(default_factory=list)
 
 
 @router.post("/tasks/{task_id}/messages", status_code=202, tags=["chat"])
@@ -123,21 +114,6 @@ async def submit_message(task_id: str, body: MessageInput, agent: Agent) -> dict
         task_id,
         body.message,
         target=body.target.model_dump() if body.target is not None else None,
-        attachment_ids=list(body.attachment_ids),
-    )
-
-
-@router.post("/tasks/{task_id}/uploads", status_code=201, tags=["chat"])
-def upload_file(
-    task_id: str,
-    uploads: Uploads,
-    file: Annotated[UploadFile, File()],
-) -> dict:
-    return uploads.save(
-        task_id,
-        file.filename or "attachment",
-        file.content_type or "application/octet-stream",
-        file.file.read(),
     )
 
 
@@ -179,7 +155,6 @@ class DraftEdit(BaseModel):
     to: list[str]
     subject: str
     body: str
-    attachment_ids: list[str]
 
 
 class ConfirmationInput(BaseModel):
@@ -205,7 +180,6 @@ def edit_draft(operation_id: str, body: DraftEdit, drafts: Drafts) -> dict:
         list(body.to),
         body.subject,
         body.body,
-        list(body.attachment_ids),
     )
 
 

@@ -38,7 +38,6 @@ def test_prepare_reply_registered_as_local_write() -> None:
         "to",
         "subject",
         "body",
-        "attachment_ids",
     }
     new_email = default_registry.get_tool("gmail_prepare_email")
     assert new_email is not None
@@ -46,7 +45,6 @@ def test_prepare_reply_registered_as_local_write() -> None:
         "to",
         "subject",
         "body",
-        "attachment_ids",
     }
     # LOCAL_WRITE 只在允许起草的轮次对模型可见；新邮件轮只分析，不起草。
     tools = default_registry.list_tools()
@@ -60,7 +58,6 @@ def test_prepare_email_creates_editable_new_message(drafts, task_id) -> None:
         to=["professor@example.edu"],
         subject="咨询见面时间",
         body="老师您好，请问周五是否方便？",
-        attachment_ids=[],
         drafts=drafts,
     )
 
@@ -74,7 +71,6 @@ def test_prepare_email_creates_editable_new_message(drafts, task_id) -> None:
         "to": ["professor@example.edu"],
         "subject": "咨询见面时间",
         "body": "老师您好，请问周五是否方便？",
-        "attachments": [],
     }
 
 
@@ -87,7 +83,6 @@ def test_prepare_reply_validation_failure_blocks_saving(drafts, task_id) -> None
             to=["invalid-email-address"],
             subject="  ",
             body="这是测试正文",
-            attachment_ids=[],
             drafts=drafts,
             gmail=MockGmailClient(),
         )
@@ -107,7 +102,6 @@ def test_prepare_reply_success_creates_draft_pending_review(drafts, task_id) -> 
         to=["Alice <alice@example.com>"],
         subject="Re: 项目进展评审与架构讨论邀请",
         body="已收到会议邀请，我将准时出席。",
-        attachment_ids=[],
         drafts=drafts,
         gmail=MockGmailClient(),
     )
@@ -137,7 +131,6 @@ def test_prepare_reply_deduplication_reuses_existing_operation(drafts, settings)
         to=["alice@example.com"],
         subject="Re: 邀请",
         body="第一次准备回复。",
-        attachment_ids=[],
         drafts=drafts,
         gmail=MockGmailClient(),
     )
@@ -149,7 +142,6 @@ def test_prepare_reply_deduplication_reuses_existing_operation(drafts, settings)
         to=["alice@example.com"],
         subject="Re: 邀请",
         body="第二次准备回复。",
-        attachment_ids=[],
         drafts=drafts,
         gmail=MockGmailClient(),
     )
@@ -173,7 +165,6 @@ def test_prepare_reply_rejects_unknown_task(drafts, settings) -> None:
             to=["alice@example.com"],
             subject="Re: 邀请",
             body="正文",
-            attachment_ids=[],
             drafts=drafts,
             gmail=MockGmailClient(),
         )
@@ -187,7 +178,6 @@ def test_prepare_reply_reuse_precedes_validation(drafts, task_id) -> None:
         to=["alice@example.com"],
         subject="Re: 邀请",
         body="第一次准备回复。",
-        attachment_ids=[],
         drafts=drafts,
         gmail=MockGmailClient(),
     )
@@ -198,7 +188,6 @@ def test_prepare_reply_reuse_precedes_validation(drafts, task_id) -> None:
         to=["invalid-email-address"],
         subject="  ",
         body="",
-        attachment_ids=[],
         drafts=drafts,
         gmail=MockGmailClient(),
     )
@@ -218,7 +207,6 @@ def test_parallel_preparation_creates_one_operation(drafts, task_id) -> None:
         to=["alice@example.com"],
         subject="Re: 邀请",
         body="确认内容\n保留空格  ",
-        attachment_ids=[],
     )
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(lambda _: drafts.save_reply_draft(**fields), range(50)))

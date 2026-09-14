@@ -39,7 +39,6 @@ DRAFT = {
     "to": ["alice@example.com"],
     "subject": "Re: 邀请",
     "body": "谢谢邀请，我准时参加。",
-    "attachment_ids": [],
 }
 TURN_TOKEN = "0123456789abcdef"
 
@@ -461,7 +460,6 @@ def test_tool_boundary_returns_structured_business_errors(settings, monkeypatch)
                 "to": DRAFT["to"],
                 "subject": DRAFT["subject"],
                 "body": "改写正文",
-                "attachment_ids": [],
             },
         ),
         task_id=task_id,

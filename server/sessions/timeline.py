@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 from uuid import uuid4
@@ -13,11 +12,6 @@ from server.db import session
 from server.sessions import repository as tasks
 from server.sessions.service import timestamp
 from server.tools.gmail import service as mail
-from server.uploads import files_for_ids, public_file
-
-
-def _ids(value: str) -> list[str]:
-    return list(json.loads(value))
 
 
 def insert_text(
@@ -26,14 +20,13 @@ def insert_text(
     run_id: str,
     role: str,
     text: str,
-    attachment_ids: list[str] | None = None,
 ) -> str:
     item_id = str(uuid4())
     conn.execute(
         "INSERT INTO task_timeline_items "
-        "(item_id, task_id, run_id, kind, role, text, operation_id, attachment_ids, created_at) "
-        "VALUES (?, ?, ?, 'text', ?, ?, NULL, ?, ?)",
-        (item_id, task_id, run_id, role, text, json.dumps(attachment_ids or []), timestamp()),
+        "(item_id, task_id, run_id, kind, role, text, operation_id, created_at) "
+        "VALUES (?, ?, ?, 'text', ?, ?, NULL, ?)",
+        (item_id, task_id, run_id, role, text, timestamp()),
     )
     return item_id
 
@@ -66,8 +59,8 @@ def ensure_mail_draft(
     item_id = str(uuid4())
     conn.execute(
         "INSERT INTO task_timeline_items "
-        "(item_id, task_id, run_id, kind, role, text, operation_id, attachment_ids, created_at) "
-        "VALUES (?, ?, ?, 'mail_draft', NULL, NULL, ?, '[]', ?)",
+        "(item_id, task_id, run_id, kind, role, text, operation_id, created_at) "
+        "VALUES (?, ?, ?, 'mail_draft', NULL, NULL, ?, ?)",
         (item_id, task_id, run_id, operation_id, timestamp()),
     )
     return item_id
@@ -77,8 +70,8 @@ def insert_error(conn: sqlite3.Connection, task_id: str, run_id: str, text: str)
     item_id = str(uuid4())
     conn.execute(
         "INSERT INTO task_timeline_items "
-        "(item_id, task_id, run_id, kind, role, text, operation_id, attachment_ids, created_at) "
-        "VALUES (?, ?, ?, 'error', NULL, ?, NULL, '[]', ?)",
+        "(item_id, task_id, run_id, kind, role, text, operation_id, created_at) "
+        "VALUES (?, ?, ?, 'error', NULL, ?, NULL, ?)",
         (item_id, task_id, run_id, text, timestamp()),
     )
     return item_id
@@ -103,15 +96,11 @@ class TimelineStore:
                     "created_at": item["created_at"],
                 }
                 if item["kind"] == "text":
-                    ids = _ids(item["attachment_ids"])
                     items.append(
                         {
                             **base,
                             "role": item["role"],
                             "text": item["text"],
-                            "attachments": [
-                                public_file(value) for value in files_for_ids(conn, ids)
-                            ],
                         }
                     )
                 elif item["kind"] == "error":
