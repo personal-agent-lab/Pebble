@@ -29,6 +29,14 @@ class SessionConflictError(Exception):
     pass
 
 
+class TaskActiveError(Exception):
+    """任务仍有待执行或执行中的运行，删除会被拒绝。"""
+
+    def __init__(self, task_id: str):
+        self.task_id = task_id
+        super().__init__(f"任务仍在运行：{task_id}")
+
+
 class DraftValidationError(Exception):
     """邮件业务校验未通过；`errors` 为契约第 5 节的字段与原因列表。"""
 
@@ -53,6 +61,8 @@ def error_details(error: Exception) -> dict | None:
         return {"error": "not_editable", "message": str(error), "status": error.status}
     if isinstance(error, SessionConflictError):
         return {"error": "session_conflict", "message": "任务已关联不同会话"}
+    if isinstance(error, TaskActiveError):
+        return {"error": "task_active", "message": "任务正在运行，结束后才能删除"}
     if isinstance(error, DraftValidationError):
         return {"error": "invalid_draft", "message": "邮件草稿未通过校验", "errors": error.errors}
     return None

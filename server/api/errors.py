@@ -14,6 +14,7 @@ from server.errors import (
     NotEditableError,
     NotFoundError,
     SessionConflictError,
+    TaskActiveError,
     VersionConflictError,
     error_details,
 )
@@ -24,6 +25,7 @@ STATUS_CODES: tuple[tuple[type[Exception], int], ...] = (
     (VersionConflictError, 409),
     (NotEditableError, 409),
     (SessionConflictError, 409),
+    (TaskActiveError, 409),
     (DraftValidationError, 422),
 )
 

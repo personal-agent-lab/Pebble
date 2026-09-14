@@ -85,6 +85,11 @@ def task_detail(task_id: str, tasks: Tasks, agent: Agent) -> dict:
     return record
 
 
+@router.delete("/tasks/{task_id}", status_code=204, tags=["tasks"])
+def delete_task(task_id: str, tasks: Tasks) -> None:
+    tasks.delete_task(task_id)
+
+
 @router.get("/tasks/{task_id}/operations", tags=["tasks"])
 def task_operations(task_id: str, tasks: Tasks) -> list[dict]:
     return tasks.list_task_operations(task_id)

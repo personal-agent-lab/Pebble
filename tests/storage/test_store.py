@@ -15,6 +15,7 @@ from server.errors import (
     NotEditableError,
     NotFoundError,
     SessionConflictError,
+    TaskActiveError,
     VersionConflictError,
 )
 from server.sessions.service import SessionStore
@@ -309,3 +310,71 @@ def test_validator_cannot_rewrite_recipients(stores, monkeypatch):
     task = tasks.create_task("目标")
     op = drafts.save_reply_draft(task["task_id"], "m1", "t1", **CONTENT)
     assert drafts.get_draft(op["operation_id"])["to"] == CONTENT["to"]
+
+
+def insert_run(conn, run_id, task_id, status):
+    finished = None if status in ("pending", "running") else "2026-09-14T10:00:00+00:00"
+    conn.execute(
+        "INSERT INTO agent_runs VALUES (?, ?, 'message', NULL, '{}', ?, NULL, "
+        "'2026-09-14T09:00:00+00:00', '2026-09-14T09:00:01+00:00', ?)",
+        (run_id, task_id, status, finished),
+    )
+
+
+REMAINING_TABLES = (
+    "operations",
+    "task_operations",
+    "mail_drafts",
+    "mail_draft_versions",
+    "approval_executions",
+    "task_timeline_items",
+    "mail_task_links",
+)
+
+
+def test_delete_task_cascades(stores):
+    tasks, _ = stores
+    task, _ = prepare(stores)
+    other = tasks.create_task("保留的任务")
+    tasks.bind_sdk_session(task["task_id"], "sdk1")
+    with session() as conn, write(conn):
+        insert_run(conn, "run-done", task["task_id"], "done")
+        insert_run(conn, "run-other", other["task_id"], "done")
+        conn.execute(
+            "INSERT INTO task_timeline_items VALUES ('item1', ?, 'run-done', 'text', "
+            "'user', '你好', NULL, ?)",
+            (task["task_id"], task["created_at"]),
+        )
+    tasks.delete_task(task["task_id"])
+    with pytest.raises(NotFoundError):
+        tasks.get_task(task["task_id"])
+    assert [entry["task_id"] for entry in tasks.list_tasks()] == [other["task_id"]]
+    with session() as conn:
+        for table in REMAINING_TABLES:
+            assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+        remaining = conn.execute("SELECT task_id FROM agent_runs").fetchall()
+    assert [row["task_id"] for row in remaining] == [other["task_id"]]
+
+
+def test_delete_task_rejects_active_run(stores):
+    tasks, drafts = stores
+    task, op = prepare(stores)
+    with session() as conn, write(conn):
+        insert_run(conn, "run-live", task["task_id"], "running")
+    with pytest.raises(TaskActiveError):
+        tasks.delete_task(task["task_id"])
+    assert tasks.get_task(task["task_id"])["task_id"] == task["task_id"]
+    assert drafts.get_draft(op["operation_id"])["status"] == "pending"
+    with session() as conn, write(conn):
+        conn.execute(
+            "UPDATE agent_runs SET status = 'done', finished_at = ? WHERE run_id = 'run-live'",
+            ("2026-09-14T10:00:00+00:00",),
+        )
+    tasks.delete_task(task["task_id"])
+    with pytest.raises(NotFoundError):
+        tasks.get_task(task["task_id"])
+
+
+def test_delete_missing_task(stores):
+    with pytest.raises(NotFoundError):
+        stores[0].delete_task("missing")

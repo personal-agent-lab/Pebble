@@ -6,7 +6,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from server.db import session, write
-from server.errors import NotEditableError, SessionConflictError, VersionConflictError
+from server.errors import (
+    NotEditableError,
+    SessionConflictError,
+    TaskActiveError,
+    VersionConflictError,
+)
 from server.sessions import repository as repo
 
 
@@ -51,6 +56,13 @@ class SessionStore:
     def list_tasks(self) -> list[dict]:
         with session(self.path) as conn:
             return repo.tasks(conn)
+
+    def delete_task(self, task_id: str) -> None:
+        with session(self.path) as conn, write(conn):
+            repo.task(conn, task_id)
+            if repo.has_active_run(conn, task_id):
+                raise TaskActiveError(task_id)
+            repo.delete_task(conn, task_id)
 
     def bind_sdk_session(self, task_id: str, sdk_session_id: str) -> dict:
         with session(self.path) as conn, write(conn):

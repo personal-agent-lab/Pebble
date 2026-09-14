@@ -69,6 +69,39 @@ def update_status(conn: sqlite3.Connection, operation_id: str, status: str, now:
     )
 
 
+def has_active_run(conn: sqlite3.Connection, task_id: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM agent_runs WHERE task_id = ? AND status IN ('pending','running') LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    return row is not None
+
+
+def delete_task(conn: sqlite3.Connection, task_id: str) -> None:
+    """删除任务及其全部从属记录；外键开启，必须按引用方向先删子表。"""
+    conn.execute(
+        "DELETE FROM mail_draft_versions WHERE operation_id IN "
+        "(SELECT operation_id FROM operations WHERE created_task_id = ?)",
+        (task_id,),
+    )
+    conn.execute(
+        "DELETE FROM mail_drafts WHERE operation_id IN "
+        "(SELECT operation_id FROM operations WHERE created_task_id = ?)",
+        (task_id,),
+    )
+    conn.execute("DELETE FROM task_timeline_items WHERE task_id = ?", (task_id,))
+    conn.execute(
+        "DELETE FROM approval_executions WHERE operation_id IN "
+        "(SELECT operation_id FROM operations WHERE created_task_id = ?)",
+        (task_id,),
+    )
+    conn.execute("DELETE FROM agent_runs WHERE task_id = ?", (task_id,))
+    conn.execute("DELETE FROM mail_task_links WHERE task_id = ?", (task_id,))
+    conn.execute("DELETE FROM task_operations WHERE task_id = ?", (task_id,))
+    conn.execute("DELETE FROM operations WHERE created_task_id = ?", (task_id,))
+    conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+
+
 def task_operations(conn: sqlite3.Connection, task_id: str) -> list[dict]:
     return [
         dict(row)
