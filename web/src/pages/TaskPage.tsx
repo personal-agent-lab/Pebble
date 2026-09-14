@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { ApiError, type UploadedFile, uploadFile } from "../api";
+import { ApiError } from "../api";
 import AppShell from "../components/AppShell";
 import Notice from "../components/Notice";
 import StatusBadge from "../components/StatusBadge";
@@ -19,8 +19,6 @@ export default function TaskPage() {
   const detail = useTaskDetail(taskId);
   const tasks = useTasks();
   const [message, setMessage] = useState("");
-  const [attachments, setAttachments] = useState<UploadedFile[]>([]);
-  const [uploading, setUploading] = useState(false);
   const [actionError, setActionError] = useState<ApiError | null>(null);
 
   const onChanged = async () => {
@@ -30,24 +28,12 @@ export default function TaskPage() {
 
   const submit = async () => {
     const text = message.trim();
-    if (text === "" || detail.sending || uploading) return;
-    const failure = await detail.send(text, null, attachments.map((file) => file.file_id));
+    if (text === "" || detail.sending) return;
+    const failure = await detail.send(text, null);
     if (failure === null) {
       setMessage("");
-      setAttachments([]);
       setActionError(null);
     } else setActionError(failure);
-  };
-
-  const addAttachment = async (file: File) => {
-    setUploading(true);
-    setActionError(null);
-    try {
-      const uploaded = await uploadFile(taskId, file);
-      setAttachments((current) => [...current, uploaded]);
-    }
-    catch (error) { setActionError(error instanceof ApiError ? error : new ApiError("offline", String(error), 0)); }
-    finally { setUploading(false); }
   };
 
   if (detail.error !== null) return <AppShell serviceError={detail.error}><div className="content">
@@ -76,19 +62,13 @@ export default function TaskPage() {
     </div></div>
 
     <div className="msg-composer"><div className="composer-wrap">
-      {attachments.length > 0 && <div className="composer-attachments">{attachments.map((file) =>
-        <span className="attachment-chip" key={file.file_id}>{file.filename}
-          <button type="button" aria-label={`移除 ${file.filename}`} onClick={() => setAttachments((current) => current.filter((value) => value.file_id !== file.file_id))}>×</button>
-        </span>)}</div>}
       <div className="composer-row">
-        <label className="attach-button" aria-label="添加附件">＋<input type="file" disabled={uploading || detail.sending}
-          onChange={(event) => { const file = event.target.files?.[0]; if (file) void addAttachment(file); event.target.value = ""; }} /></label>
         <textarea value={message} placeholder="回复 Agent，或补充修改意见…" aria-label="消息" rows={1}
           onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
           }} />
         <button type="button" className="send-btn" onClick={() => void submit()}
-          disabled={message.trim() === "" || detail.sending || uploading} aria-label="发送">{SEND_ICON}</button>
+          disabled={message.trim() === "" || detail.sending} aria-label="发送">{SEND_ICON}</button>
       </div>
     </div></div>
   </AppShell>;

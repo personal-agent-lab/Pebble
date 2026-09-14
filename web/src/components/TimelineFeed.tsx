@@ -48,9 +48,6 @@ export default function TimelineFeed({ taskId, items, sendMessage, onChanged }: 
       return <div className={`msg ${agent ? "agent" : "user"}${grouped ? " cont" : ""}`} key={item.item_id}>
         <div className="msg-body"><span className="sr-only">{agent ? "Agent 说：" : "我说："}</span>
           <div className="bubble">{agent ? <Markdown text={item.text} /> : item.text}</div>
-          {item.attachments.length > 0 && <div className="message-attachments">
-            {item.attachments.map((file) => <span className="attachment-chip" key={file.file_id}>{file.filename}</span>)}
-          </div>}
         </div>
       </div>;
     })}

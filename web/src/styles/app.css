@@ -409,9 +409,6 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   width: 100%;
   display: flex; gap: 10px; align-items: flex-end;
 }
-.composer-attachments, .message-attachments {
-  display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px;
-}
 .msg-composer textarea {
   flex: 1; border: 1px solid var(--color-border); border-radius: var(--radius-md);
   background: var(--color-bg); padding: 10px 12px; font: 400 var(--text-md)/var(--leading-ui) var(--font-body);
@@ -430,77 +427,111 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .send-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-ring); }
 
-.attach-button {
-  width: 40px; height: 40px; flex: none; border: 1px solid var(--color-border);
-  border-radius: var(--radius-md); display: grid; place-items: center; cursor: pointer;
-  color: var(--color-muted); font-size: var(--text-lg);
-}
-.attach-button input, .file-button input { display: none; }
-
-/* ===== 对话内完整邮件草稿 ===== */
+/* ===== 对话内完整邮件草稿 =====
+ * 结构是两层盒子：外层卡片承载工具条与收件人，内层 compose 盒是可直接编辑的信件本体。
+ * 没有“编辑/保存/取消”三态，字段常驻可编辑，主操作固定在右上角。
+ */
 .mail-card {
-  border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg);
-  background: var(--color-surface); overflow: hidden;
+  border: 1px solid var(--color-border-subtle); border-radius: calc(var(--radius-lg) * 1.35);
+  background: var(--color-surface); padding: 10px 12px 12px;
 }
-.mail-request {
-  display: flex; gap: 8px; align-items: center; padding: 12px 14px;
-  border-bottom: 1px solid var(--color-border-subtle);
+
+/* 工具条：左侧修改要求、中间状态，主操作靠右，整行不加分隔线。 */
+.mail-toolbar { display: flex; gap: 8px; align-items: center; min-height: 34px; }
+.mail-toolbar .badge { margin-left: 4px; }
+.mail-toolbar .mail-send, .mail-toolbar .mail-verify { margin-left: auto; }
+
+.mail-ghost {
+  display: flex; align-items: center; gap: 6px; flex: none;
+  height: 34px; padding: 0 12px; border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle); background: var(--color-surface);
+  color: var(--color-fg); font: 510 var(--text-sm)/1 var(--font-body); cursor: pointer;
+  white-space: nowrap; transition: border-color var(--duration-fast) ease-in-out;
 }
-.mail-request input {
-  min-width: 0; flex: 1; border: none; background: transparent;
-  color: var(--color-fg); font: 500 var(--text-md)/var(--leading-ui) var(--font-body);
+.mail-ghost:hover:not(:disabled) { border-color: var(--color-border); }
+.mail-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+.mail-ghost:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-ring); }
+.mail-ghost svg.i { width: 14px; height: 14px; }
+
+/* 点开修改要求后，同一个位置就地展开成一条短输入。 */
+.mail-ask {
+  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; max-width: 420px;
+  height: 34px; padding: 0 4px 0 12px; border-radius: var(--radius-md);
+  border: 1px solid var(--color-border); background: var(--color-surface);
 }
-.mail-request input:focus { outline: none; }
-.mail-request .badge { margin-left: 4px; }
-.icon-action {
-  width: 32px; height: 32px; flex: none; border: none; border-radius: 50%;
-  background: var(--button-bg); color: var(--button-fg); cursor: pointer;
+.mail-ask:focus-within {
+  border-color: var(--input-focus-ring);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--input-focus-ring) 20%, transparent);
 }
-.icon-action:disabled { opacity: 0.4; cursor: not-allowed; }
-.mail-fields { padding: 4px 20px 8px; }
-.mail-fields > label {
-  display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px;
-  padding: 14px 0; border-bottom: 1px solid var(--color-border-subtle);
+.mail-ask input {
+  min-width: 0; flex: 1; border: none; background: transparent; color: var(--color-fg);
+  font: 400 var(--text-sm)/var(--leading-ui) var(--font-body);
 }
-.mail-fields > label > span, .mail-label {
-  color: var(--color-muted); font-size: var(--text-sm); padding-top: 3px;
+.mail-ask input:focus { outline: none; }
+
+/* 主操作：浅主色底 + 深主色字，和用户气泡同一套配色，不做整块实心。 */
+.mail-send {
+  display: flex; align-items: center; gap: 6px; flex: none;
+  height: 34px; padding: 0 14px; border: none; border-radius: var(--radius-md);
+  background: var(--bubble-bg); color: var(--bubble-fg);
+  font: 600 var(--text-sm)/1 var(--font-body); cursor: pointer; white-space: nowrap;
+  transition: background-color var(--duration-fast) ease-in-out;
 }
+.mail-send:hover:not(:disabled) { background: color-mix(in srgb, var(--color-accent) 20%, var(--color-surface)); }
+.mail-send:disabled { opacity: 0.45; cursor: not-allowed; }
+.mail-send:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-ring); }
+.mail-send svg.i { width: 14px; height: 14px; }
+
+/* 地址区：标签列定宽，值区无框，折叠态整行可点。 */
+.mail-head { padding: 4px 2px 8px; }
+.mail-row {
+  display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 10px; align-items: center;
+  width: 100%; min-height: 38px; padding: 4px 10px; border-radius: var(--radius-md);
+  text-align: left; font-family: var(--font-body); font-size: var(--text-md);
+}
+.mail-row-open { border: none; background: none; cursor: pointer; color: inherit; }
+.mail-row-open:hover { background: var(--color-bg); }
+.mail-row-open:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
+.mail-label { color: var(--color-muted); font-size: var(--text-sm); }
 .mail-value { overflow-wrap: anywhere; line-height: var(--leading-body); }
-.mail-value.subject { font-weight: 600; }
-.mail-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: var(--leading-body); }
-.mail-fields input, .mail-fields textarea {
-  width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-md);
-  background: var(--color-bg); color: var(--color-fg); padding: 9px 10px;
-  font: 400 var(--text-md)/var(--leading-body) var(--font-body); resize: vertical;
+.mail-value.placeholder { color: var(--color-muted); }
+.mail-to-input {
+  width: 100%; min-width: 0; border: none; background: transparent; color: var(--color-fg);
+  padding: 0; font: 400 var(--text-md)/var(--leading-body) var(--font-body);
 }
-.mail-fields textarea { min-height: 64px; }
-.mail-fields .mail-body-input { min-height: 220px; }
-.mail-attachments {
-  display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; padding: 14px 0 6px;
+.mail-to-input:focus { outline: none; }
+
+/* 信件本体：主题和正文同处一个描边盒，字号一致，主题不加粗。 */
+.mail-compose {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg);
+  padding: 12px 14px;
 }
-.attachment-list { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
-.attachment-chip {
-  display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
-  border: 1px solid var(--color-border-subtle); border-radius: 999px; padding: 4px 9px;
-  background: var(--color-bg); color: var(--color-muted); font-size: var(--text-xs);
-  overflow-wrap: anywhere;
+.mail-compose:focus-within { border-color: var(--color-border); }
+/* 主题也是 textarea：长主题在窄屏要能折行，不能被单行输入裁掉。 */
+.mail-subject-input, .mail-body-input {
+  display: block; width: 100%; border: none; background: transparent; color: var(--color-fg);
+  padding: 0; resize: none; overflow: hidden;
+  font: 400 var(--text-md)/1.7 var(--font-body);
 }
-.attachment-chip button { border: none; background: none; color: inherit; cursor: pointer; padding: 0; }
-.empty-inline { color: var(--color-muted); font-size: var(--text-sm); }
-.file-button { cursor: pointer; }
-.mail-notice { padding: 0 20px 12px; }
+.mail-subject-input:focus, .mail-body-input:focus { outline: none; }
+.mail-body-input { margin-top: 12px; min-height: 120px; }
+.mail-subject-input:disabled, .mail-body-input:disabled, .mail-to-input:disabled {
+  color: var(--color-fg); -webkit-text-fill-color: var(--color-fg); opacity: 1;
+}
+
+.mail-notice { padding: 12px 2px 0; }
 .mail-result {
-  display: flex; justify-content: space-between; gap: 12px; padding: 12px 20px;
-  border-top: 1px solid var(--color-border-subtle); color: var(--color-muted);
+  display: flex; justify-content: space-between; gap: 12px; margin-top: 12px; padding: 10px 12px;
+  border-radius: var(--radius-md); background: var(--color-bg); color: var(--color-muted);
   font-size: var(--text-sm); line-height: var(--leading-body);
 }
 .mail-result.sent { color: var(--status-success); }
 .mail-result.failed { color: var(--color-danger); }
 .mail-result span { flex: none; color: var(--color-muted); }
-.mail-actions {
-  display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 20px;
-  border-top: 1px solid var(--color-border-subtle);
-}
+.mail-foot { display: flex; gap: 8px; align-items: center; padding: 12px 2px 0; }
+.mail-foot:empty { display: none; }
+.mail-saving { color: var(--color-muted); font-size: var(--text-xs); }
 .error-text { color: var(--color-danger); }
 
 /* ===== 提示与空态 ===== */
@@ -566,12 +597,15 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   .msg.user .msg-body { max-width: 92%; }
   .msg-composer { padding: 10px 14px; }
 
-  .mail-request { padding: 10px 12px; }
-  .mail-request .badge { display: none; }
-  .mail-fields { padding: 2px 14px 6px; }
-  .mail-fields > label, .mail-attachments { grid-template-columns: 1fr; gap: 6px; }
-  .mail-fields > label > span, .mail-label { padding-top: 0; }
-  .mail-actions, .mail-result { padding: 12px 14px; }
+  .mail-card { padding: 8px 10px 10px; }
+  /* 工具条在窄屏换行：修改要求占满一行，状态与发送留在下一行。 */
+  .mail-toolbar { flex-wrap: wrap; }
+  /* 展开的修改要求独占一行，状态与主操作留在下一行，谁都不被挤成一个字。 */
+  .mail-ask { flex: 1 1 100%; max-width: none; }
+  .mail-ghost { flex: none; }
+  .mail-head { padding: 4px 0 8px; }
+  .mail-row { grid-template-columns: 56px minmax(0, 1fr); gap: 8px; padding: 4px 8px; }
+  .mail-compose { padding: 10px 12px; }
   .mail-result { flex-direction: column; }
 
 }

@@ -1,4 +1,4 @@
-/** 后端 Interface：统一时间线、邮件草稿版本、上传与确认执行。 */
+/** 后端 Interface：统一时间线、邮件草稿版本与确认执行。 */
 
 export type RunStatus = "pending" | "running" | "done" | "error" | "interrupted";
 export type OperationStatus = "pending" | "sending" | "sent" | "failed" | "unknown";
@@ -23,14 +23,6 @@ export type OperationSummary = {
   status: OperationStatus;
 };
 
-export type UploadedFile = {
-  file_id: string;
-  filename: string;
-  mime_type: string;
-  size: number;
-  sha256: string;
-};
-
 export type Draft = {
   operation_id: string;
   kind: "reply" | "new";
@@ -41,7 +33,6 @@ export type Draft = {
   to: string[];
   subject: string;
   body: string;
-  attachments: UploadedFile[];
 };
 
 export type SendResult =
@@ -63,7 +54,6 @@ export type TimelineItem =
       role: "user" | "assistant";
       run_id: string;
       text: string;
-      attachments: UploadedFile[];
       created_at: string;
     }
   | {
@@ -128,10 +118,9 @@ type ErrorBody = {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    const form = init?.body instanceof FormData;
     response = await fetch(`/api${path}`, {
       ...init,
-      headers: init?.body && !form ? { "Content-Type": "application/json", ...init.headers } : init?.headers,
+      headers: init?.body ? { "Content-Type": "application/json", ...init.headers } : init?.headers,
     });
   } catch (error) {
     throw new ApiError("offline", `无法连接 Pebble 服务：${String(error)}`, 0);
@@ -162,22 +151,15 @@ export const sendMessage = (
   taskId: string,
   message: string,
   target: MessageTarget | null = null,
-  attachmentIds: string[] = [],
 ) => request<Run>(`/tasks/${taskId}/messages`, {
   method: "POST",
-  body: JSON.stringify({ message, target, attachment_ids: attachmentIds }),
+  body: JSON.stringify({ message, target }),
 });
-
-export const uploadFile = (taskId: string, file: File) => {
-  const body = new FormData();
-  body.append("file", file);
-  return request<UploadedFile>(`/tasks/${taskId}/uploads`, { method: "POST", body });
-};
 
 export const editDraft = (
   operationId: string,
   expectedVersion: number,
-  fields: { to: string[]; subject: string; body: string; attachment_ids: string[] },
+  fields: { to: string[]; subject: string; body: string },
 ) => request<{ operation_id: string; version: number; status: "pending" }>(
   `/operations/${operationId}/draft`,
   { method: "PATCH", body: JSON.stringify({ expected_version: expectedVersion, ...fields }) },

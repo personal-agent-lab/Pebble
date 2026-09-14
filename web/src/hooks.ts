@@ -101,7 +101,6 @@ export function useTaskDetail(taskId: string) {
             role: "assistant",
             run_id: event.run_id,
             text: event.text,
-            attachments: [],
             created_at: new Date().toISOString(),
           }];
           const item = current[index];
@@ -123,11 +122,10 @@ export function useTaskDetail(taskId: string) {
   const send = useCallback(async (
     message: string,
     target: MessageTarget | null = null,
-    attachmentIds: string[] = [],
   ) => {
     setSending(true);
     try {
-      await sendMessage(taskId, message, target, attachmentIds);
+      await sendMessage(taskId, message, target);
       await reload();
       return null;
     } catch (failure) { return toApiError(failure); }
