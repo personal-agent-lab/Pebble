@@ -44,6 +44,7 @@ from server.config import Settings, get_settings
 from server.errors import DependencyUnavailableError
 from server.gateway.agent_contract import AgentEvent, AgentProtocolError, Turn
 from server.memory.service import MemoryStore
+from server.tools.memory.tools import review_registry
 from server.tools.registry import ToolDefinition
 
 CONFIG_DIR_ENV = "QODERCN_CONFIG_DIR"
@@ -110,6 +111,10 @@ class QoderGateway:
         # 两者必须指向同一目录，否则重启后读不到会话。
         os.environ[CONFIG_DIR_ENV] = str(config_dir)
         self.tools = build_tools(replace(deps, memory_store=self.memory_store))
+        # 后台记忆回顾的一次性会话只用只新增工具，不与前台工具混在同一个注册表。
+        self.review_tools = build_tools(
+            replace(deps, memory_store=self.memory_store), registry=review_registry
+        )
         self._check_model_config()
 
     # ---------- 输入入口 ----------
@@ -133,6 +138,29 @@ class QoderGateway:
                         detail = (message.result or "").strip() or MODEL_ERROR_MESSAGE
                         raise AgentProtocolError(detail)
                     return "".join(parts).strip()
+        raise AgentProtocolError(NO_TERMINAL_MESSAGE)
+
+    async def review_memory(self, task_id: str, instructions: str, transcript: str) -> str:
+        """一次性记忆回顾：只带只新增的记忆工具，不接续会话，也不进入任何任务历史。"""
+        parts: list[str] = []
+        # memory_add 不发草稿事件，队列恒为空，仅为满足端点签名传入。
+        queued: asyncio.Queue = asyncio.Queue()
+        async with self.tool_server.serve(
+            self.review_tools, task_id=task_id, queued=queued
+        ) as path:
+            options = self._review_options(instructions, path)
+            async with QoderSDKClient(options) as client:
+                await client.query(transcript)
+                async for message in client.receive_response():
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock) and block.text.strip():
+                                parts.append(block.text)
+                    elif isinstance(message, ResultMessage):
+                        if message.is_error:
+                            detail = (message.result or "").strip() or MODEL_ERROR_MESSAGE
+                            raise AgentProtocolError(detail)
+                        return "".join(parts).strip()
         raise AgentProtocolError(NO_TERMINAL_MESSAGE)
 
     # ---------- 调用执行 ----------
@@ -252,6 +280,28 @@ class QoderGateway:
             include_partial_messages=False,
             auth=self._auth(),
             **self._model_options(hosted_model=self.settings.title_model),
+        )
+
+    def _review_options(self, instructions: str, path: str) -> QoderAgentOptions:
+        # 与标题生成同形，但经本轮 MCP 端点带上只新增工具；无 resume，每次都是全新会话。
+        return QoderAgentOptions(
+            tools=[],
+            allowed_tools=[
+                f"mcp__{TOOL_SERVER_NAME}__{definition.name}"
+                for definition in self.review_tools
+            ],
+            mcp_servers={
+                TOOL_SERVER_NAME: {"type": "http", "url": self._tool_url(path)},
+            },
+            allowed_mcp_server_names=[TOOL_SERVER_NAME],
+            strict_mcp_config=True,
+            setting_sources=[],
+            skills=[],
+            system_prompt=instructions,
+            cwd=self.workspace,
+            include_partial_messages=False,
+            auth=self._auth(),
+            **self._model_options(),
         )
 
     def _tool_url(self, path: str) -> str:

@@ -122,6 +122,13 @@ async def submit_message(task_id: str, body: MessageInput, agent: Agent) -> dict
     )
 
 
+@router.post("/tasks/{task_id}/memory-review", status_code=202, tags=["chat"])
+async def trigger_memory_review(task_id: str, tasks: Tasks, agent: Agent) -> dict:
+    """手动登记一次后台记忆回顾：立即覆盖整个任务，不受周期间隔限制。"""
+    tasks.get_task(task_id)
+    return agent.submit_memory_review(task_id)
+
+
 def event_frame(event: dict) -> str:
     data = json.dumps(event, ensure_ascii=False)
     return f"event: {event['type']}\ndata: {data}\n\n"

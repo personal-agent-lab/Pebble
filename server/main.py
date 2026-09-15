@@ -15,6 +15,7 @@ from server.api.routes import router
 from server.approval.service import ConfirmationService
 from server.db import init_db
 from server.gateway.runtime import GatewayRuntime, MailSource
+from server.memory.review import MemoryReviewScheduler
 from server.memory.service import MemoryStore
 from server.sessions.service import SessionStore
 from server.tools.calendar.service import CalendarEventStore
@@ -31,6 +32,7 @@ def create_app(
     drafts: MailDraftStore | None = None,
     tool_server: ToolServer | None = None,
     confirmations: ConfirmationService | None = None,
+    reviews: MemoryReviewScheduler | None = None,
     create_event=None,
     verify_event=None,
 ) -> FastAPI:
@@ -48,7 +50,8 @@ def create_app(
             send_message, verify_message, create_event=create_event, verify_event=verify_event
         )
     )
-    agent = GatewayRuntime(gateway, confirmations=confirmations)
+    reviews = reviews if reviews is not None else MemoryReviewScheduler()
+    agent = GatewayRuntime(gateway, confirmations=confirmations, reviews=reviews)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -127,6 +130,7 @@ def create_production_app() -> FastAPI:
         drafts=drafts,
         tool_server=tool_server,
         confirmations=confirmations,
+        reviews=MemoryReviewScheduler(memory_store=memory_store),
     )
 
 

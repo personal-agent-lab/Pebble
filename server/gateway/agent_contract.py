@@ -45,6 +45,8 @@ class AgentGateway(Protocol):
 
     async def generate_title(self, text: str) -> str: ...
 
+    async def review_memory(self, task_id: str, instructions: str, transcript: str) -> str: ...
+
 
 def checked_event(event: object) -> AgentEvent:
     """收敛 Agent 事件到契约结构；不符契约时按协议错误处理。"""

@@ -24,6 +24,11 @@ from server.gateway.agent_contract import (
     Turn,
     checked_event,
 )
+from server.memory.review import (
+    REVIEW_INTERRUPTED_REASON,
+    MemoryReviewScheduler,
+    interrupt_running_reviews,
+)
 from server.sessions import repository as operations
 from server.sessions import runs as repo
 from server.sessions import timeline
@@ -98,16 +103,19 @@ class GatewayRuntime:
         gateway: AgentGateway | None,
         *,
         confirmations: ConfirmationService | None = None,
+        reviews: MemoryReviewScheduler | None = None,
         path: Path | None = None,
     ):
         self.gateway = gateway
         self.confirmations = confirmations
+        self.reviews = reviews
         self.path = path
         self.events = EventHub()
         self._sessions = SessionStore(path)
         self._drafts = MailDraftStore(path)
         self._timeline = TimelineStore(path)
         self._active: dict[str, asyncio.Task] = {}
+        self._review_tasks: dict[str, asyncio.Task] = {}
         self._sends: dict[str, asyncio.Task] = {}
         self._titles: set[asyncio.Task] = set()
         self._closed = False
@@ -178,6 +186,15 @@ class GatewayRuntime:
         self.kick()
         return repo.run_response(row)
 
+    def submit_memory_review(self, task_id: str) -> dict:
+        """手动登记一次后台记忆回顾；不受周期间隔与自动开关限制。"""
+        self.require_gateway()
+        if self.reviews is None:
+            raise DependencyUnavailableError("记忆回顾未接入")
+        row = self.reviews.enqueue_manual(task_id)
+        self.kick()
+        return row
+
     def confirm_execution(self, operation_id: str) -> None:
         """后台执行已接受的确认；发送结果保存后由 kick 接续回传。"""
         if self.confirmations is None:
@@ -220,9 +237,14 @@ class GatewayRuntime:
     # ---------- 生命周期 ----------
 
     def resume(self) -> list[str]:
-        """启动恢复：运行中的调用记为中断，不重复调用；待处理调用继续执行。"""
+        """启动恢复：运行中的调用与记忆回顾记为中断，不重复调用；待处理记录继续执行。"""
         with session(self.path) as conn, write(conn):
             interrupted = repo.interrupt_running(conn, timestamp(), INTERRUPTED_REASON)
+            if self.reviews is not None:
+                # 同一事务内完成：另开连接会在本事务持锁期间互相阻塞。
+                interrupted += interrupt_running_reviews(
+                    conn, timestamp(), REVIEW_INTERRUPTED_REASON
+                )
         self.kick()
         return interrupted
 
@@ -239,15 +261,49 @@ class GatewayRuntime:
                 continue  # 尚无会话的回传需等待后续用户输入建立会话。
             seen.add(task_id)
             self._active[task_id] = asyncio.create_task(self._execute(row["run_id"]))
+        self._kick_reviews()
+
+    def _kick_reviews(self) -> None:
+        """记忆回顾域的调度分支：任务空闲且没有进行中的回顾时，启动待处理回顾。
+
+        回顾不占用 `_active`，也不排进 agent_runs：用户消息永远先于回顾得到处理。
+        """
+        if self._closed or self.gateway is None or self.reviews is None:
+            return
+        for row in self.reviews.pending_reviews():
+            task_id = row["task_id"]
+            if task_id in self._active or task_id in self._review_tasks:
+                continue
+            with session(self.path) as conn:
+                if operations.has_active_run(conn, task_id):
+                    continue
+            self._review_tasks[task_id] = asyncio.create_task(
+                self._execute_review(row["review_id"], task_id)
+            )
+
+    async def _execute_review(self, review_id: str, task_id: str) -> None:
+        try:
+            if self.reviews.claim(review_id) is None:
+                return
+            try:
+                await self.reviews.run(review_id, self.gateway)
+            except Exception as error:
+                self.reviews.fail(review_id, f"记忆回顾失败：{error}")
+        finally:
+            self._review_tasks.pop(task_id, None)
+            self.kick()
 
     async def close(self) -> None:
         self._closed = True
         # 同步发送已经在线程池中开始，正常关闭时等待结果落盘。
         if self._sends:
             await asyncio.gather(*list(self._sends.values()), return_exceptions=True)
-        for task in [*self._active.values(), *self._titles]:
+        for task in [*self._active.values(), *self._titles, *self._review_tasks.values()]:
             task.cancel()
-        await asyncio.gather(*[*self._active.values(), *self._titles], return_exceptions=True)
+        await asyncio.gather(
+            *[*self._active.values(), *self._titles, *self._review_tasks.values()],
+            return_exceptions=True,
+        )
 
     # ---------- 调用执行 ----------
 
@@ -367,6 +423,7 @@ class GatewayRuntime:
         elif kind == "done":
             self._finish(row["run_id"], "done", None)
             self._schedule_retitle(row)
+            self._schedule_memory_review(row)
         elif kind == "error":
             with session(self.path) as conn, write(conn):
                 repo.finish(conn, row["run_id"], "error", event["message"], timestamp())
@@ -380,6 +437,12 @@ class GatewayRuntime:
         self.kick()
 
     # ---------- 任务标题 ----------
+
+    def _schedule_memory_review(self, row: dict) -> None:
+        """用户消息轮完成后，把是否登记后台回顾的判断交给记忆回顾域。"""
+        if self.reviews is None or row["kind"] != repo.KIND_MESSAGE:
+            return
+        self.reviews.enqueue_if_due(row["task_id"])
 
     def _schedule_retitle(self, row: dict) -> None:
         """任务首个调用成功结束后，用模型的短标题替换创建时的初始文案。"""
