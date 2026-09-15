@@ -84,8 +84,9 @@ export default function TimelineFeed({ taskId, items, running, sendMessage, onCh
 
   // 只在时间线真的有新内容时贴底。不加依赖会让每一次重渲染都滚动：
   // 任务列表 5 秒一轮的轮询、输入框里敲的每一个字，都会把页面拽到底部。
+  // running 一并入依赖：思考占位出入会改变内容高度，和新增一条消息一样需要贴底。
   const signature = contentSignature(items);
-  useEffect(() => { if (stick.current) anchor.current?.scrollIntoView({ block: "end" }); }, [signature]);
+  useEffect(() => { if (stick.current) anchor.current?.scrollIntoView({ block: "end" }); }, [signature, running]);
 
   return <>
     {items.map((item, index) => {
@@ -110,6 +111,10 @@ export default function TimelineFeed({ taskId, items, running, sendMessage, onCh
         </div>
       </div>;
     })}
+    {running && <div className="thinking" role="status">
+      <span className="sr-only">Agent 正在处理</span>
+      <span className="dot" /><span className="dot" /><span className="dot" />
+    </div>}
     <div ref={anchor} />
   </>;
 }

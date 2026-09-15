@@ -107,3 +107,16 @@ test("用户消息与邮件卡不挂落款", () => {
   render(<TimelineFeed taskId="task-1" items={items} running={false} sendMessage={vi.fn()} onChanged={vi.fn()} />);
   expect(screen.queryByRole("button", { name: "复制回答" })).toBeNull();
 });
+
+test("调用进行中在消息流末尾留思考占位，结束后撤掉", () => {
+  const items: TimelineItem[] = [
+    { item_id: "text-1", kind: "text", role: "user", run_id: "run-1", text: "帮我看邮件", created_at: "2026-09-14T00:00:00Z" },
+  ];
+  const props = { taskId: "task-1", items, sendMessage: vi.fn(), onChanged: vi.fn() };
+  const { container, rerender } = render(<TimelineFeed {...props} running={true} />);
+  expect(container.querySelectorAll(".thinking .dot").length).toBe(3);
+  expect(screen.getByRole("status").textContent).toContain("Agent 正在处理");
+
+  rerender(<TimelineFeed {...props} running={false} />);
+  expect(container.querySelector(".thinking")).toBeNull();
+});

@@ -346,6 +346,7 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 
 @media (prefers-reduced-motion: reduce) {
   .badge.run .dot { animation: none; }
+  .thinking .dot { animation: none; opacity: 0.55; }
 }
 
 /* ===== 对话 ===== */
@@ -395,6 +396,28 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 }
 /* 同一角色连说几条时收紧间距，读起来是一段话而不是几条独立消息。 */
 .msg.cont { margin-top: calc(var(--spacing-md) * -0.5); }
+
+/* ===== 思考占位 ===== */
+/* 一轮调用里模型可以长时间不吐字：开头在读上下文，中间在调工具。顶栏徽标离对话太远，
+   空白的消息流读起来像卡死，所以在回答将要出现的那一栏留三个呼吸的点。
+   文字流式输出时占位仍在末尾，表示这一轮还没说完，不是答案的一部分。 */
+.thinking {
+  display: flex; align-items: center; gap: 5px;
+  height: calc(var(--text-md) * var(--leading-body));
+}
+.thinking .dot {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--color-muted);
+  animation: thinking 1.3s ease-in-out infinite;
+}
+.thinking .dot + .dot { animation-delay: 0.16s; }
+.thinking .dot + .dot + .dot { animation-delay: 0.32s; }
+/* 紧跟在回答后面时收紧间距：占位属于这段回答的延续，不是消息流里的新一条。 */
+.msg.agent + .thinking { margin-top: calc(var(--spacing-lg) * -0.6); }
+
+@keyframes thinking {
+  0%, 60%, 100% { opacity: 0.22; transform: translateY(0); }
+  30% { opacity: 0.9; transform: translateY(-3px); }
+}
 
 /* ===== 回答落款 ===== */
 /* 复制按钮与时间贴在回答左下角，与正文左边缘对齐（按钮的内边距靠负外边距抵掉）。 */
