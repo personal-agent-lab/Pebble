@@ -107,7 +107,7 @@ def test_new_mail_turn_sees_only_readonly_tools(settings):
     visible = {name.rsplit("__", 1)[-1] for name in options.allowed_tools}
     assert not {"gmail_prepare_reply", "gmail_update_draft"} & visible
     assert "memory" not in visible
-    # 内置工具与本机设置关闭：模型只能连本轮登记的 MCP 端点。
+    # 联网查询与本机设置关闭：系统输入的轮次模型只能连本轮登记的 MCP 端点。
     assert options.tools == []
     assert options.setting_sources == []
     assert options.mcp_servers == {
@@ -130,6 +130,19 @@ def test_message_turn_allows_drafting_and_resumes_session(settings):
     assert options.resume == "session-1"
     assert options.include_partial_messages is True
     assert options.cwd == gateway.workspace
+
+
+@pytest.mark.parametrize("kind", list(TurnKind))
+def test_web_tools_are_visible_only_on_user_initiated_turns(settings, kind):
+    options = options_for(make_gateway(settings), kind)
+
+    if kind is TurnKind.MESSAGE:
+        assert options.tools == ["WebSearch", "WebFetch"]
+        assert {"WebSearch", "WebFetch"} <= set(options.allowed_tools)
+    else:
+        # 触发轮与结果回传轮的输入来自外部内容，不能让其中的指令驱动联网请求。
+        assert options.tools == []
+        assert not {"WebSearch", "WebFetch"} & set(options.allowed_tools)
 
 
 @pytest.mark.parametrize("kind", [TurnKind.MESSAGE, TurnKind.EXECUTION_RESULT])

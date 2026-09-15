@@ -3,10 +3,11 @@
 每次调用独立启动 CLI 子进程：新会话由 CLI 生成会话标识，后续轮次用 `resume` 接续；进程
 退出后 SDK 自己保存会话状态，网页可见时间线由应用运行时单独持久化。
 
-模型可见的工具只有本进程 MCP server（名字 `pebble`）里的只读与本地写工具：每轮在
-`agent/mcp.py` 的端点上登记一个一次性路径，CLI 经回环地址连接，内置工具与本机设置一律
-关闭。真实发送不在这里、也不经过模型：它由 Confirmation 调用。网关不区分触发来源：
-一轮的消息与材料由调度层与触发域组装后经 `stream_turn` 传入。
+模型可见的工具是本进程 MCP server（名字 `pebble`）里的只读与本地写工具，外加用户亲自
+发起轮次里的内置联网查询（`WEB_TOOLS`）：每轮在 `agent/mcp.py` 的端点上登记一个一次性
+路径，CLI 经回环地址连接，本机设置一律关闭。真实发送不在这里、也不经过模型：它由
+Confirmation 调用。网关不区分触发来源：一轮的消息与材料由调度层与触发域组装后经
+`stream_turn` 传入。
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from server.agent.prompt import TITLE_PROMPT
 from server.agent.toolset import (
     ALLOWED_EFFECTS,
     ToolDeps,
+    TurnKind,
     build_tools,
     exposed_tools,
 )
@@ -66,6 +68,11 @@ BYOK_STYLE = "openai"
 NO_TERMINAL_MESSAGE = "SDK 调用未给出结束事件"
 MODEL_ERROR_MESSAGE = "模型调用失败"
 COMPACTION_ERROR_MESSAGE = "短期上下文压缩失败"
+
+# SDK 内置的联网查询工具：搜索请求与页面抓取都经 Qoder 后端代理，只在用户亲自发起的
+# 轮次暴露。触发轮与结果回传轮的输入来自外部内容，不能让其指令驱动网络请求把内容
+# 带出实例；WebFetch 是对指定页面的只读抓取，与 WebSearch 合起来才是完整的查资料能力。
+WEB_TOOLS = ("WebSearch", "WebFetch")
 
 
 def turn_context_hooks(additional_context: str):
@@ -206,10 +213,15 @@ class QoderGateway:
             if snapshot[target]["content"]
         )
         ctx = context.assemble(materials=(*memory_materials, *turn.materials))
+        web_tools = list(WEB_TOOLS) if turn.kind is TurnKind.MESSAGE else []
         return QoderAgentOptions(
-            # 内置工具与本机设置一律关闭：模型能看到的只有本轮 MCP 端点里的工具。
-            tools=[],
-            allowed_tools=[f"mcp__{TOOL_SERVER_NAME}__{definition.name}" for definition in visible],
+            # 内置工具只开放联网查询（见 WEB_TOOLS），本机设置一律关闭：模型能看到的其余
+            # 工具只有本轮 MCP 端点里的那些。
+            tools=web_tools,
+            allowed_tools=[
+                *web_tools,
+                *(f"mcp__{TOOL_SERVER_NAME}__{definition.name}" for definition in visible),
+            ],
             mcp_servers={
                 TOOL_SERVER_NAME: {"type": "http", "url": self._tool_url(path)},
             },

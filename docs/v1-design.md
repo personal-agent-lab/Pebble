@@ -338,7 +338,7 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 
 `agent/client.py` 的 `QoderGateway` 实现 `AgentGateway` 接口（契约只有 `stream_turn`）：每轮输入独立启动一次 qodercli 子进程，新会话由 CLI 生成会话标识并经 init 事件交回，Gateway 绑定到任务后，后续轮次用 `resume` 接续，本层不保存会话状态。CLI 会话记录落在 `data_dir/agent/config` 下，仅用于 SDK 恢复模型上下文；子进程以 `data_dir/agent/workspace` 为工作目录。
 
-模型可见的工具由本进程的 MCP 端点提供（`agent/mcp.py`，server 名 `pebble`）：每轮登记一个一次性路径，绑定当轮工具集合、任务标识与草稿事件队列，CLI 子进程按回环地址 `http://127.0.0.1:{settings.port}/mcp/{token}` 连接，轮次结束即撤销，旧路径不再指向任何工具。端点由 `create_app(tool_server=...)` 挂在业务路由之外，端口与 uvicorn 监听同一设置。工具候选来自 `agent/toolset.py` 按副作用筛选的结果；内置工具与本机设置一律关闭（`tools=[]`、`setting_sources=[]`、`strict_mcp_config`、只允许 `pebble` 这一个 MCP server），技能名单由 `agent/context.py` 逐轮组装，当前为空。
+模型可见的工具由本进程的 MCP 端点提供（`agent/mcp.py`，server 名 `pebble`）：每轮登记一个一次性路径，绑定当轮工具集合、任务标识与草稿事件队列，CLI 子进程按回环地址 `http://127.0.0.1:{settings.port}/mcp/{token}` 连接，轮次结束即撤销，旧路径不再指向任何工具。端点由 `create_app(tool_server=...)` 挂在业务路由之外，端口与 uvicorn 监听同一设置。工具候选来自 `agent/toolset.py` 按副作用筛选的结果；内置工具仅开放联网查询（`WEB_TOOLS`：`WebSearch` 与 `WebFetch`，2026-09-15 实测在托管与 BYOK 模型下均可用，搜索请求经 Qoder 后端代理并计入账号用量），且只在用户亲自发起的轮次暴露——搜索查询与抓取 URL 会离开实例，触发轮与结果回传轮的输入来自外部内容，不能让其中的指令驱动联网请求。本机设置一律关闭（`setting_sources=[]`、`strict_mcp_config`、只允许 `pebble` 这一个 MCP server），技能名单由 `agent/context.py` 逐轮组装，当前为空。
 
 `context.py` 分别组装固定基础提示与当前轮材料。Qoder 恢复会话时可能继续使用建立会话时的 `system_prompt`，因此基础提示在同一会话中保持固定；本轮触发载荷、执行结果以及后续 Memory 通过 `SessionStart.additionalContext` 注入。材料以带标题的块呈现，结构化数据渲染为 JSON，自由文本按原文呈现，不伪造用户消息。基础提示已是域中立的助手定位——陪用户日常交流、回答一般问题、按需调用工具办事；领域行为语义（草稿待审阅、发送边界等）由各工具的 description 携带。网关契约不区分触发来源：触发轮的消息与材料由触发域组装（邮件见 `tools/gmail/trigger.py`），执行结果回传的措辞由 `gateway/runtime.py` 持有。恢复轮开始前，Gateway 读取 SDK 上下文使用率；运行时未启用自动压缩且达到 SDK 阈值时，先完成 `/compact` 并观察到 `compact_boundary`，再提交当前输入。
 
