@@ -44,6 +44,8 @@ export default function TaskPage() {
   </div></AppShell>;
 
   const badge = taskBadge(detail.task?.latest_run ?? null, detail.operations);
+  const latest = detail.task?.latest_run ?? null;
+  const running = latest !== null && (latest.status === "pending" || latest.status === "running");
   // 顶栏标题与侧栏取同一份任务列表：首个调用结束后模型会把目标改写成短标题，
   // 而详情只在事件到达时重读，改写落盘晚于结束事件，靠列表轮询对齐两处文案。
   const listed = tasks.entries?.find((entry) => entry.task.task_id === taskId)?.task ?? null;
@@ -59,7 +61,7 @@ export default function TaskPage() {
     </div>
 
     <div className="chat-main"><div className="feed">
-      <TimelineFeed taskId={taskId} items={detail.items}
+      <TimelineFeed taskId={taskId} items={detail.items} running={running}
         sendMessage={(text, target) => detail.send(text, target)} onChanged={onChanged} />
       {actionError !== null && <Notice tone={actionError.unavailable ? "muted" : "danger"}
         title={actionError.unavailable ? "功能暂未开放" : "操作失败"}>{actionError.message}</Notice>}

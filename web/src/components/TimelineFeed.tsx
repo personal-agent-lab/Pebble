@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { type ApiError, type MessageTarget, type TimelineItem } from "../api";
 import MailDraftCard from "./MailDraftCard";
 import Markdown from "./Markdown";
+import MessageActions from "./MessageActions";
 
 const STICK_PX = 48;
 
@@ -36,14 +37,26 @@ function contentSignature(items: TimelineItem[]): string {
   return `${items.length}:${last.item_id}:${growth}`;
 }
 
+/** 连续几条 Agent 文字读起来是同一个回答，复制要拿到完整一段而不是最后一截。 */
+function answerText(items: TimelineItem[], endIndex: number): string {
+  const parts: string[] = [];
+  for (let index = endIndex; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.kind !== "text" || item.role !== "assistant") break;
+    parts.unshift(item.text);
+  }
+  return parts.join("\n\n");
+}
+
 type Props = {
   taskId: string;
   items: TimelineItem[];
+  running: boolean;
   sendMessage: (message: string, target: MessageTarget) => Promise<ApiError | null>;
   onChanged: () => Promise<void>;
 };
 
-export default function TimelineFeed({ taskId, items, sendMessage, onChanged }: Props) {
+export default function TimelineFeed({ taskId, items, running, sendMessage, onChanged }: Props) {
   const anchor = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   useEffect(() => {
@@ -83,10 +96,17 @@ export default function TimelineFeed({ taskId, items, sendMessage, onChanged }: 
         sendMessage={sendMessage} onChanged={onChanged} />;
       const agent = item.role === "assistant";
       const previous = items[index - 1];
+      const next = items[index + 1];
       const grouped = previous?.kind === "text" && previous.role === item.role;
+      // 落款只挂在一个回答的最后一条上；还在流式输出时先不挂，
+      // 否则复制到的是半截文字，时间也还不是这段回答的时间。
+      const last = index === items.length - 1;
+      const ended = !(next?.kind === "text" && next.role === "assistant") && !(last && running);
       return <div className={`msg ${agent ? "agent" : "user"}${grouped ? " cont" : ""}`} key={item.item_id}>
         <div className="msg-body"><span className="sr-only">{agent ? "Agent 说：" : "我说："}</span>
           <div className="bubble">{agent ? <Markdown text={item.text} /> : item.text}</div>
+          {agent && ended && <MessageActions text={answerText(items, index)}
+            createdAt={item.created_at} pinned={last} />}
         </div>
       </div>;
     })}

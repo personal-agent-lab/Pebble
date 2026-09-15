@@ -396,6 +396,32 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 /* 同一角色连说几条时收紧间距，读起来是一段话而不是几条独立消息。 */
 .msg.cont { margin-top: calc(var(--spacing-md) * -0.5); }
 
+/* ===== 回答落款 ===== */
+/* 复制按钮与时间贴在回答左下角，与正文左边缘对齐（按钮的内边距靠负外边距抵掉）。 */
+.msg-actions {
+  display: flex; align-items: center; gap: var(--spacing-sm);
+  margin: var(--spacing-xs) 0 0 -5px;
+  font-size: var(--text-xs); color: var(--color-muted);
+}
+/* 平时只有正在读的最后一条常驻，更早的回答悬停或聚焦才浮现，不把阅读栏切成一格格。
+   触摸设备没有 hover，落款一律常显，否则永远点不出复制。 */
+@media (hover: hover) {
+  .msg-actions:not(.pinned) { opacity: 0; transition: opacity var(--duration-fast) ease-in-out; }
+  .msg:hover .msg-actions, .msg:focus-within .msg-actions { opacity: 1; }
+}
+.msg-action {
+  display: grid; place-items: center;
+  border: none; background: none; padding: 5px; cursor: pointer;
+  border-radius: var(--radius-sm); color: var(--color-muted);
+  transition: color var(--duration-fast) ease-in-out, background-color var(--duration-fast) ease-in-out;
+}
+.msg-action:hover { color: var(--color-fg); background: var(--color-border-subtle); }
+.msg-action:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
+.msg-action .i { width: 15px; height: 15px; }
+.msg-time { font-variant-numeric: tabular-nums; }
+/* 复制结果是一闪而过的提示，排在时间之后：它出现、消失都不会把时间推着左右跳。 */
+.msg-actions-note:not(:empty)::before { content: "· "; }
+
 /* ===== 消息里的 Markdown ===== */
 /* 这一块不继承 .bubble 的 pre-wrap：换行已经由块级元素承担，
    再保留一次源文本换行会让每两个块之间多出一个空行。 */
