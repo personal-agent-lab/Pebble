@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     port: int = 8000
 
     qoder_model: str | None = None
+    # 标题生成用的托管型号；不配就沿用 qoder_model。
+    title_model: str | None = None
     qoder_token: SecretStr | None = Field(
         default=None, validation_alias="QODERCN_PERSONAL_ACCESS_TOKEN"
     )

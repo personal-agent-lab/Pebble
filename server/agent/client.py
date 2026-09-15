@@ -44,16 +44,21 @@ from server.tools.registry import ToolDefinition
 CONFIG_DIR_ENV = "QODERCN_CONFIG_DIR"
 LOOPBACK_HOST = "127.0.0.1"
 
-# BYOK 供应商标识到协议风格的登记：SDK 目录由 CLI 运行时下发，这里只登记已确认的常见
-# 标识；未登记的一律在装配期报错，接入新供应商时补充本表。
-PROVIDER_STYLES = {
-    "anthropic": "anthropic",
-    "openai": "openai",
-    "deepseek": "openai",
-    "qwen": "openai",
-    "gemini": "openai",
-    "openrouter": "openai",
-}
+# BYOK 供应商标识登记：SDK 目录由 CLI 运行时下发，这里只登记已向目录确认过的标识，
+# 未登记的一律在装配期报错，接入新供应商时补充本表。目录中所有模型的协议风格都是
+# openai，因此风格不再按供应商推导。
+BYOK_PROVIDERS = frozenset(
+    {
+        "bailian",  # Alibaba Cloud Model Studio
+        "deepseek",
+        "kimi",
+        "minimax",
+        "qwencloud-cn",
+        "xiaomi-china",  # Xiaomi MIMO
+        "zhipu",  # Z.ai
+    }
+)
+BYOK_STYLE = "openai"
 
 NO_TERMINAL_MESSAGE = "SDK 调用未给出结束事件"
 MODEL_ERROR_MESSAGE = "模型调用失败"
@@ -183,7 +188,7 @@ class QoderGateway:
             cwd=self.workspace,
             include_partial_messages=False,
             auth=self._auth(),
-            **self._model_options(),
+            **self._model_options(hosted_model=self.settings.title_model),
         )
 
     def _tool_url(self, path: str) -> str:
@@ -215,23 +220,30 @@ class QoderGateway:
         ]
         if missing:
             raise DependencyUnavailableError(f"BYOK 配置不完整，缺少：{', '.join(missing)}")
-        if settings.model_provider not in PROVIDER_STYLES:
-            raise DependencyUnavailableError(f"未登记的模型供应商：{settings.model_provider}")
+        if settings.model_provider not in BYOK_PROVIDERS:
+            raise DependencyUnavailableError(
+                f"未登记的模型供应商：{settings.model_provider}，"
+                f"可选：{', '.join(sorted(BYOK_PROVIDERS))}"
+            )
 
-    def _model_options(self) -> dict[str, Any]:
-        """托管模型直接给型号名；配了第三方模型就转成 BYOK，凭证只在这里读取。"""
+    def _model_options(self, *, hosted_model: str | None = None) -> dict[str, Any]:
+        """托管模型直接给型号名；配了第三方模型就转成 BYOK，凭证只在这里读取。
+
+        `hosted_model` 只替换托管型号。BYOK 的密钥与供应商标识绑定，换型号就需要另一份
+        凭证，所以配了 BYOK 时忽略它。
+        """
         settings = self.settings
         if settings.model_provider:
             custom: dict[str, Any] = {
                 "provider": settings.model_provider,
                 "model": settings.qoder_model,
                 "api_key": settings.model_api_key.get_secret_value(),
-                "style": PROVIDER_STYLES[settings.model_provider],
+                "style": BYOK_STYLE,
             }
             if settings.model_base_url:
                 custom["url"] = settings.model_base_url
             return {"resolve_model": lambda _context: {"model": custom}}
-        return {"model": settings.qoder_model}
+        return {"model": hosted_model or settings.qoder_model}
 
 
 def _result_event(message: ResultMessage) -> AgentEvent:
