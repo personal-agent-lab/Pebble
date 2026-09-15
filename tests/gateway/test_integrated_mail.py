@@ -64,6 +64,12 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
         async def query(self, message):
             self.message = message
 
+        async def get_context_usage(self):
+            return {
+                "contextWindow": {"usedPercentage": 20},
+                "autoCompact": {"enabled": True, "thresholdPercentage": 80},
+            }
+
         async def call(self, name, fields):
             url = self.options.mcp_servers[TOOL_SERVER_NAME]["url"]
             async with mcp_session(app, url) as session:
@@ -113,7 +119,9 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
                 )
                 yield self.say("已按你的要求补充。")
             else:
-                assert '"status": "sent"' in self.options.system_prompt
+                matcher = self.options.hooks["SessionStart"][0]
+                hook_result = await matcher.hooks[0]({}, None, {})
+                assert '"status": "sent"' in hook_result["hookSpecificOutput"]["additionalContext"]
                 yield self.say("邮件已经发出去了。")
             yield ResultMessage("success", 1, 1, False, 1, self.sid)
 

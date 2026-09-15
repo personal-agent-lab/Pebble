@@ -48,7 +48,8 @@ cp .env.example .env
 | `PEBBLE_DATA_DIR` | 实例数据目录，默认 `<仓库根>/.data` |
 | `PEBBLE_HOST`、`PEBBLE_PORT` | 监听地址与端口，默认 `127.0.0.1:8000` |
 | `QODERCN_PERSONAL_ACCESS_TOKEN` | Qoder CN 访问令牌，注意没有 `PEBBLE_` 前缀 |
-| `PEBBLE_QODER_MODEL` | 托管模型型号 |
+| `PEBBLE_QODER_MODEL` | 托管模型型号，取值由 CLI 按账号动态下发（`qodercli --list-models`） |
+| `PEBBLE_TITLE_MODEL` | 只给任务标题生成用的型号，默认沿用 `PEBBLE_QODER_MODEL` |
 | `PEBBLE_MODEL_PROVIDER`、`PEBBLE_MODEL_API_KEY`、`PEBBLE_MODEL_BASE_URL` | 自定义模型（BYOK）。供应商、密钥、型号必须同时给全，`BASE_URL` 可选；provider 必须匹配账号的 BYOK 目录 |
 | `PEBBLE_GMAIL_CREDENTIALS_PATH` | Gmail OAuth 桌面应用 JSON，默认 `<data_dir>/credentials.json` |
 | `PEBBLE_GMAIL_TOKEN_PATH` | Gmail 授权结果，默认 `<data_dir>/gmail_token.json` |
@@ -188,6 +189,16 @@ Gmail 发送或 iCloud 创建函数，生产代码没有默认成功的外部写
 测试替换 SDK 子进程、Gmail 投递和 iCloud CalDAV 这三个外部边界，其余模块、SQLite、HTTP 都是真的。
 SDK 模型响应、Gmail 投递与 iCloud 读写仍须用明确授权的账号和内容验收；测试通过不代表真实外部操作成功。
 
+Qoder 短期上下文的真实验收脚本不会随 pytest 运行。它验证多轮、独立进程恢复和每轮最新
+材料；加 `--compact` 会发送较长的合成文本并验证压缩，因而消耗更多真实额度：
+
+```bash
+uv run --project server python -m tests.acceptance.qoder_context
+uv run --project server python -m tests.acceptance.qoder_context --compact
+```
+
+最近一次结果见 `docs/validation/qoder-context-2026-09-15.md`。
+
 触发源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/runtime.py` 的 `MailSource`
 （`start` / `stop` / `error`）。真实 Gmail 检测由 `server/tools/gmail/sync.py` 实现同一接口，
 生产工厂统一装配。
@@ -213,6 +224,8 @@ Gmail 首次启动记录当前 historyId，随后每 10 秒检测新增的收件
 一次性路径供 qodercli 子进程按回环地址连接，轮次结束即撤销。每轮独立启动一次 qodercli 子进程，
 会话标识由 SDK 生成并按任务保存，重启后靠它接续。会话记录落在 `.data/agent/config/` 下，
 模型上下文由该记录恢复；网页时间线由 SQLite 独立持久化，刷新后仍保持文字与草稿卡的生成顺序。
+基础系统提示在同一 SDK 会话内保持固定；每轮动态材料通过 SessionStart hook 注入。当前 CN
+SDK headless runtime 未启用自动压缩，Gateway 达到 SDK 报告的阈值时先执行手动压缩再处理输入。
 
 联合测试 `tests/gateway/test_integrated_mail.py` 覆盖实际模块衔接、Agent 修改与手动编辑、
 旧版本拒绝、最终内容一致性、重复确认、结果会话关联与游标推进；`tests/gateway/test_agent_stream.py`

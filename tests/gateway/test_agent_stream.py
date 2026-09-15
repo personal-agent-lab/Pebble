@@ -17,7 +17,7 @@ from qodercn_agent_sdk import (
 )
 
 from server.agent import client as agent_client
-from server.agent.client import QoderGateway
+from server.agent.client import BYOK_PROVIDERS, QoderGateway
 from server.agent.context import Material, assemble
 from server.agent.mcp import MCP_MOUNT_PATH, TOOL_SERVER_NAME, ToolServer
 from server.agent.prompt import BASE_PROMPT
@@ -79,6 +79,12 @@ def options_for(gateway: QoderGateway, kind: TurnKind, **turn_fields):
 def options_for_turn(gateway: QoderGateway, turn: Turn):
     visible = exposed_tools(gateway.tools, allowed=ALLOWED_EFFECTS[turn.kind])
     return gateway._options(turn, visible=visible, path=f"{MCP_MOUNT_PATH}/{TURN_TOKEN}")
+
+
+def injected_context(options) -> str:
+    matcher = options.hooks["SessionStart"][0]
+    result = asyncio.run(matcher.hooks[0]({}, None, {}))
+    return result["hookSpecificOutput"]["additionalContext"]
 
 
 def message_turn(message: str, *, task_id: str = "task-1") -> Turn:
@@ -156,9 +162,10 @@ def test_execution_result_enters_system_prompt(settings):
     )
     options = options_for_turn(gateway, turn)
 
-    assert '"status": "sent"' in options.system_prompt
-    assert "op1" in options.system_prompt
-    # 回传材料只进系统提示，不伪装成用户说过的话。
+    assert options.system_prompt == BASE_PROMPT
+    assert '"status": "sent"' in injected_context(options)
+    assert "op1" in injected_context(options)
+    # 回传材料只进附加上下文，不伪装成用户说过的话。
     assert "op1" not in turn.message
 
 
@@ -174,19 +181,138 @@ def test_new_mail_turn_passes_ids_as_material(settings):
     )
     options = options_for_turn(gateway, turn)
 
-    # 标识以 JSON 材料块进系统提示，模型不必从散文句子里解析。
-    assert '"source_message_id": "msg-1"' in options.system_prompt
-    assert '"thread_id": "th-1"' in options.system_prompt
+    # 标识以 JSON 材料块进附加上下文，模型不必从散文句子里解析。
+    assert options.system_prompt == BASE_PROMPT
+    assert '"source_message_id": "msg-1"' in injected_context(options)
+    assert '"thread_id": "th-1"' in injected_context(options)
     assert "msg-1" not in turn.message
 
 
 def test_materials_render_by_content_type():
     ctx = assemble(materials=[Material("备忘", "周二下午有组会"), Material("载荷", {"a": 1})])
 
-    # 基础提示固定在最前，材料按序追加；自由文本按原文渲染，结构化数据渲染为 JSON 块。
-    assert ctx.system_prompt.startswith(BASE_PROMPT)
-    assert "## 备忘\n周二下午有组会" in ctx.system_prompt
-    assert '## 载荷\n{\n  "a": 1\n}' in ctx.system_prompt
+    # 基础提示固定；材料按序注入，自由文本按原文渲染，结构化数据渲染为 JSON 块。
+    assert ctx.system_prompt == BASE_PROMPT
+    assert "## 备忘\n周二下午有组会" in ctx.additional_context
+    assert '## 载荷\n{\n  "a": 1\n}' in ctx.additional_context
+
+
+def test_resumed_turn_injects_fresh_material_without_changing_base_prompt(settings):
+    gateway = make_gateway(settings)
+    first = options_for(
+        gateway,
+        TurnKind.MESSAGE,
+        sdk_session_id="session-1",
+        materials=(Material("当前生效规则", "回答先给结论"),),
+    )
+    second = options_for(
+        gateway,
+        TurnKind.MESSAGE,
+        sdk_session_id="session-1",
+        materials=(Material("当前生效规则", "回答先解释推导"),),
+    )
+
+    assert first.system_prompt == second.system_prompt == BASE_PROMPT
+    assert injected_context(first) == "## 当前生效规则\n回答先给结论"
+    assert injected_context(second) == "## 当前生效规则\n回答先解释推导"
+
+
+def test_turn_without_materials_does_not_register_context_hook(settings):
+    options = options_for(make_gateway(settings), TurnKind.MESSAGE)
+
+    assert options.hooks is None
+
+
+def test_manual_compaction_runs_before_resumed_turn_when_sdk_auto_compact_is_off(
+    settings, monkeypatch
+):
+    gateway = make_gateway(settings)
+    calls = []
+
+    class CompactingClient:
+        def __init__(self, _options):
+            self.responses = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get_context_usage(self):
+            return {
+                "contextWindow": {"usedPercentage": 85},
+                "autoCompact": {"enabled": False, "thresholdPercentage": 80},
+            }
+
+        async def query(self, message):
+            calls.append(message)
+            if message == "/compact":
+                self.responses = [
+                    SystemMessage("compact_boundary", {"compact_metadata": {"trigger": "manual"}}),
+                    result(),
+                ]
+            else:
+                self.responses = [result()]
+
+        async def receive_response(self):
+            for item in self.responses:
+                yield item
+
+    monkeypatch.setattr(agent_client, "QoderSDKClient", CompactingClient)
+    turn = Turn(
+        kind=TurnKind.MESSAGE,
+        task_id="task-1",
+        sdk_session_id="session-1",
+        message="继续任务",
+    )
+
+    events = asyncio.run(collect(gateway.stream_turn(turn)))
+
+    assert calls == ["/compact", "继续任务"]
+    assert events == [{"type": "done"}]
+
+
+def test_manual_compaction_is_skipped_below_threshold(settings, monkeypatch):
+    gateway = make_gateway(settings)
+    calls = []
+
+    class UnpressuredClient:
+        def __init__(self, _options):
+            self.responses = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get_context_usage(self):
+            return {
+                "contextWindow": {"usedPercentage": 25},
+                "autoCompact": {"enabled": False, "thresholdPercentage": 80},
+            }
+
+        async def query(self, message):
+            calls.append(message)
+            self.responses = [result()]
+
+        async def receive_response(self):
+            for item in self.responses:
+                yield item
+
+    monkeypatch.setattr(agent_client, "QoderSDKClient", UnpressuredClient)
+    turn = Turn(
+        kind=TurnKind.MESSAGE,
+        task_id="task-1",
+        sdk_session_id="session-1",
+        message="继续任务",
+    )
+
+    events = asyncio.run(collect(gateway.stream_turn(turn)))
+
+    assert calls == ["继续任务"]
+    assert events == [{"type": "done"}]
 
 
 def test_managed_model_and_byok_credentials(settings):
@@ -196,42 +322,76 @@ def test_managed_model_and_byok_credentials(settings):
 
     byok = make_gateway(
         settings,
-        qoder_model="gpt-x",
-        model_provider="openai",
+        qoder_model="deepseek-v4-pro-pg",
+        model_provider="deepseek",
         model_api_key="sk-test",
-        model_base_url="https://models.example.com",
+        model_base_url="https://api.deepseek.com",
     )
     options = options_for(byok, TurnKind.MESSAGE)
     assert options.model is None
     assert options.resolve_model(None) == {
         "model": {
-            "provider": "openai",
-            "model": "gpt-x",
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro-pg",
             "api_key": "sk-test",
             "style": "openai",
-            "url": "https://models.example.com",
+            "url": "https://api.deepseek.com",
         }
     }
     assert "sk-test" not in options.system_prompt
 
 
+def test_title_call_uses_its_own_managed_model(settings):
+    """标题是每条任务一次的后台短调用，可以走低倍率型号；主对话不受影响。"""
+    gateway = make_gateway(settings, qoder_model="q-model", title_model="q-cheap")
+    assert gateway._title_options().model == "q-cheap"
+    assert options_for(gateway, TurnKind.MESSAGE).model == "q-model"
+
+    inherited = make_gateway(settings, qoder_model="q-model")
+    assert inherited._title_options().model == "q-model"
+
+
+def test_byok_title_call_keeps_the_session_model(settings):
+    """BYOK 的密钥与供应商标识绑定，标题调用不能借用托管型号名换模型。"""
+    byok = make_gateway(
+        settings,
+        qoder_model="deepseek-v4-pro-pg",
+        title_model="q-cheap",
+        model_provider="deepseek",
+        model_api_key="sk-test",
+    )
+    options = byok._title_options()
+    assert options.model is None
+    assert options.resolve_model(None) == {
+        "model": {
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro-pg",
+            "api_key": "sk-test",
+            "style": "openai",
+        }
+    }
+
+
 def test_partial_byok_config_fails_at_assembly(settings):
     """BYOK 只配一部分不能静默退回托管模型：装配期就报错并指出缺项。"""
     with pytest.raises(DependencyUnavailableError, match="PEBBLE_QODER_MODEL"):
-        make_gateway(settings, model_provider="openai", model_api_key="sk-test")
+        make_gateway(settings, model_provider="deepseek", model_api_key="sk-test")
 
     with pytest.raises(DependencyUnavailableError, match="PEBBLE_MODEL_API_KEY"):
-        make_gateway(settings, model_provider="openai", qoder_model="gpt-x")
+        make_gateway(settings, model_provider="deepseek", qoder_model="deepseek-v4-pro-pg")
 
 
 def test_unregistered_provider_fails_at_assembly(settings):
-    with pytest.raises(DependencyUnavailableError, match="未登记的模型供应商"):
+    """登记表以 `list_byok_providers()` 目录为准，报错时要能看出该填什么。"""
+    with pytest.raises(DependencyUnavailableError, match="未登记的模型供应商：qwen") as error:
         make_gateway(
             settings,
-            model_provider="not-a-provider",
+            model_provider="qwen",
             model_api_key="sk-test",
-            qoder_model="gpt-x",
+            qoder_model="qwen3.8-max-tp",
         )
+    for provider in BYOK_PROVIDERS:
+        assert provider in str(error.value)
 
 
 def test_missing_token_refuses_the_turn(settings):

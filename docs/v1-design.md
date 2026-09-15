@@ -253,7 +253,7 @@ Gateway 以 HTTP 提交操作、SSE 展示进度。Agent Loop 使用 `qodercn-ag
 
 ### 模型与 SDK 约束
 
-模型先采用一个明确配置的模型完成闭环。Qoder 托管模型从 `get_available_models()` 获取；使用自有 API Key 时通过 `resolve_model` 返回 `CustomModel`。BYOK 三项（供应商、密钥、型号）在装配期校验完整性，缺项直接报错，不静默退回托管模型；供应商标识经 `agent/client.py` 的登记表映射协议风格，未登记同样报错，登记表的增补以 `list_byok_providers()` 目录为准。不增加动态路由模块。[Python SDK 参考](https://docs.qoder.com/cli/sdk/references-python)
+模型先采用一个明确配置的模型完成闭环。Qoder 托管模型从 `get_available_models()` 获取；使用自有 API Key 时通过 `resolve_model` 返回 `CustomModel`。BYOK 三项（供应商、密钥、型号）在装配期校验完整性，缺项直接报错，不静默退回托管模型；供应商标识经 `agent/client.py` 的登记表校验，未登记同样报错并在报错中列出可登记项，登记表的增补以 `list_byok_providers()` 目录为准，协议风格统一取 `openai`。不增加动态路由模块。[Python SDK 参考](https://docs.qoder.com/cli/sdk/references-python)
 
 SDK 显式限定项目工具和必要的 Skill 能力，使用独立工作目录与配置目录，限制配置加载来源，禁用可绕过外部写授权或 Skill 审核的通用 Shell、任意文件写入及无关扩展；使用面向个人助理的系统提示。工具授权不使用权限绕过模式。[权限控制](https://docs.qoder.com/cli/sdk/permissions)
 
@@ -340,11 +340,11 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 
 模型可见的工具由本进程的 MCP 端点提供（`agent/mcp.py`，server 名 `pebble`）：每轮登记一个一次性路径，绑定当轮工具集合、任务标识与草稿事件队列，CLI 子进程按回环地址 `http://127.0.0.1:{settings.port}/mcp/{token}` 连接，轮次结束即撤销，旧路径不再指向任何工具。端点由 `create_app(tool_server=...)` 挂在业务路由之外，端口与 uvicorn 监听同一设置。工具候选来自 `agent/toolset.py` 按副作用筛选的结果；内置工具与本机设置一律关闭（`tools=[]`、`setting_sources=[]`、`strict_mcp_config`、只允许 `pebble` 这一个 MCP server），技能名单由 `agent/context.py` 逐轮组装，当前为空。
 
-系统提示同样由 `context.py` 组装：基础提示固定在最前，本轮材料（触发载荷、执行结果等）以带标题的块追加在末尾，结构化数据渲染为 JSON 块、自由文本按原文呈现，不伪造用户消息。基础提示已是域中立的助手定位——陪用户日常交流、回答一般问题、按需调用工具办事；领域行为语义（草稿待审阅、发送边界等）由各工具的 description 携带。网关契约不区分触发来源：触发轮的消息与材料由触发域组装（邮件见 `tools/gmail/trigger.py`），执行结果回传的措辞由 `gateway/runtime.py` 持有。
+`context.py` 分别组装固定基础提示与当前轮材料。Qoder 恢复会话时可能继续使用建立会话时的 `system_prompt`，因此基础提示在同一会话中保持固定；本轮触发载荷、执行结果以及后续 Memory 通过 `SessionStart.additionalContext` 注入。材料以带标题的块呈现，结构化数据渲染为 JSON，自由文本按原文呈现，不伪造用户消息。基础提示已是域中立的助手定位——陪用户日常交流、回答一般问题、按需调用工具办事；领域行为语义（草稿待审阅、发送边界等）由各工具的 description 携带。网关契约不区分触发来源：触发轮的消息与材料由触发域组装（邮件见 `tools/gmail/trigger.py`），执行结果回传的措辞由 `gateway/runtime.py` 持有。恢复轮开始前，Gateway 读取 SDK 上下文使用率；运行时未启用自动压缩且达到 SDK 阈值时，先完成 `/compact` 并观察到 `compact_boundary`，再提交当前输入。
 
 事件收敛规则：`include_partial_messages` 打开后按增量转发 text，整段消息仅在无增量时补发；工具成功后入队的 draft_saved 在该工具调用之后的模型下一条消息之前送出；Runtime 先持久化对应时间线项，再发布携带 `item_id` 的 SSE 事件，因此“文字 A → 草稿 → 文字 B”的位置在刷新前后相同；ResultMessage 收敛为 done 或 error，结束事件之后不得再有事件，流自然结束而未给出结束事件时补发 error。会话建立事件一轮只广播一次，同一标识重复上报不重复转发。
 
-模型与凭证只在这一层读取：托管模型直接给型号名；配置第三方提供方时三项必须齐全且供应商已登记，写错在装配期报错，不静默退回托管模型，随后转成 BYOK 的 `resolve_model` 回调；缺令牌时调用前抛 `DependencyUnavailableError`。
+模型与凭证只在这一层读取：托管模型直接给型号名；配置第三方提供方时三项必须齐全且供应商已登记，写错在装配期报错，不静默退回托管模型，随后转成 BYOK 的 `resolve_model` 回调；缺令牌时调用前抛 `DependencyUnavailableError`。标题生成另可指定托管型号名，未配置时沿用主对话型号，配置 BYOK 时不换型号。
 
 ### 工具装配
 

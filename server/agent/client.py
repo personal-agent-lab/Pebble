@@ -18,6 +18,7 @@ from typing import Any
 
 from qodercn_agent_sdk import (
     AssistantMessage,
+    HookMatcher,
     QoderAgentOptions,
     QoderSDKClient,
     ResultMessage,
@@ -62,6 +63,24 @@ BYOK_STYLE = "openai"
 
 NO_TERMINAL_MESSAGE = "SDK 调用未给出结束事件"
 MODEL_ERROR_MESSAGE = "模型调用失败"
+COMPACTION_ERROR_MESSAGE = "短期上下文压缩失败"
+
+
+def turn_context_hooks(additional_context: str):
+    """在本轮 CLI 进程启动或恢复时注入应用材料。"""
+    if not additional_context:
+        return None
+
+    async def inject(_input, _tool_use_id, _hook_context):
+        # SDK hook 返回的是协议字段，保持 camelCase；snake_case 不会被 CLI 识别。
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": additional_context,
+            }
+        }
+
+    return {"SessionStart": [HookMatcher(hooks=[inject])]}
 
 
 class QoderGateway:
@@ -121,6 +140,8 @@ class QoderGateway:
         ) as path:
             options = self._options(turn, visible=visible, path=path)
             async with QoderSDKClient(options) as client:
+                if turn.sdk_session_id is not None:
+                    await self._compact_if_needed(client)
                 await client.query(turn.message)
                 async for message in client.receive_response():
                     # 工具事件在产生它的那次调用之后、模型的下一条消息之前送出。
@@ -152,6 +173,26 @@ class QoderGateway:
             yield queued.get_nowait()
         yield {"type": "error", "message": NO_TERMINAL_MESSAGE}
 
+    async def _compact_if_needed(self, client: QoderSDKClient) -> None:
+        """运行时未启用自动压缩时，在达到其阈值后先完成手动压缩。"""
+        usage = await client.get_context_usage()
+        automatic = usage["autoCompact"]
+        if automatic["enabled"]:
+            return
+        if usage["contextWindow"]["usedPercentage"] < automatic["thresholdPercentage"]:
+            return
+
+        compacted = False
+        await client.query("/compact")
+        async for message in client.receive_response():
+            if isinstance(message, SystemMessage) and message.subtype == "compact_boundary":
+                compacted = True
+            elif isinstance(message, ResultMessage) and message.is_error:
+                detail = (message.result or "").strip() or COMPACTION_ERROR_MESSAGE
+                raise AgentProtocolError(detail)
+        if not compacted:
+            raise AgentProtocolError(COMPACTION_ERROR_MESSAGE)
+
     def _options(
         self, turn: Turn, *, visible: list[ToolDefinition], path: str
     ) -> QoderAgentOptions:
@@ -168,6 +209,7 @@ class QoderGateway:
             setting_sources=[],
             skills=ctx.skills,
             system_prompt=ctx.system_prompt,
+            hooks=turn_context_hooks(ctx.additional_context),
             cwd=self.workspace,
             resume=turn.sdk_session_id,
             include_partial_messages=True,
