@@ -8,8 +8,10 @@ import httpx
 from server.agent.mcp import ToolServer
 from server.agent.toolset import ALLOWED_EFFECTS, ToolDeps, TurnKind, build_tools, exposed_tools
 from server.db import init_db
+from server.memory.service import MemoryStore
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
+from server.tools.memory.tools import review_registry
 from tests.support.gmail_double import MockGmailClient
 from tests.support.mcp_http import mcp_session, tool_payload
 
@@ -158,3 +160,39 @@ def test_targeted_turn_can_only_update_selected_draft(settings):
             assert tool_payload(updated)["version"] == 2
 
     asyncio.run(scenario())
+
+
+def test_review_endpoint_exposes_only_add_tool(settings):
+    init_db()
+    store = MemoryStore(settings.data_dir)
+    tools = build_tools(
+        ToolDeps(drafts=None, tasks=None, gmail=None, memory_store=store),
+        registry=review_registry,
+    )
+    task_id = SessionStore().create_task("闲聊")["task_id"]
+    server = ToolServer()
+
+    async def scenario():
+        async with (
+            server.serve(tools, task_id=task_id, queued=asyncio.Queue()) as path,
+            mcp_session(server, f"{BASE_URL}{path}") as session,
+        ):
+            listed = await session.list_tools()
+            assert [tool.name for tool in listed.tools] == ["memory_add"]
+
+            saved = await session.call_tool(
+                "memory_add", {"target": "user", "content": "用户在研究记忆机制"}
+            )
+            assert saved.isError is False
+            assert tool_payload(saved)["changed"] is True
+
+            # 前台 memory 工具在回顾会话不存在：无法表达替换或删除。
+            blocked = await session.call_tool(
+                "memory",
+                {"action": "replace", "target": "user", "content": "x", "old_text": "y"},
+            )
+            assert blocked.isError is True
+            assert tool_payload(blocked)["error"] == "unknown_tool"
+
+    asyncio.run(scenario())
+    assert "用户在研究记忆机制" in store.snapshot()["user"]["content"]

@@ -25,6 +25,9 @@ class FakeAgentGateway:
         self.title = title
         self.calls: list[dict[str, Any]] = []
         self.title_calls: list[str] = []
+        self.review_calls: list[dict[str, Any]] = []
+        # 可替换的一次性记忆回顾实现；缺省记录调用并返回“无”。
+        self.review_handler = None
         self._handlers: dict[str, Handler] = {}
         self._sessions = count(1)
         self._lock = threading.Lock()
@@ -43,6 +46,15 @@ class FakeAgentGateway:
         with self._lock:
             self.title_calls.append(text)
         return self.title
+
+    async def review_memory(self, task_id: str, instructions: str, transcript: str) -> str:
+        with self._lock:
+            self.review_calls.append(
+                {"task_id": task_id, "instructions": instructions, "transcript": transcript}
+            )
+        if self.review_handler is not None:
+            return await self.review_handler(task_id, instructions, transcript)
+        return "无"
 
     async def stream_turn(self, turn: Turn) -> AsyncIterator[AgentEvent]:
         async for event in self._stream(turn):

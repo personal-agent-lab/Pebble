@@ -152,6 +152,28 @@ def test_memory_tool_is_available_only_on_local_write_turns(settings, kind):
     }
 
     assert "memory" in names
+    # 只新增工具只在回顾会话出现，前台轮不重复暴露。
+    assert "memory_add" not in names
+
+
+def test_review_options_expose_only_add_tool_in_fresh_session(settings):
+    gateway = make_gateway(settings)
+    options = gateway._review_options("回顾指令", f"{MCP_MOUNT_PATH}/{TURN_TOKEN}")
+
+    assert options.allowed_tools == [f"mcp__{TOOL_SERVER_NAME}__memory_add"]
+    assert options.tools == []
+    assert options.setting_sources == []
+    assert options.mcp_servers == {
+        TOOL_SERVER_NAME: {
+            "type": "http",
+            "url": f"http://127.0.0.1:{gateway.settings.port}{MCP_MOUNT_PATH}/{TURN_TOKEN}",
+        }
+    }
+    assert options.allowed_mcp_server_names == [TOOL_SERVER_NAME]
+    assert options.system_prompt == "回顾指令"
+    assert options.resume is None
+    assert options.hooks is None
+    assert options.include_partial_messages is False
 
 
 @pytest.mark.parametrize("kind", list(TurnKind))

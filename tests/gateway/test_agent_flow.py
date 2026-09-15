@@ -27,11 +27,12 @@ def anyio_backend():
 
 async def drain(service):
     async with asyncio.timeout(5):
-        while service._active or service._sends or service._titles:
+        while service._active or service._sends or service._titles or service._review_tasks:
             await asyncio.gather(
                 *list(service._active.values()),
                 *list(service._sends.values()),
                 *list(service._titles),
+                *list(service._review_tasks.values()),
             )
 
 

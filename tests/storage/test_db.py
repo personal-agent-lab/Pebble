@@ -72,3 +72,36 @@ def test_v7_migration_preserves_completed_mail_result(settings: Settings) -> Non
         ).fetchone()
         assert json.loads(row["result_json"]) == {"status": "sent", "message_id": "message-1"}
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_v9_migration_adds_memory_reviews_table(settings: Settings) -> None:
+    settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+    with session() as conn, write(conn):
+        conn.execute("CREATE TABLE schema_meta (version INTEGER NOT NULL)")
+        conn.execute("INSERT INTO schema_meta VALUES (8)")
+        for version in range(1, 9):
+            for statement in db.SCHEMA_MIGRATIONS[version]:
+                conn.execute(statement)
+        conn.execute("INSERT INTO tasks VALUES ('t1','任务',NULL,'2026-09-01T00:00:00Z')")
+
+    assert init_db() == SCHEMA_VERSION
+    with session() as conn:
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        conn.execute(
+            "INSERT INTO memory_reviews (review_id, task_id, status, origin, from_rowid, "
+            "through_rowid, created_at) VALUES ('r1','t1','pending','manual',0,0,"
+            "'2026-09-01T00:00:00Z')"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO memory_reviews (review_id, task_id, status, origin, from_rowid, "
+                "through_rowid, created_at) VALUES ('r2','t1','pending','manual',0,0,"
+                "'2026-09-01T00:00:00Z')"
+            )
+        # 已结束的回顾不阻止下一次登记。
+        conn.execute("UPDATE memory_reviews SET status='done', finished_at='2026-09-01T00:01:00Z'")
+        conn.execute(
+            "INSERT INTO memory_reviews (review_id, task_id, status, origin, from_rowid, "
+            "through_rowid, created_at) VALUES ('r3','t1','pending','interval',0,0,"
+            "'2026-09-01T00:02:00Z')"
+        )
