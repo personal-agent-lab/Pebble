@@ -218,3 +218,8 @@ Gmail 首次启动记录当前 historyId，随后每 10 秒检测新增的收件
 旧版本拒绝、最终内容一致性、重复确认、结果会话关联与游标推进；`tests/gateway/test_agent_stream.py`
 覆盖选项装配、事件映射与工具边界；`tests/api/test_http_flow.py` 覆盖内嵌时间线、原卡片更新和确认发送。
 其中 SDK 模型响应和 Gmail 投递仍为测试边界替身；真实验收结果需另行记录。
+
+启动：
+PYTHONPATH=. uv run --project server python -m server.main
+cd web
+npm run dev
