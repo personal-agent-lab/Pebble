@@ -106,6 +106,7 @@ def test_new_mail_turn_sees_only_readonly_tools(settings):
     assert options.allowed_tools == [f"mcp__pebble__{tool.name}" for tool in readonly]
     visible = {name.rsplit("__", 1)[-1] for name in options.allowed_tools}
     assert not {"gmail_prepare_reply", "gmail_update_draft"} & visible
+    assert "memory" not in visible
     # 内置工具与本机设置关闭：模型只能连本轮登记的 MCP 端点。
     assert options.tools == []
     assert options.setting_sources == []
@@ -129,6 +130,15 @@ def test_message_turn_allows_drafting_and_resumes_session(settings):
     assert options.resume == "session-1"
     assert options.include_partial_messages is True
     assert options.cwd == gateway.workspace
+
+
+@pytest.mark.parametrize("kind", [TurnKind.MESSAGE, TurnKind.EXECUTION_RESULT])
+def test_memory_tool_is_available_only_on_local_write_turns(settings, kind):
+    names = {
+        name.rsplit("__", 1)[-1] for name in options_for(make_gateway(settings), kind).allowed_tools
+    }
+
+    assert "memory" in names
 
 
 @pytest.mark.parametrize("kind", list(TurnKind))
@@ -215,6 +225,31 @@ def test_resumed_turn_injects_fresh_material_without_changing_base_prompt(settin
     assert first.system_prompt == second.system_prompt == BASE_PROMPT
     assert injected_context(first) == "## 当前生效规则\n回答先给结论"
     assert injected_context(second) == "## 当前生效规则\n回答先解释推导"
+
+
+def test_memory_is_reloaded_and_precedes_turn_materials(settings):
+    gateway = make_gateway(settings)
+    gateway.memory_store.apply("add", "user", "回答先给结论")
+    first = options_for(
+        gateway,
+        TurnKind.MESSAGE,
+        materials=(Material("本轮材料", "只对本轮有效"),),
+    )
+    gateway.memory_store.apply("replace", "user", "回答先解释推导", "先给结论")
+    gateway.memory_store.apply("add", "memory", "Pebble 使用 Python")
+    second = options_for(
+        gateway,
+        TurnKind.MESSAGE,
+        sdk_session_id="session-1",
+        materials=(Material("本轮材料", "只对本轮有效"),),
+    )
+
+    assert injected_context(first).startswith("## 关于你\n回答先给结论")
+    assert injected_context(second) == (
+        "## 关于你\n回答先解释推导\n\n"
+        "## 事实与约定\nPebble 使用 Python\n\n"
+        "## 本轮材料\n只对本轮有效"
+    )
 
 
 def test_turn_without_materials_does_not_register_context_hook(settings):
@@ -459,6 +494,43 @@ def run_tools(gateway: QoderGateway, monkeypatch, *calls: ToolCall, task_id="tas
     captured = install_sdk(monkeypatch, gateway, script)
     events = asyncio.run(collect(gateway.stream_turn(message_turn("测试输入", task_id=task_id))))
     return events, captured["results"]
+
+
+def test_memory_tool_uses_real_mcp_and_persists_file(settings, monkeypatch):
+    gateway = make_gateway(settings)
+
+    _, results = run_tools(
+        gateway,
+        monkeypatch,
+        ToolCall("memory", {"action": "add", "target": "user", "content": "默认使用中文"}),
+    )
+
+    assert results[0].isError is False
+    payload = tool_payload(results[0])
+    assert payload["changed"] is True
+    assert payload["entries"] == ["默认使用中文"]
+    assert len(payload["commit"]) == 40
+    assert (settings.data_dir / "memory" / "USER.md").read_text() == "默认使用中文"
+
+
+def test_memory_tool_returns_structured_capacity_error(settings, monkeypatch):
+    gateway = make_gateway(settings)
+
+    _, results = run_tools(
+        gateway,
+        monkeypatch,
+        ToolCall("memory", {"action": "add", "target": "user", "content": "甲" * 1376}),
+    )
+
+    assert results[0].isError is True
+    assert tool_payload(results[0]) == {
+        "error": "memory_full",
+        "message": "user 记忆需要 1376 个字符，上限为 1375",
+        "target": "user",
+        "used": 1376,
+        "limit": 1375,
+    }
+    assert gateway.memory_store.snapshot()["user"]["entries"] == []
 
 
 def test_draft_saved_precedes_following_text(settings, monkeypatch):

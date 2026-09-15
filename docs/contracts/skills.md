@@ -1,39 +1,33 @@
 # Memory 与 Skills 契约
 
-状态：**约定，尚未实现**。SDK 侧的 `skills` 配置插孔与每轮上下文装配已存在，生效名单当前为空。本文定义文件格式、存储布局、沉淀来源、审核与加载边界。实现与本文冲突时先改本文。
+状态：**Memory 已实现，Skills 尚未实现**。SDK 侧的 `skills` 配置插孔与每轮上下文装配已存在，生效名单当前为空。本文定义文件格式、存储布局、沉淀来源、审核与加载边界。实现与本文冲突时先改本文。
 
 Memory 保存“用户的偏好与规则”，个人知识库保存“资料及原文证据”，两者分开，见 `personal-kb.md`。
 
 ## 1. 存储布局
 
 ```text
-<data_dir>/memory/          # 规则文件，按主题一文件
+<data_dir>/memory/USER.md   # 用户背景、长期目标与偏好
+<data_dir>/memory/MEMORY.md # 项目事实、环境信息、术语与稳定约定
 <data_dir>/skills/          # 生效 Skill，SDK 发现目录
 <data_dir>/skill_drafts/    # 待审核草稿，发现目录之外
 ```
 
-三者与 `kb/` 同属实例数据目录内的一个独立本地 Git 仓库，不是代码仓库。每次写入即提交，不推送远端；用户可以直接阅读、修改文件，并通过 Git 查看变化和回退。
+三者与 `kb/` 同属实例数据目录内的一个独立本地 Git 仓库，不是代码仓库。仓库的忽略规则只允许这些内容目录进入版本管理，SQLite、凭证、SDK 会话与日志均不跟踪。每次有效写入即提交，不推送远端；用户可以直接阅读、修改文件，并通过 Git 查看变化和回退。
 
 ## 2. Memory 文件格式
 
-```yaml
----
-id: mem_01HZR2K9QX4T1B
-kind: correction            # preference | correction | fact
-summary: 会议默认时长 30 分钟
-created_at: 2026-09-14T10:22:31+08:00
-updated_at: 2026-09-14T10:22:31+08:00
-source:                     # 触发该规则的用户纠正
-  task_id: task_01HZR2K0
-  quote: 以后约会议默认半小时，别写一小时
----
+```markdown
+默认使用简体中文。
 
-规则本身，一句话可执行。
+§
 
-**适用边界：** 只用于内部会议；对外邀请按对方给出的时长。
+内部会议默认 30 分钟；对外邀请按对方给出的时长。
 ```
 
-每轮系统提示装配时加载全部生效规则，作为一个固定标题的材料块（`## 当前生效规则`）追加在基础提示之后、本轮触发材料之前。规则不得覆盖外部写确认约束：该约束由程序（每轮工具可见范围与 Confirmation）保证，不依赖规则文本或模型自律。
+每条记忆以独立一行 `§` 分隔，条目本身可包含多行。`USER.md` 最多 1375 个 Unicode 字符，`MEMORY.md` 最多 2200 个；超限写入整体拒绝，不截断旧内容。
+
+每轮上下文重新读取文件：`USER.md` 作为 `## 关于你`，`MEMORY.md` 作为 `## 事实与约定`，放在本轮触发材料之前。空文件不生成材料块。规则不得覆盖外部写确认约束：该约束由程序（每轮工具可见范围与 Confirmation）保证，不依赖规则文本或模型自律。
 
 ## 3. Skill 文件格式
 
@@ -121,15 +115,14 @@ approved_at: 2026-09-14T10:30:00+08:00
 | `skill_propose` | 本地写 | 产出或更新草稿，不能批准 |
 | `skill_list` | 只读 | 生效名单与草稿名单，含状态与版本一致性 |
 | `skill_read` | 只读 | 读取完整内容 |
-| `memory_save` | 本地写 | 新增或更新规则 |
-| `memory_read` | 只读 | 读取当前生效规则 |
+| `memory` | 本地写 | 在 `user` 或 `memory` 中新增、替换或删除条目 |
 
 `skill_propose` 输入 `name`、`description`、`triggers[]`、`inputs[]`、`tools[]`、`steps`、`side_effects[]`、`requires_confirmation`、`evidence`，输出 `id`、`path`、`status: "draft"`。同一 `name` 的草稿已存在时更新它，不新建第二份。
 
-`memory_save` 输入 `kind`、`summary`、`body`、可选 `source`，输出 `id`、`path`、`commit`。同一 `id` 再次保存产生新版本，历史留在 Git。
+`memory` 输入 `action: add | replace | remove`、`target: user | memory`、可选 `content` 与 `old_text`。新增要求非空 `content`；替换要求非空 `content` 且 `old_text` 只匹配一个条目；删除要求 `old_text` 只匹配一个条目。完全相同的新增不重复写入，也不产生空提交。成功输出 `target`、`action`、`changed`、`entries`、`usage` 与当前 `commit`。
 
 草稿与规则写入属本地写：用户对话轮与执行结果回传轮可用；新邮件触发轮只允许只读工具，因此纯触发轮不沉淀内容，避免在用户未参与时写文件。
 
 ## 8. 错误
 
-复用 `server/errors.py` 的词汇与字段形状：`NotFoundError`、`VersionConflictError`（附 `current_version`）。Skill 与 Memory 的字段校验失败返回 `SkillValidationError`，附 `errors[]`，每项含 `field` 与 `message`，不保存数据。
+Memory 字段或匹配失败返回 `invalid_memory` 并附 `errors[]`；容量超限返回 `memory_full`，附 `target`、`used` 与 `limit`；文件或 Git 不可用返回 `memory_store_unavailable`。失败不保留文件或 Git 索引的半完成修改。Skills 字段校验仍使用 `SkillValidationError`，附 `errors[]`。

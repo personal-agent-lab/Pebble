@@ -19,6 +19,7 @@ from functools import partial
 from inspect import Parameter, signature
 
 from server.approval.service import ConfirmationService
+from server.memory.service import MemoryStore
 from server.sessions.service import SessionStore
 from server.tools.calendar.service import CalendarEventStore
 from server.tools.calendar.tools import CalendarReader
@@ -54,6 +55,7 @@ class ToolDeps:
     drafts: MailDraftStore
     tasks: SessionStore
     gmail: BaseGmailClient
+    memory_store: MemoryStore | None = None
     calendar: CalendarReader | None = None
     calendar_events: CalendarEventStore | None = None
     confirmations: ConfirmationService | None = None

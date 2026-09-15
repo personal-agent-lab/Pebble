@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Any
 
 from qodercn_agent_sdk import (
@@ -40,6 +41,7 @@ from server.agent.toolset import (
 from server.config import Settings, get_settings
 from server.errors import DependencyUnavailableError
 from server.gateway.agent_contract import AgentEvent, AgentProtocolError, Turn
+from server.memory.service import MemoryStore
 from server.tools.registry import ToolDefinition
 
 CONFIG_DIR_ENV = "QODERCN_CONFIG_DIR"
@@ -91,6 +93,7 @@ class QoderGateway:
     ):
         self.settings = settings or get_settings()
         self.tool_server = tool_server
+        self.memory_store = deps.memory_store or MemoryStore(self.settings.data_dir)
         agent_dir = self.settings.data_dir / "agent"
         self.workspace = agent_dir / "workspace"
         config_dir = agent_dir / "config"
@@ -99,7 +102,7 @@ class QoderGateway:
         # 会话记录的读写都以这里为根：本进程读历史时查环境变量，子进程按继承的环境写入，
         # 两者必须指向同一目录，否则重启后读不到会话。
         os.environ[CONFIG_DIR_ENV] = str(config_dir)
-        self.tools = build_tools(deps)
+        self.tools = build_tools(replace(deps, memory_store=self.memory_store))
         self._check_model_config()
 
     # ---------- 输入入口 ----------
@@ -196,7 +199,13 @@ class QoderGateway:
     def _options(
         self, turn: Turn, *, visible: list[ToolDefinition], path: str
     ) -> QoderAgentOptions:
-        ctx = context.assemble(materials=turn.materials)
+        snapshot = self.memory_store.snapshot()
+        memory_materials = tuple(
+            context.Material(title, snapshot[target]["content"])
+            for target, title in (("user", "关于你"), ("memory", "事实与约定"))
+            if snapshot[target]["content"]
+        )
+        ctx = context.assemble(materials=(*memory_materials, *turn.materials))
         return QoderAgentOptions(
             # 内置工具与本机设置一律关闭：模型能看到的只有本轮 MCP 端点里的工具。
             tools=[],

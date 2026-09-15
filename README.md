@@ -14,7 +14,8 @@ Gmail 支持搜索、单封与完整往来读取、入站附件读取、回复�
 iCloud Calendar 支持查询、详情、冲突检查与创建单次日程：对话里给出标题和起止时间就直接创建，
 缺信息先追问补齐，目标时间已有日程则不创建、在对话里说明冲突，你明确要求照建才覆盖创建；
 日程不渲染卡片，结果只在对话文字里汇报。不邀请参与人。
-个人知识库、Memory、Skills 尚未实现；认证与 HTTPS 远程访问尚未实现，
+Memory 的两个长期记忆文件、Agent 写入工具、逐轮加载与本地 Git 历史已实现；管理页面与历史
+对话检索尚未实现。个人知识库、Skills、认证与 HTTPS 远程访问尚未实现，
 目前只能本机和同局域网访问。真实账号验收仍在进行，本地测试通过不代表真实邮件或日程操作成功。
 
 ## 文档
@@ -23,7 +24,8 @@ iCloud Calendar 支持查询、详情、冲突检查与创建单次日程：对�
 - `docs/v1-design.md`：组件划分、交付阶段、验证要求、当前实现与已知偏差。
 - `docs/contracts/mail.md`：Gmail 工具、同步触发、确认发送与核实的字段与语义（已实现）。
 - `docs/contracts/calendar.md`：iCloud Calendar 工具、直连创建与冲突处理的字段与语义（已实现）。
-- `docs/contracts/personal-kb.md`、`docs/contracts/skills.md`：对应域的约定，尚未实现。
+- `docs/contracts/skills.md`：Memory 已实现，Skills 仍为约定。
+- `docs/contracts/personal-kb.md`：个人知识库约定，尚未实现。
 
 设计文档第 2 节的组件表与代码结构是目标结构，第 10 节记录已实现部分与已知偏差。
 
@@ -131,6 +133,20 @@ curl http://127.0.0.1:8000/api/health
 ls .data/pebble.db
 ```
 
+## 长期记忆
+
+当前有效的长期记忆保存在实例数据目录中：
+
+```text
+<PEBBLE_DATA_DIR>/memory/USER.md
+<PEBBLE_DATA_DIR>/memory/MEMORY.md
+```
+
+`USER.md` 保存用户背景、长期目标与偏好，上限 1375 个 Unicode 字符；`MEMORY.md` 保存项目
+事实、环境信息、术语与稳定约定，上限 2200 个字符。条目以独立一行 `§` 分隔，可直接编辑。
+下一轮 Agent 调用会重新读取文件；Agent 有效修改会提交到 `<PEBBLE_DATA_DIR>` 内的独立本地 Git
+仓库，数据库、凭证和 SDK 会话不进入该仓库。
+
 ## 检查命令
 
 后端测试与静态检查（仓库根执行）：
@@ -197,7 +213,15 @@ uv run --project server python -m tests.acceptance.qoder_context
 uv run --project server python -m tests.acceptance.qoder_context --compact
 ```
 
-最近一次结果见 `docs/validation/qoder-context-2026-09-15.md`。
+长期记忆的真实验收同样不会随 pytest 运行。它使用临时实例目录和真实 Qoder 模型，验证模型
+实际写入文件、产生 Git 提交，并在全新的 SDK 会话中读回记忆：
+
+```bash
+uv run --project server python -m tests.acceptance.qoder_memory
+```
+
+最近一次结果见 `docs/validation/qoder-context-2026-09-15.md` 与
+`docs/validation/qoder-memory-2026-09-15.md`。
 
 触发源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/runtime.py` 的 `MailSource`
 （`start` / `stop` / `error`）。真实 Gmail 检测由 `server/tools/gmail/sync.py` 实现同一接口，
