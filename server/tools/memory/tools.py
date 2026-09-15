@@ -1,7 +1,7 @@
 """Agent 可见的长期记忆写入工具。"""
 
 from server.memory.service import MemoryStore
-from server.tools.registry import SideEffect, tool
+from server.tools.registry import SideEffect, ToolRegistry, tool
 
 
 @tool(
@@ -23,3 +23,25 @@ def update_memory(
     memory_store: MemoryStore,
 ) -> dict:
     return memory_store.apply(action, target, content, old_text)
+
+
+review_registry = ToolRegistry()
+
+
+def add_memory(target: str, content: str, *, memory_store: MemoryStore) -> dict:
+    """后台记忆回顾专用的只新增工具：没有 action 参数，结构上无法表达替换或删除。"""
+    return memory_store.apply("add", target, content, None)
+
+
+review_registry.register(
+    add_memory,
+    name="memory_add",
+    description=(
+        "新增长期记忆条目，只在后台记忆回顾会话中使用，只能新增，不能修改或删除已有条目。"
+        "target=user 用于用户背景、身份、长期目标、学习方向、工作习惯与对助理的稳定期待；"
+        "target=memory 用于项目事实、环境信息、术语和稳定约定。"
+        "每次保存一条简短明确的条目；与现有条目重复或仅措辞不同的内容不要保存；"
+        "密码、令牌等凭证不得保存。"
+    ),
+    side_effect=SideEffect.LOCAL_WRITE,
+)

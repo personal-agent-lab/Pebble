@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -180,6 +180,23 @@ SCHEMA_V8 = (
     "ALTER TABLE calendar_preview_versions RENAME TO calendar_event_versions",
 )
 
+# 后台记忆回顾：按任务记录每次回顾的覆盖范围与状态，独立于 agent_runs，不进入任务时间线。
+# through_rowid 是本次回顾覆盖到的 agent_runs 行号（软引用，任务删除时一并清理）。
+# origin 区分周期触发与手动触发；每个任务至多一条待处理或运行中的回顾，由部分唯一索引强制。
+SCHEMA_V9 = (
+    "CREATE TABLE memory_reviews (review_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "status TEXT NOT NULL CHECK(status IN ('pending','running','done','error','interrupted')), "
+    "origin TEXT NOT NULL CHECK(origin IN ('interval','manual')), "
+    "from_rowid INTEGER NOT NULL CHECK(from_rowid >= 0), "
+    "through_rowid INTEGER NOT NULL CHECK(through_rowid >= from_rowid), "
+    "error TEXT, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, "
+    "CHECK ((finished_at IS NULL) = (status IN ('pending','running'))), "
+    "CHECK (error IS NULL OR status IN ('error','interrupted')))",
+    "CREATE UNIQUE INDEX memory_reviews_open ON memory_reviews(task_id) "
+    "WHERE status IN ('pending','running')",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -189,6 +206,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     6: SCHEMA_V6,
     7: SCHEMA_V7,
     8: SCHEMA_V8,
+    9: SCHEMA_V9,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

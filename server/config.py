@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     model_api_key: SecretStr | None = None
     model_base_url: str | None = None
 
+    # 后台记忆回顾：每完成多少个用户消息轮触发一次；开关只管自动触发，手动接口不受限。
+    memory_review_interval: int = Field(default=5, ge=1)
+    memory_review_enabled: bool = True
+
     gmail_credentials_path: Path | None = None
     gmail_token_path: Path | None = None
 
