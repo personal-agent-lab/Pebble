@@ -17,8 +17,7 @@ from server.errors import (
 from server.sessions import repository as operations
 from server.sessions import runs as agent_runs
 from server.sessions.service import timestamp
-from server.tools.calendar.service import preview as calendar_preview
-from server.tools.calendar.service import validate_preview
+from server.tools.calendar.service import stored_event, validate_event
 from server.tools.gmail import service as mail
 
 RECOVERED_REASON = "外部执行调用未完成即中断，结果待核实"
@@ -127,7 +126,7 @@ class ConfirmationService:
             elif kind == "calendar":
                 if self.create_event is None:
                     raise DependencyUnavailableError("日程创建尚未接入")
-                validate_preview(calendar_preview(conn, operation_id, version))
+                validate_event(stored_event(conn, operation_id, version))
                 active = "creating"
             else:
                 raise DependencyUnavailableError("该操作尚未接入确认执行")
@@ -136,7 +135,7 @@ class ConfirmationService:
             operations.update_status(conn, operation_id, active, now)
         return self.get_execution(operation_id)
 
-    def execute_accepted(self, operation_id: str) -> dict | None:
+    def execute_accepted(self, operation_id: str, *, deliver: bool = True) -> dict | None:
         with session(self.path) as conn, write(conn):
             row = repo.view(conn, operation_id)
             if row["execution_task_id"] is None or not repo.start(conn, operation_id, timestamp()):
@@ -146,7 +145,7 @@ class ConfirmationService:
             payload = (
                 mail.draft(conn, operation_id, version)
                 if kind == "mail"
-                else calendar_preview(conn, operation_id, version)
+                else stored_event(conn, operation_id, version)
             )
         try:
             if kind == "calendar":
@@ -169,7 +168,7 @@ class ConfirmationService:
                 result = checked_result(returned)
         except Exception as error:
             result = {"status": "unknown", "reason": f"外部执行调用异常：{error!r}"}
-        self._complete(operation_id, result)
+        self._complete(operation_id, result, deliver=deliver)
         return self.get_execution(operation_id)
 
     def verify_pending(self, operation_id: str) -> dict:
@@ -182,7 +181,7 @@ class ConfirmationService:
             payload = (
                 mail.draft(conn, operation_id, version)
                 if kind == "mail"
-                else calendar_preview(conn, operation_id, version)
+                else stored_event(conn, operation_id, version)
             )
         verifier = self.verify_event if kind == "calendar" else self.verify_message
         if verifier is None:
@@ -233,7 +232,7 @@ class ConfirmationService:
                     reference=operation_id + VERIFIED_DELIVERY_SUFFIX,
                 )
 
-    def _complete(self, operation_id: str, result: dict) -> None:
+    def _complete(self, operation_id: str, result: dict, *, deliver: bool = True) -> None:
         now = timestamp()
         with session(self.path) as conn, write(conn):
             row = repo.view(conn, operation_id)
@@ -244,7 +243,8 @@ class ConfirmationService:
                 completed_at=now,
             )
             operations.update_status(conn, operation_id, result["status"], now)
-            register_delivery(conn, operation_id, row["execution_task_id"], now)
+            if deliver:
+                register_delivery(conn, operation_id, row["execution_task_id"], now)
 
     def get_execution(self, operation_id: str) -> dict:
         with session(self.path) as conn:

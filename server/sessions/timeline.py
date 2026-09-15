@@ -11,7 +11,6 @@ from server.approval.service import execution_response
 from server.db import session
 from server.sessions import repository as tasks
 from server.sessions.service import timestamp
-from server.tools.calendar.service import preview as calendar_preview
 from server.tools.gmail import service as mail
 
 
@@ -80,26 +79,6 @@ def ensure_mail_draft(
     return item_id
 
 
-def ensure_calendar_preview(
-    conn: sqlite3.Connection, task_id: str, run_id: str, operation_id: str
-) -> str:
-    existing = conn.execute(
-        "SELECT item_id FROM task_timeline_items "
-        "WHERE task_id=? AND operation_id=? AND kind='calendar_preview'",
-        (task_id, operation_id),
-    ).fetchone()
-    if existing is not None:
-        return existing["item_id"]
-    item_id = str(uuid4())
-    conn.execute(
-        "INSERT INTO task_timeline_items "
-        "(item_id,task_id,run_id,kind,role,text,operation_id,created_at) "
-        "VALUES (?,?,?,'calendar_preview',NULL,NULL,?,?)",
-        (item_id, task_id, run_id, operation_id, timestamp()),
-    )
-    return item_id
-
-
 def insert_error(conn: sqlite3.Connection, task_id: str, run_id: str, text: str) -> str:
     item_id = str(uuid4())
     conn.execute(
@@ -146,16 +125,6 @@ class TimelineStore:
                             **base,
                             "operation_id": operation_id,
                             "draft": mail.draft(conn, operation_id, None),
-                            "execution": execution_response(approvals.view(conn, operation_id)),
-                        }
-                    )
-                else:
-                    operation_id = item["operation_id"]
-                    items.append(
-                        {
-                            **base,
-                            "operation_id": operation_id,
-                            "preview": calendar_preview(conn, operation_id),
                             "execution": execution_response(approvals.view(conn, operation_id)),
                         }
                     )

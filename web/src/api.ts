@@ -48,12 +48,6 @@ export type Execution = {
   result: SendResult | null;
 };
 
-export type CalendarPreview = {
-  operation_id: string; version: number; status: OperationStatus; calendar_id: "primary";
-  summary: string; start: string; end: string; all_day: boolean;
-  location: string | null; description: string;
-};
-
 export type TimelineItem =
   | {
       item_id: string;
@@ -62,10 +56,6 @@ export type TimelineItem =
       run_id: string;
       text: string;
       created_at: string;
-    }
-  | {
-      item_id: string; kind: "calendar_preview"; run_id: string; operation_id: string;
-      preview: CalendarPreview; execution: Execution; created_at: string;
     }
   | {
       item_id: string;
@@ -85,7 +75,7 @@ export type TimelineItem =
     };
 
 export type Timeline = { task_id: string; sdk_session_id: string | null; items: TimelineItem[] };
-export type MessageTarget = { kind: "mail_draft" | "calendar_preview"; operation_id: string };
+export type MessageTarget = { kind: "mail_draft"; operation_id: string };
 export type FieldError = { field: string; message: string };
 
 export type AgentEvent =
@@ -175,15 +165,6 @@ export const editDraft = (
   fields: { to: string[]; subject: string; body: string },
 ) => request<{ operation_id: string; version: number; status: "pending" }>(
   `/operations/${operationId}/draft`,
-  { method: "PATCH", body: JSON.stringify({ expected_version: expectedVersion, ...fields }) },
-);
-
-export const editCalendarPreview = (
-  operationId: string,
-  expectedVersion: number,
-  fields: Omit<CalendarPreview, "operation_id" | "version" | "status">,
-) => request<{ operation_id: string; version: number; status: "pending" }>(
-  `/operations/${operationId}/calendar-preview`,
   { method: "PATCH", body: JSON.stringify({ expected_version: expectedVersion, ...fields }) },
 );
 

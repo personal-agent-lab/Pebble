@@ -18,8 +18,9 @@ from enum import StrEnum
 from functools import partial
 from inspect import Parameter, signature
 
+from server.approval.service import ConfirmationService
 from server.sessions.service import SessionStore
-from server.tools.calendar.service import CalendarPreviewStore
+from server.tools.calendar.service import CalendarEventStore
 from server.tools.calendar.tools import CalendarReader
 from server.tools.gmail.client import BaseGmailClient
 from server.tools.gmail.service import MailDraftStore
@@ -34,10 +35,14 @@ class TurnKind(StrEnum):
     EXECUTION_RESULT = "execution_result"
 
 
-# 每类轮次允许模型看到并调用的副作用集合；外部写永不出现，确认执行由 Confirmation 完成。
+# 每类轮次允许模型看到并调用的副作用集合。EXTERNAL_WRITE 永不出现，由 Confirmation 在用户
+# 确认最终版本后调用。DIRECT_EXTERNAL_WRITE 只出现在用户亲自发起的轮次：触发轮与结果回传轮
+# 的输入都来自系统而非用户，拿不到直接外部写，因此外部内容中的指令无法驱动写入。
 ALLOWED_EFFECTS: dict[TurnKind, frozenset[SideEffect]] = {
     TurnKind.NEW_MAIL: frozenset({SideEffect.READONLY}),
-    TurnKind.MESSAGE: frozenset({SideEffect.READONLY, SideEffect.LOCAL_WRITE}),
+    TurnKind.MESSAGE: frozenset(
+        {SideEffect.READONLY, SideEffect.LOCAL_WRITE, SideEffect.DIRECT_EXTERNAL_WRITE}
+    ),
     TurnKind.EXECUTION_RESULT: frozenset({SideEffect.READONLY, SideEffect.LOCAL_WRITE}),
 }
 
@@ -50,7 +55,8 @@ class ToolDeps:
     tasks: SessionStore
     gmail: BaseGmailClient
     calendar: CalendarReader | None = None
-    calendar_previews: CalendarPreviewStore | None = None
+    calendar_events: CalendarEventStore | None = None
+    confirmations: ConfirmationService | None = None
 
 
 def build_tools(

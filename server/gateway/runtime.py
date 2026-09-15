@@ -29,7 +29,6 @@ from server.sessions import runs as repo
 from server.sessions import timeline
 from server.sessions.service import SessionStore, timestamp
 from server.sessions.timeline import TimelineStore
-from server.tools.calendar.service import CalendarPreviewStore
 from server.tools.gmail.service import MailDraftStore
 from server.tools.gmail.trigger import NEW_MAIL_GOAL, new_mail_content
 
@@ -107,7 +106,6 @@ class GatewayRuntime:
         self.events = EventHub()
         self._sessions = SessionStore(path)
         self._drafts = MailDraftStore(path)
-        self._calendar_previews = CalendarPreviewStore(path)
         self._timeline = TimelineStore(path)
         self._active: dict[str, asyncio.Task] = {}
         self._sends: dict[str, asyncio.Task] = {}
@@ -155,7 +153,7 @@ class GatewayRuntime:
         self.require_gateway()
         target_operation_id = None
         if target is not None:
-            if target.get("kind") not in {"mail_draft", "calendar_preview"} or not isinstance(
+            if target.get("kind") != "mail_draft" or not isinstance(
                 target.get("operation_id"), str
             ):
                 raise ValueError("消息目标不合法")
@@ -164,8 +162,7 @@ class GatewayRuntime:
                 item["operation_id"]: item["type"]
                 for item in self._sessions.list_task_operations(task_id)
             }
-            expected_type = "calendar" if target["kind"] == "calendar_preview" else "mail"
-            if known.get(target_operation_id) != expected_type:
+            if known.get(target_operation_id) != "mail":
                 raise NotFoundError(target_operation_id)
         now = timestamp()
         run_id = str(uuid4())
@@ -297,15 +294,10 @@ class GatewayRuntime:
             target = payload.get("target")
             target_operation_id = target["operation_id"] if target is not None else None
             if target_operation_id is not None:
-                content = (
-                    self._drafts.get_draft(target_operation_id)
-                    if target["kind"] == "mail_draft"
-                    else self._calendar_previews.get_preview(target_operation_id)
-                )
                 material_items.append(
                     Material(
                         TARGET_DRAFT_MATERIAL_TITLE,
-                        content,
+                        self._drafts.get_draft(target_operation_id),
                     )
                 )
             materials = tuple(material_items)
@@ -369,13 +361,7 @@ class GatewayRuntime:
                 )
         elif kind == "draft_saved":
             with session(self.path) as conn, write(conn):
-                operation = operations.operation(conn, event["operation_id"])
-                ensure = (
-                    timeline.ensure_calendar_preview
-                    if operation["type"] == "calendar"
-                    else timeline.ensure_mail_draft
-                )
-                published["item_id"] = ensure(
+                published["item_id"] = timeline.ensure_mail_draft(
                     conn, row["task_id"], row["run_id"], event["operation_id"]
                 )
         elif kind == "done":

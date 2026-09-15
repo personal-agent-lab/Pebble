@@ -272,21 +272,20 @@ class CalDAVCalendarClient:
     def _unknown() -> dict:
         return {"status": "unknown", "reason": "日程创建结果待核实，不会自动再次创建"}
 
+    @staticmethod
+    def conflict_window(fields: dict) -> tuple[str, str]:
+        """创建前重查冲突所用的时间窗；全天日程按日期边界展开为带时区的时刻。"""
+        if not fields["all_day"]:
+            return fields["start"], fields["end"]
+
+        def midnight(raw: str) -> str:
+            return datetime.combine(date.fromisoformat(raw), datetime.min.time(), UTC).isoformat()
+
+        return midnight(fields["start"]), midnight(fields["end"])
+
     def create_event(self, *, operation_id: str, version: int, fields: dict) -> dict:
         if fields.get("account") != self.account or fields.get("calendar_url") != self.calendar_url:
-            return {"status": "failed", "reason": "iCloud 日历配置已变化，请重新准备预览"}
-        if fields["all_day"]:
-            conflict_start = datetime.combine(
-                date.fromisoformat(fields["start"]), datetime.min.time(), UTC
-            ).isoformat()
-            conflict_end = datetime.combine(
-                date.fromisoformat(fields["end"]), datetime.min.time(), UTC
-            ).isoformat()
-        else:
-            conflict_start, conflict_end = fields["start"], fields["end"]
-        conflicts = self.check_conflicts(conflict_start, conflict_end, fields["calendar_id"])
-        if conflicts["conflicts"]:
-            return {"status": "failed", "reason": "目标时间已有日程冲突，请重新选择时间"}
+            return {"status": "failed", "reason": "iCloud 日历配置已变化，请重新发起创建"}
         try:
             with self._connection() as connection:
                 response = connection.put(

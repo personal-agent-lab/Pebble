@@ -80,12 +80,12 @@ def has_active_run(conn: sqlite3.Connection, task_id: str) -> bool:
 def delete_task(conn: sqlite3.Connection, task_id: str) -> None:
     """删除任务及其全部从属记录；外键开启，必须按引用方向先删子表。"""
     conn.execute(
-        "DELETE FROM calendar_preview_versions WHERE operation_id IN "
+        "DELETE FROM calendar_event_versions WHERE operation_id IN "
         "(SELECT operation_id FROM operations WHERE created_task_id = ?)",
         (task_id,),
     )
     conn.execute(
-        "DELETE FROM calendar_previews WHERE operation_id IN "
+        "DELETE FROM calendar_events WHERE operation_id IN "
         "(SELECT operation_id FROM operations WHERE created_task_id = ?)",
         (task_id,),
     )

@@ -1,4 +1,4 @@
-"""日程预览校验、不可变版本与任务关联。"""
+"""日程字段校验与不可变内容版本。"""
 
 import sqlite3
 from datetime import datetime
@@ -8,12 +8,12 @@ from server.config import get_settings
 from server.db import session, write
 from server.errors import DependencyUnavailableError, DraftValidationError, NotFoundError
 from server.sessions import repository as operations
-from server.sessions.service import create_operation, next_version, timestamp
+from server.sessions.service import create_operation, timestamp
 
 PRIMARY_CALENDAR = "primary"
 
 
-def validate_preview(fields: dict) -> dict:
+def validate_event(fields: dict) -> dict:
     result = dict(fields)
     errors: list[dict[str, str]] = []
     summary = fields.get("summary")
@@ -66,15 +66,16 @@ def validate_preview(fields: dict) -> dict:
     return result
 
 
-def preview(conn: sqlite3.Connection, operation_id: str, version: int | None = None) -> dict:
+def stored_event(conn: sqlite3.Connection, operation_id: str, version: int | None = None) -> dict:
+    """操作指定版本的日程内容；执行与核实只读这里，不接受调用方另给字段。"""
     operation = operations.operation(conn, operation_id)
     if operation["type"] != "calendar":
         raise NotFoundError(operation_id)
     selected = operation["version"] if version is None else version
     row = conn.execute(
-        "SELECT p.calendar_id, p.account, p.calendar_url, v.* FROM calendar_previews p "
-        "JOIN calendar_preview_versions v ON v.operation_id=p.operation_id "
-        "WHERE p.operation_id=? AND v.version=?",
+        "SELECT e.calendar_id, e.account, e.calendar_url, v.* FROM calendar_events e "
+        "JOIN calendar_event_versions v ON v.operation_id=e.operation_id "
+        "WHERE e.operation_id=? AND v.version=?",
         (operation_id, selected),
     ).fetchone()
     if row is None:
@@ -85,36 +86,13 @@ def preview(conn: sqlite3.Connection, operation_id: str, version: int | None = N
     return value
 
 
-def _normalized_key(fields: dict) -> tuple:
-    return (
-        fields["summary"].casefold(),
-        fields["start"],
-        fields["end"],
-        int(fields["all_day"]),
-    )
-
-
-class CalendarPreviewStore:
+class CalendarEventStore:
     def __init__(self, path: Path | None = None):
         self.path = path
 
-    def get_preview(self, operation_id: str, version: int | None = None) -> dict:
-        with session(self.path) as conn:
-            value = preview(conn, operation_id, version)
-        return {
-            key: value for key, value in value.items() if key not in {"account", "calendar_url"}
-        }
-
-    def require_task(self, task_id: str, operation_id: str) -> None:
-        with session(self.path) as conn:
-            if not conn.execute(
-                "SELECT 1 FROM task_operations WHERE task_id=? AND operation_id=?",
-                (task_id, operation_id),
-            ).fetchone():
-                raise NotFoundError(operation_id)
-
-    def save_preview(self, task_id: str, **fields) -> dict:
-        fields = validate_preview(fields)
+    def save_event(self, task_id: str, **fields) -> dict:
+        """为一次创建保存不可变内容版本；每次调用都新建操作，不复用历史操作。"""
+        fields = validate_event(fields)
         settings = get_settings()
         if (
             not settings.icloud_account
@@ -124,25 +102,9 @@ class CalendarPreviewStore:
             raise DependencyUnavailableError("请先配置 iCloud 账号、App 专用密码文件和主日历地址")
         with session(self.path) as conn, write(conn):
             operations.task(conn, task_id)
-            rows = conn.execute(
-                "SELECT o.operation_id FROM operations o "
-                "JOIN task_operations t ON t.operation_id=o.operation_id "
-                "WHERE t.task_id=? AND o.type='calendar' AND o.status='pending'",
-                (task_id,),
-            ).fetchall()
-            wanted = _normalized_key(fields)
-            for row in rows:
-                current = preview(conn, row["operation_id"])
-                if _normalized_key(current) == wanted:
-                    return {
-                        "operation_id": row["operation_id"],
-                        "version": current["version"],
-                        "status": "pending",
-                    }
-            operation = create_operation(conn, task_id, "calendar")
-            operation_id = operation["operation_id"]
+            operation_id = create_operation(conn, task_id, "calendar")["operation_id"]
             conn.execute(
-                "INSERT INTO calendar_previews "
+                "INSERT INTO calendar_events "
                 "(operation_id,calendar_id,account,calendar_url) VALUES (?,?,?,?)",
                 (
                     operation_id,
@@ -151,34 +113,20 @@ class CalendarPreviewStore:
                     settings.icloud_calendar_url,
                 ),
             )
-            self._insert_version(conn, operation_id, 1, fields)
-            return {"operation_id": operation_id, "version": 1, "status": "pending"}
-
-    def update_preview(self, operation_id: str, expected_version: int, **fields) -> dict:
-        fields = validate_preview(fields)
-        with session(self.path) as conn, write(conn):
-            preview(conn, operation_id)
-            version = next_version(conn, operation_id, expected_version)
-            self._insert_version(conn, operation_id, version, fields)
-            return {"operation_id": operation_id, "version": version, "status": "pending"}
-
-    @staticmethod
-    def _insert_version(
-        conn: sqlite3.Connection, operation_id: str, version: int, fields: dict
-    ) -> None:
-        conn.execute(
-            "INSERT INTO calendar_preview_versions "
-            "(operation_id,version,summary,start,end,all_day,location,description,created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (
-                operation_id,
-                version,
-                fields["summary"],
-                fields["start"],
-                fields["end"],
-                int(fields["all_day"]),
-                fields["location"],
-                fields["description"],
-                timestamp(),
-            ),
-        )
+            conn.execute(
+                "INSERT INTO calendar_event_versions "
+                "(operation_id,version,summary,start,end,all_day,location,description,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    operation_id,
+                    1,
+                    fields["summary"],
+                    fields["start"],
+                    fields["end"],
+                    int(fields["all_day"]),
+                    fields["location"],
+                    fields["description"],
+                    timestamp(),
+                ),
+            )
+            return {"operation_id": operation_id, "version": 1}

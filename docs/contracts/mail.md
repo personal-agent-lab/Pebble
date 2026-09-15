@@ -186,4 +186,4 @@ Runtime 在发布通知前先保存时间线位置。通知表示草稿可读取
 | `GET /api/operations/{operation_id}/execution` | 当前状态、确认信息与已保存结果 |
 | `POST /api/operations/{operation_id}/verification` | 显式核实 `unknown` |
 
-这些接口与日程预览共用，确认、执行与核实的通用语义见 `v1-design.md` 第 4 节。
+确认、执行与核实三项接口与日程创建共用（日程没有草稿读写接口），通用语义见 `v1-design.md` 第 4 节。

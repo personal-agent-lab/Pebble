@@ -2,16 +2,18 @@
 
 对话优先的个人助手 Agent。你可以随时和它对话——聊天、提问、交办事项；它按你的目标自主组合工具
 （Gmail、iCloud Calendar、个人知识库，后续更多）完成真实事务，并在会话之间记住你的偏好（Memory）、
-复用沉淀下来的流程（Skills）。程序负责保证外部写操作的确认、持久化与去重。
+复用沉淀下来的流程（Skills）。程序负责保证外部写操作的授权、持久化与去重。
 
 单用户单实例部署，服务常驻。PC 与手机浏览器共用同一套响应式界面：发起任务、查看进度、编辑草稿、
 确认操作；任务不依赖始终开启的浏览器页面。新邮件是首版的系统触发源，收到即自动开始处理，
 但邮件只是它能做的事之一。
 
-当前状态：对话链、任务时间线、Gateway 与 Qoder CN/Gmail/iCloud Calendar 生产装配已接通，SQLite schema 为 7。
+当前状态：对话链、任务时间线、Gateway 与 Qoder CN/Gmail/iCloud Calendar 生产装配已接通，SQLite schema 为 8。
 Gmail 支持搜索、单封与完整往来读取、入站附件读取、回复与主动新写邮件；两者共用内嵌草稿卡、
 草稿编辑、最终版本确认、去重发送和结果核实。外发邮件只支持纯文字正文。
-iCloud Calendar 支持查询、详情、冲突检查，以及预览编辑并确认创建单次日程；不邀请参与人。
+iCloud Calendar 支持查询、详情、冲突检查与创建单次日程：对话里给出标题和起止时间就直接创建，
+缺信息先追问补齐，目标时间已有日程则不创建、在对话里说明冲突，你明确要求照建才覆盖创建；
+日程不渲染卡片，结果只在对话文字里汇报。不邀请参与人。
 个人知识库、Memory、Skills 尚未实现；认证与 HTTPS 远程访问尚未实现，
 目前只能本机和同局域网访问。真实账号验收仍在进行，本地测试通过不代表真实邮件或日程操作成功。
 
@@ -20,8 +22,8 @@ iCloud Calendar 支持查询、详情、冲突检查，以及预览编辑并确�
 - `docs/v1-spec.md`：需求范围、产品行为、验收标准。内容冲突时以此为准。
 - `docs/v1-design.md`：组件划分、交付阶段、验证要求、当前实现与已知偏差。
 - `docs/contracts/mail.md`：Gmail 工具、同步触发、确认发送与核实的字段与语义（已实现）。
-- `docs/contracts/calendar.md`、`docs/contracts/personal-kb.md`、`docs/contracts/skills.md`：
-  对应域的约定，尚未实现。
+- `docs/contracts/calendar.md`：iCloud Calendar 工具、直连创建与冲突处理的字段与语义（已实现）。
+- `docs/contracts/personal-kb.md`、`docs/contracts/skills.md`：对应域的约定，尚未实现。
 
 设计文档第 2 节的组件表与代码结构是目标结构，第 10 节记录已实现部分与已知偏差。
 
@@ -104,11 +106,12 @@ npm run dev
 邮件草稿固定在 Agent 生成时的对话位置，卡片内展示完整正文，并支持直接编辑、定向对话修改与最终确认。
 未保存的修改不能确认，确认绑定卡片当前展示的草稿版本；发送状态和结果继续显示在原卡片上。
 编辑收件人时每行填写一个地址，可保留显示名。
+日程不渲染卡片：创建结果由 Agent 在对话文字里汇报，操作与执行记录通过接口查询。
 
 任务列表没有列表级事件流，按 5 秒轮询刷新（页面不可见时暂停），新邮件自动触发的任务无需手动刷新；
-任务详情用 SSE，确认后的发送在后台执行，事件流不携带执行状态，页面对执行结果按 1.5 秒轮询直到
-状态离开 `sending`，SSE 重连后整体重读时间线对账。
-界面只呈现接口能支撑的内容：邮件草稿卡和日程预览卡都可编辑并确认；来源引用面板与搜索框对应的接口尚未提供，暂不渲染。
+任务详情用 SSE，确认后的执行在后台进行，事件流不携带执行状态，页面对执行结果按 1.5 秒轮询直到
+草稿卡状态离开 `sending`，SSE 重连后整体重读时间线对账。
+界面只呈现接口能支撑的内容：来源引用面板与搜索框对应的接口尚未提供，暂不渲染。
 
 ## 验证
 
@@ -148,12 +151,13 @@ npm test
 npm run build
 ```
 
-## 本地任务、预览与确认执行服务
+## 本地任务、草稿与确认执行服务
 
 初始化数据库后使用 `server.sessions.service.SessionStore`、`server.sessions.timeline.TimelineStore`、
-`server.tools.gmail.service.MailDraftStore`、`server.tools.calendar.service.CalendarPreviewStore` 和
+`server.tools.gmail.service.MailDraftStore`、`server.tools.calendar.service.CalendarEventStore` 和
 `server.approval.service.ConfirmationService`。它们默认使用实例数据库，也可显式传入
-`path=Path(...)`。邮件草稿与日程预览分别在对应域内校验；`ConfirmationService` 必须注入实际的
+`path=Path(...)`。邮件草稿与日程字段分别在对应域内校验，日程每次创建保存一份不可变内容版本；
+`ConfirmationService` 必须注入实际的
 Gmail 发送或 iCloud 创建函数，生产代码没有默认成功的外部写入。输入输出字段及错误含义见
 [Gmail 契约](docs/contracts/mail.md)和 [Calendar 契约](docs/contracts/calendar.md)。
 
@@ -163,7 +167,8 @@ Gmail 发送或 iCloud 创建函数，生产代码没有默认成功的外部写
 ### 确认执行
 
 - `accept_confirmation(task_id, operation_id, version)`：检查版本、保存确认并取得执行权。
-- `execute_accepted(operation_id)`：后台读取已确认版本、执行并保存结果；重复调用不再次执行。
+- `execute_accepted(operation_id, deliver=True)`：读取已确认版本、执行并保存结果；重复调用不再次执行。
+  日程直连创建传 `deliver=False`：结果就地返回给模型，不登记回传轮，避免同一件事汇报两遍。
 - `get_execution(operation_id)`：操作当前状态、确认信息及已保存结果。
 - `get_agent_result(operation_id)`：回传数据；尚无结果或回传任务未关联会话时返回 `None`。
 - `verify_pending(operation_id)`：只读核实 `unknown`，找到对应外部结果后更新状态并登记回传。
@@ -178,7 +183,7 @@ Gmail 发送或 iCloud 创建函数，生产代码没有默认成功的外部写
 - `tests/storage/`：真实 SQLite 的版本、并发、回滚、恢复与确认去重。
 - `tests/gateway/`：后台调度、SDK 选项装配与事件映射、工具端点与工具边界、执行结果回传、邮件全链路衔接。
 - `tests/api/`：健康检查，以及独立进程的 HTTP/SSE、断线后继续执行与重启。
-- `tests/tools/`：邮件与日历的解析、预览校验、协议内容、结果核实与工具声明。
+- `tests/tools/`：邮件与日历的解析、字段校验、协议内容、结果核实、日程直连创建与冲突覆盖、工具声明。
 
 测试替换 SDK 子进程、Gmail 投递和 iCloud CalDAV 这三个外部边界，其余模块、SQLite、HTTP 都是真的。
 SDK 模型响应、Gmail 投递与 iCloud 读写仍须用明确授权的账号和内容验收；测试通过不代表真实外部操作成功。
@@ -198,9 +203,11 @@ Gmail 首次启动记录当前 historyId，随后每 10 秒检测新增的收件
 重复通知由 Gateway 去重。游标失效明确停止检测，health 显示原因，需要核对后重新建立同步位置，
 不静默跳过缺口。常规检测错误保留游标，在下一轮重新查询。
 
-新邮件轮次仅开放邮件读取工具。用户要求起草后，SDK 才可调用准备、读取及更新草稿工具；
-更新使用当前已保存版本，直接编辑与 Agent 修改共用 `MailDraftStore` 的版本控制。
-草稿保存事件交给网页。发送函数仅由 Confirmation 调用，执行结果回到确认任务的原 SDK 会话。
+新邮件轮次只开放只读工具，结果回传轮次开放只读与本地写；只有用户亲自发起的对话轮能看到日程直连
+创建工具，因此邮件或资料内容里的指令无法驱动外部写入。用户要求起草后，SDK 才可调用准备、读取及
+更新草稿工具；更新使用当前已保存版本，直接编辑与 Agent 修改共用 `MailDraftStore` 的版本控制。
+草稿保存事件交给网页。邮件发送函数只由 Confirmation 在用户确认最终版本后调用，执行结果回到确认
+任务的原 SDK 会话。
 
 模型经应用进程内的 MCP 端点（server 名 `pebble`）调用工具，内置工具与本机设置关闭：每轮登记一个
 一次性路径供 qodercli 子进程按回环地址连接，轮次结束即撤销。每轮独立启动一次 qodercli 子进程，

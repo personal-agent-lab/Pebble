@@ -43,7 +43,7 @@ source:                     # 触发该规则的用户纠正
 ---
 id: sk_01HZR5M3V4W2X8
 name: 会议邀请处理
-description: 用户要求安排会议或收到活动邀请时，查询空闲、准备日程预览与回复草稿
+description: 用户要求安排会议或收到活动邀请时，查询空闲、创建日程与准备回复草稿
 status: approved            # draft | approved | archived
 source: distilled           # user | distilled
 triggers:
@@ -51,7 +51,7 @@ triggers:
   - 收到活动邀请邮件
 inputs:
   - {name: window, required: true, note: 目标时间范围}
-tools: [calendar_list_events, calendar_check_conflicts, calendar_prepare_event, gmail_prepare_reply]
+tools: [calendar_list_events, calendar_check_conflicts, calendar_create_event, gmail_prepare_reply]
 side_effects: [external_write]
 requires_confirmation: true
 evidence:                   # source 为 distilled 时必填

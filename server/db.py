@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -157,6 +157,29 @@ SCHEMA_V7 = (
     "created_at TEXT NOT NULL, PRIMARY KEY(operation_id,version))",
 )
 
+# 日程取消待确认预览与时间线卡片：创建只在用户对话轮直接发生，冲突经对话询问解决。
+# 历史日程卡片从时间线移除（操作与执行记录保留），内容版本表改名跟随产品概念。
+SCHEMA_V8 = (
+    "DROP INDEX task_timeline_calendar_preview",
+    "DELETE FROM task_timeline_items WHERE kind='calendar_preview'",
+    "CREATE TABLE task_timeline_items_new (item_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "run_id TEXT NOT NULL REFERENCES agent_runs(run_id), "
+    "kind TEXT NOT NULL CHECK(kind IN ('text','mail_draft','error')), "
+    "role TEXT CHECK(role IN ('user','assistant')), text TEXT, "
+    "operation_id TEXT REFERENCES operations(operation_id), created_at TEXT NOT NULL, "
+    "CHECK ((kind = 'text') = (role IS NOT NULL AND text IS NOT NULL)), "
+    "CHECK ((kind = 'mail_draft') = (operation_id IS NOT NULL)), "
+    "CHECK (kind != 'error' OR (role IS NULL AND text IS NOT NULL)))",
+    "INSERT INTO task_timeline_items_new SELECT * FROM task_timeline_items",
+    "DROP TABLE task_timeline_items",
+    "ALTER TABLE task_timeline_items_new RENAME TO task_timeline_items",
+    "CREATE UNIQUE INDEX task_timeline_mail_draft ON task_timeline_items(task_id,operation_id) "
+    "WHERE kind='mail_draft'",
+    "ALTER TABLE calendar_previews RENAME TO calendar_events",
+    "ALTER TABLE calendar_preview_versions RENAME TO calendar_event_versions",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -165,6 +188,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     5: SCHEMA_V5,
     6: SCHEMA_V6,
     7: SCHEMA_V7,
+    8: SCHEMA_V8,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

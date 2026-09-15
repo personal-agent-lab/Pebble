@@ -1,8 +1,8 @@
-"""Agent 可见的日历查询与本地预览工具。"""
+"""Agent 可见的日历查询与直连创建工具。"""
 
 from typing import Protocol
 
-from server.tools.calendar.service import PRIMARY_CALENDAR, CalendarPreviewStore
+from server.tools.calendar.service import PRIMARY_CALENDAR, CalendarEventStore, validate_event
 from server.tools.registry import SideEffect, tool
 
 
@@ -12,6 +12,15 @@ class CalendarReader(Protocol):
     ) -> dict: ...
     def get_event(self, event_id: str) -> dict: ...
     def check_conflicts(self, start: str, end: str, calendar_id: str) -> dict: ...
+    def conflict_window(self, fields: dict) -> tuple[str, str]: ...
+
+
+class EventCreator(Protocol):
+    """确认服务中日程直连创建所需的能力。"""
+
+    def accept_confirmation(self, task_id: str, operation_id: str, version: int) -> dict: ...
+    def execute_accepted(self, operation_id: str, *, deliver: bool = True) -> dict | None: ...
+    def get_execution(self, operation_id: str) -> dict: ...
 
 
 @tool(name="calendar_list_events", side_effect=SideEffect.READONLY)
@@ -41,8 +50,8 @@ def check_conflicts(
     return calendar.check_conflicts(start, end, calendar_id)
 
 
-@tool(name="calendar_prepare_event", side_effect=SideEffect.LOCAL_WRITE, emits_draft_saved=True)
-def prepare_event(
+@tool(name="calendar_create_event", side_effect=SideEffect.DIRECT_EXTERNAL_WRITE)
+def create_event(
     summary: str,
     start: str,
     end: str,
@@ -50,57 +59,40 @@ def prepare_event(
     location: str | None = None,
     description: str = "",
     calendar_id: str = PRIMARY_CALENDAR,
+    overwrite_conflicts: bool = False,
     *,
     task_id: str,
-    calendar_previews: CalendarPreviewStore,
+    calendar: CalendarReader,
+    calendar_events: CalendarEventStore,
+    confirmations: EventCreator,
 ) -> dict:
-    """保存待确认的单次日程预览，不会在 iCloud 创建事件。"""
-    return calendar_previews.save_preview(
-        task_id,
-        summary=summary,
-        start=start,
-        end=end,
-        all_day=all_day,
-        location=location,
-        description=description,
-        calendar_id=calendar_id,
+    """在用户的 iCloud 主日历中创建单次日程，不邀请也不通知任何人，无需用户再次确认。
+
+    只在用户本轮已经给出标题、开始和结束时间时调用；缺任何一项都先向用户问清楚，不要自行假定。
+    目标时间已有日程时不创建、也不留下任何记录，只在 conflicts 中返回撞车的日程；
+    此时向用户说明冲突并请其决定改时间还是照建，不要声称已经创建。
+    只有用户在本轮明确表示即使冲突也要创建时，才把 overwrite_conflicts 传为真再调用。
+    """
+    fields = validate_event(
+        {
+            "summary": summary,
+            "start": start,
+            "end": end,
+            "all_day": all_day,
+            "location": location,
+            "description": description,
+            "calendar_id": calendar_id,
+        }
     )
-
-
-@tool(name="calendar_read_preview", side_effect=SideEffect.READONLY)
-def read_preview(
-    operation_id: str, *, task_id: str, calendar_previews: CalendarPreviewStore
-) -> dict:
-    """读取当前任务关联的日程预览。"""
-    calendar_previews.require_task(task_id, operation_id)
-    return calendar_previews.get_preview(operation_id)
-
-
-@tool(name="calendar_update_preview", side_effect=SideEffect.LOCAL_WRITE, emits_draft_saved=True)
-def update_preview(
-    operation_id: str,
-    expected_version: int,
-    summary: str,
-    start: str,
-    end: str,
-    all_day: bool = False,
-    location: str | None = None,
-    description: str = "",
-    calendar_id: str = PRIMARY_CALENDAR,
-    *,
-    task_id: str,
-    calendar_previews: CalendarPreviewStore,
-) -> dict:
-    """用完整字段保存当前任务中日程预览的新版本，不会创建事件。"""
-    calendar_previews.require_task(task_id, operation_id)
-    return calendar_previews.update_preview(
-        operation_id,
-        expected_version,
-        summary=summary,
-        start=start,
-        end=end,
-        all_day=all_day,
-        location=location,
-        description=description,
-        calendar_id=calendar_id,
-    )
+    window_start, window_end = calendar.conflict_window(fields)
+    found = calendar.check_conflicts(window_start, window_end, fields["calendar_id"])
+    if found["conflicts"] and not overwrite_conflicts:
+        return {"status": "conflict", "conflicts": found["conflicts"]}
+    saved = calendar_events.save_event(task_id, **fields)
+    operation_id, version = saved["operation_id"], saved["version"]
+    confirmations.accept_confirmation(task_id, operation_id, version)
+    execution = confirmations.execute_accepted(operation_id, deliver=False)
+    if execution is None:
+        execution = confirmations.get_execution(operation_id)
+    result = execution["result"] or {"status": execution["status"]}
+    return {"operation_id": operation_id, "version": version, **result}

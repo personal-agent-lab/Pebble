@@ -32,6 +32,15 @@ TOOL_ERROR_MESSAGE = "工具执行失败"
 UNKNOWN_TOOL_MESSAGE = "本轮没有这个工具"
 TARGET_TOOL_MESSAGE = "本轮只能读取或修改指定的待确认内容"
 
+# 定向轮只读取与修改指定的待确认内容，任何会新建操作的工具都不在其中。
+NEW_OPERATION_TOOLS = frozenset(
+    {
+        "gmail_prepare_reply",
+        "gmail_prepare_email",
+        "calendar_create_event",
+    }
+)
+
 
 class ToolServer:
     """应用进程内的 MCP 端点：按轮次登记工具，模型只看到当轮允许的集合。"""
@@ -121,14 +130,12 @@ async def invoke(
     """执行一次工具调用：业务失败按统一错误词汇交回模型，成功时把草稿事件入队。"""
     fields = dict(arguments)
     if target_operation_id is not None and (
-        definition.name in {"gmail_prepare_reply", "gmail_prepare_email", "calendar_prepare_event"}
+        definition.name in NEW_OPERATION_TOOLS
         or (
             definition.name
             in {
                 "gmail_read_draft",
                 "gmail_update_draft",
-                "calendar_read_preview",
-                "calendar_update_preview",
             }
             and fields.get("operation_id") != target_operation_id
         )

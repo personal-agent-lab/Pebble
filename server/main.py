@@ -16,7 +16,7 @@ from server.approval.service import ConfirmationService
 from server.db import init_db
 from server.gateway.runtime import GatewayRuntime, MailSource
 from server.sessions.service import SessionStore
-from server.tools.calendar.service import CalendarPreviewStore
+from server.tools.calendar.service import CalendarEventStore
 from server.tools.gmail.service import MailDraftStore
 
 
@@ -29,22 +29,23 @@ def create_app(
     tasks: SessionStore | None = None,
     drafts: MailDraftStore | None = None,
     tool_server: ToolServer | None = None,
-    calendar_previews: CalendarPreviewStore | None = None,
+    confirmations: ConfirmationService | None = None,
     create_event=None,
     verify_event=None,
 ) -> FastAPI:
     """装配应用。
 
-    `tasks` / `drafts` 供调用方先行构造：Agent 工具与 HTTP 必须共用同一组存储实例，
-    而工具要在构造 gateway 之前绑定依赖。未传入时就地构造。
+    `tasks` / `drafts` / `confirmations` 供调用方先行构造：Agent 工具与 HTTP 必须共用同一组
+    实例，而工具要在构造 gateway 之前绑定依赖。未传入时就地构造。
     """
     tasks = tasks if tasks is not None else SessionStore()
     drafts = drafts if drafts is not None else MailDraftStore()
-    calendar_previews = (
-        calendar_previews if calendar_previews is not None else CalendarPreviewStore()
-    )
-    confirmations = ConfirmationService(
-        send_message, verify_message, create_event=create_event, verify_event=verify_event
+    confirmations = (
+        confirmations
+        if confirmations is not None
+        else ConfirmationService(
+            send_message, verify_message, create_event=create_event, verify_event=verify_event
+        )
     )
     agent = GatewayRuntime(gateway, confirmations=confirmations)
 
@@ -69,7 +70,6 @@ def create_app(
         app.mount(MCP_MOUNT_PATH, tool_server)
     app.state.tasks = tasks
     app.state.drafts = drafts
-    app.state.calendar_previews = calendar_previews
     app.state.confirmations = confirmations
     app.state.agent = agent
     app.state.mail_source = mail_source
@@ -92,13 +92,20 @@ def create_production_app() -> FastAPI:
     settings = get_settings()
     tasks = SessionStore()
     drafts = MailDraftStore()
-    calendar_previews = CalendarPreviewStore()
+    calendar_events = CalendarEventStore()
     # 三处用途各自构造客户端：检测在自己的顺序轮询里，工具随模型并发调用，发送与核实同为
     # Confirmation 串行调用故共用一个；不共享其余 HTTP 连接，凭证缺失在这里就失败。
     tool_client = create_gmail_client(settings)
     confirmation_client = create_gmail_client(settings)
     calendar_client = CalDAVCalendarClient(settings)
     tool_server = ToolServer()
+    # 确认服务先于工具构造：日程直连创建工具在装配期就要绑定它。
+    confirmations = ConfirmationService(
+        partial(send_message, client=confirmation_client),
+        partial(verify_message, client=confirmation_client),
+        create_event=calendar_client.create_event,
+        verify_event=calendar_client.verify_event,
+    )
     return create_app(
         gateway=QoderGateway(
             ToolDeps(
@@ -106,20 +113,17 @@ def create_production_app() -> FastAPI:
                 tasks=tasks,
                 gmail=tool_client,
                 calendar=calendar_client,
-                calendar_previews=calendar_previews,
+                calendar_events=calendar_events,
+                confirmations=confirmations,
             ),
             tool_server,
             settings=settings,
         ),
-        send_message=partial(send_message, client=confirmation_client),
-        verify_message=partial(verify_message, client=confirmation_client),
         mail_source=GmailSource(create_gmail_client(settings)),
         tasks=tasks,
         drafts=drafts,
         tool_server=tool_server,
-        calendar_previews=calendar_previews,
-        create_event=calendar_client.create_event,
-        verify_event=calendar_client.verify_event,
+        confirmations=confirmations,
     )
 
 

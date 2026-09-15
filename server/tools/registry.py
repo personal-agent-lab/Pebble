@@ -1,8 +1,9 @@
 """Pebble 工具注册中心与副作用声明。
 
 遵循 Pebble 架构设计：
-- 每个工具声明其能力、参数和副作用类型（READONLY / LOCAL_WRITE / EXTERNAL_WRITE）；
-- 外部写操作（EXTERNAL_WRITE）绝对不暴露给模型上下文；
+- 每个工具声明其能力、参数和副作用类型；
+- EXTERNAL_WRITE 绝对不暴露给模型上下文，只由 Confirmation 在用户确认后调用；
+- DIRECT_EXTERNAL_WRITE 同样是外部写，但按轮次暴露给模型，可见范围由 `agent/toolset.py` 决定；
 - 装饰器 @tool 用于声明与注册工具。
 
 注册表是装配的唯一来源：`agent/toolset.py` 遍历已注册工具绑定依赖，模型可见范围由
@@ -24,7 +25,10 @@ class SideEffect(StrEnum):
 
     READONLY = "readonly"  # 只读查询，不改变任何系统状态
     LOCAL_WRITE = "local_write"  # 本地写入（如草稿生成、KB 保存）
-    EXTERNAL_WRITE = "external_write"  # 外部写入（真实发邮件、建日历），严禁注册给模型！
+    # 外部写入，按轮次暴露给模型；可见范围由 `agent/toolset.py` 的 ALLOWED_EFFECTS 决定。
+    DIRECT_EXTERNAL_WRITE = "direct_external_write"
+    # 外部写入，严禁注册给模型；只由 Confirmation 在用户确认最终版本后调用。
+    EXTERNAL_WRITE = "external_write"
 
 
 @dataclass(frozen=True)
