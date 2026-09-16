@@ -227,6 +227,9 @@ def test_kb_tools_are_registered_with_correct_schema_and_turn_exposure(settings)
     assert props["tags"]["items"] == {"type": "string"}
     # 资料不记录出处：保存与检索都不接受来源参数
     assert "source" not in props
+    # 一句话说明进入每轮资料目录：保存与修改都可以填写
+    assert props["summary"]["type"] == "string"
+    assert "summary" in default_registry.get_tool("kb_update").parameters_schema["properties"]
     assert kb_save.parameters_schema["required"] == ["title", "body"]
 
     kb_search = default_registry.get_tool("kb_search")

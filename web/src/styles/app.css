@@ -666,7 +666,11 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .kb-row:hover { background: var(--color-bg); }
 .kb-row:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
 .kb-row .i { color: var(--color-muted); }
-.kb-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-row-title { flex: none; max-width: 60%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-row-summary {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--text-sm); color: var(--color-muted);
+}
 /* 文件名是次要信息：窄了先让它缩，标题尽量留全。 */
 .kb-row-file {
   margin-left: auto; flex: 0 1 auto; min-width: 0; padding-left: 12px;
@@ -803,6 +807,8 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   .mail-result { flex-direction: column; }
 
   .kb-row-file { display: none; }
+  .kb-row-summary { display: none; }
+  .kb-row-title { max-width: none; flex: 1; }
   .kb-editor { padding: 12px 14px; }
   .kb-field { grid-template-columns: 1fr; gap: 4px; }
 

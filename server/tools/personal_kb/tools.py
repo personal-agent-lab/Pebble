@@ -74,6 +74,7 @@ REF_SCHEMA: dict[str, Any] = {
 def kb_save(
     title: str,
     body: str,
+    summary: str | None = None,
     path: str | None = None,
     tags: list[str] | None = None,
     *,
@@ -83,9 +84,10 @@ def kb_save(
     参考内容、项目细节等需要按原文查回的内容。用户的稳定偏好与对助理的持续要求由程序
     自动写入长期记忆，不经过本工具；分不清用户想"记住偏好"还是"保存资料"时先问清楚。
 
-    参数：title 资料标题；body 资料正文（Markdown 原文）；path 可选，资料在库内的
-    相对路径（如 "课程/gse-lab1.md"），可按内容自选文件夹，省略时归入收件目录；
-    tags 可选标签。
+    参数：title 资料标题；body 资料正文（Markdown 原文）；summary 一句话说明这份资料
+    讲什么（如 "二期验收结论、代号与遗留问题"），会出现在每轮的“资料目录”里，决定以后
+    能不能想到去读它，请务必填写；path 可选，资料在库内的相对路径（如 "课程/gse-lab1.md"），
+    可按内容自选文件夹，省略时归入收件目录；tags 可选标签。
 
     不必等用户说“保存”：用户贴进来的文档与项目细节、邮件与日程里以后可能需要查回的
     人物、活动、约定与时间安排，都可以主动保存。保存前先用 kb_search 查是否已有同一份
@@ -95,7 +97,7 @@ def kb_save(
     保存成功后向用户说明这份资料保存到了哪里（用返回的 path，这是用户可直接打开的
     资料位置），不要只说"已保存"。返回 id、path、version 与 ref。
     """
-    return kb_store.save(title=title, body=body, path=path, tags=tags)
+    return kb_store.save(title=title, body=body, path=path, tags=tags, summary=summary)
 
 
 @tool(name="kb_search", side_effect=SideEffect.READONLY)
@@ -107,6 +109,9 @@ def kb_search(
     kb_store: KbStore,
 ) -> dict:
     """按关键词检索个人资料库里已有的资料分节，返回命中的摘要、所在分节与引用（ref）。
+
+    每轮上下文里的“资料目录”列出了库里大致有哪些资料；目录只是指针，资料多时列不全，
+    具体内容仍要用本工具检索、再用 kb_read 读取。
 
     涉及资料中的具体事实时先用本工具检索，再用 kb_read 读取原文确认；只有检索摘要不能
     作为回答依据。按内容找资料一律用本工具，不要靠列举全部资料代替检索。
@@ -174,14 +179,15 @@ def kb_update(
     title: str | None = None,
     body: str | None = None,
     tags: list[str] | None = None,
+    summary: str | None = None,
     *,
     kb_store: KbStore,
 ) -> dict:
     """修改资料库中已有的一份资料，而不是新建副本；资料的稳定 id 保持不变。
 
     按 path 或 id 定位资料。expected_version 必填，取自最近一次 kb_read/kb_save/kb_update
-    返回的 version（即该资料当前的 commit）。只传需要改的字段：title、body、tags；
-    未传的字段保持原样。
+    返回的 version（即该资料当前的 commit）。只传需要改的字段：title、body、tags、
+    summary；未传的字段保持原样。正文内容变了、原来的一句话说明不再准确时，一并更新 summary。
 
     版本不匹配（version_conflict）说明资料自上次读取后已被改动——可能是用户直接编辑了
     文件。此时不要静默覆盖：重新 kb_read 取回最新内容与版本，确认后再改，或向用户说明。
@@ -194,6 +200,7 @@ def kb_update(
         title=title,
         body=body,
         tags=tags,
+        summary=summary,
     )
 
 

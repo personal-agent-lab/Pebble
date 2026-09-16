@@ -44,6 +44,7 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
   const [document, setDocument] = useState<KbDocument | null>(null);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [title, setTitle] = useState("");
+  const [summary, setSummary] = useState("");
   const [tags, setTags] = useState("");
   const [location, setLocation] = useState("");
   const [body, setBody] = useState("");
@@ -62,6 +63,7 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
       const loaded = await getKbDocument(path);
       setDocument(loaded);
       setTitle(loaded.title);
+      setSummary(loaded.summary);
       setTags(formatTags(loaded.tags));
       setBody(loaded.body);
       baseline.current = null;
@@ -80,7 +82,8 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
   const dirty = creating
     ? title.trim() !== "" || body.trim() !== "" || touched
     : document !== null && (
-      bodyChanged || title !== document.title || formatTags(parseTags(tags)) !== formatTags(document.tags)
+      bodyChanged || title !== document.title || summary.trim() !== document.summary
+        || formatTags(parseTags(tags)) !== formatTags(document.tags)
     );
 
   useEffect(() => {
@@ -105,6 +108,7 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
       if (creating) {
         const created = await createKbDocument({
           title: title.trim(),
+          summary: summary.trim(),
           body: latest,
           tags: parseTags(tags),
           ...(location.trim() ? { path: location.trim() } : {}),
@@ -117,8 +121,10 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
       // 编辑器会重新排版原文：正文没有实际变化时提交原文，不让打开过就改写文件。
       const edited = baseline.current !== null && latest !== baseline.current;
       const nextTitle = title.trim();
+      const nextSummary = summary.trim();
       const nextTags = parseTags(tags);
-      if (!edited && nextTitle === document.title && formatTags(nextTags) === formatTags(document.tags)) {
+      if (!edited && nextTitle === document.title && nextSummary === document.summary
+        && formatTags(nextTags) === formatTags(document.tags)) {
         setTouched(false);
         setBody(baseline.current ?? body);
         setNote("没有需要保存的改动");
@@ -126,6 +132,7 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
       }
       const saved = await updateKbDocument(document.path, document.version, {
         title: nextTitle,
+        summary: nextSummary,
         body: edited ? latest : document.body,
         tags: nextTags,
       });
@@ -227,6 +234,12 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
               onChange={(event) => setTitle(event.target.value)}
             />
             <div className="kb-fields">
+              <label className="kb-field">
+                <span>说明</span>
+                <input className="input" value={summary} maxLength={120}
+                  placeholder="一句话说明这份资料讲什么，Agent 靠它知道什么时候该来读"
+                  onChange={(event) => setSummary(event.target.value)} />
+              </label>
               <label className="kb-field">
                 <span>标签</span>
                 <input className="input" value={tags} placeholder="用逗号分隔，例如：课程, GSE"

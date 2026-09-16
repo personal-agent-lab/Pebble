@@ -242,6 +242,7 @@ def verify(operation_id: str, confirmations: Confirmations, agent: Agent) -> dic
 class KbDocumentCreate(BaseModel):
     title: str
     body: str
+    summary: str | None = None
     path: str | None = None
     tags: list[str] | None = None
 
@@ -252,6 +253,7 @@ class KbDocumentUpdate(BaseModel):
     title: str | None = None
     body: str | None = None
     tags: list[str] | None = None
+    summary: str | None = None
 
 
 class KbDocumentMove(BaseModel):
@@ -278,6 +280,7 @@ def kb_document(kb: Kb, path: str) -> dict:
         "path": document["path"],
         "title": document["title"],
         "tags": document["tags"] or [],
+        "summary": document["summary"] or "",
         "created_at": document["created_at"],
         "updated_at": document["updated_at"],
         "version": document["commit"],
@@ -292,7 +295,9 @@ def kb_search(kb: Kb, q: str, tag: str | None = None) -> dict:
 
 @router.post("/kb/documents", status_code=201, tags=["kb"])
 def kb_create(body: KbDocumentCreate, kb: Kb) -> dict:
-    return kb.save(title=body.title, body=body.body, path=body.path, tags=body.tags)
+    return kb.save(
+        title=body.title, body=body.body, path=body.path, tags=body.tags, summary=body.summary
+    )
 
 
 @router.post("/kb/document/update", tags=["kb"])
@@ -303,6 +308,7 @@ def kb_update(body: KbDocumentUpdate, kb: Kb) -> dict:
         title=body.title,
         body=body.body,
         tags=body.tags,
+        summary=body.summary,
     )
 
 

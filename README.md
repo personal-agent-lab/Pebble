@@ -148,8 +148,8 @@ ls .data/pebble.db
 <PEBBLE_DATA_DIR>/memory/MEMORY.md
 ```
 
-`USER.md` 保存用户背景、长期目标与偏好，上限 1375 个 Unicode 字符；`MEMORY.md` 保存项目
-事实、环境信息、术语与稳定约定，上限 2200 个字符。条目以独立一行 `§` 分隔，可直接编辑。
+`USER.md` 保存用户背景、长期目标与偏好，上限 1375 个 Unicode 字符；`MEMORY.md` 保存需要每轮
+生效的环境事实与稳定约定，上限 2200 个字符。可以查的项目信息与术语资料放个人资料库。条目以独立一行 `§` 分隔，可直接编辑。
 下一轮 Agent 调用会重新读取文件；Agent 有效修改会提交到 `<PEBBLE_DATA_DIR>` 内的独立本地 Git
 仓库，数据库、凭证和 SDK 会话不进入该仓库。
 
@@ -159,7 +159,7 @@ ls .data/pebble.db
 重组：
 
 ```text
-<PEBBLE_DATA_DIR>/kb/**/*.md       # 资料本体，frontmatter 里带稳定 id
+<PEBBLE_DATA_DIR>/kb/**/*.md       # 资料本体，frontmatter 里带稳定 id 与一句话说明 summary
 <PEBBLE_DATA_DIR>/kb-index.sqlite3 # 检索索引，派生数据，不进 Git，可随时重建
 ```
 
@@ -169,6 +169,10 @@ ls .data/pebble.db
 资料库操作前，程序会把改动纳入版本（没有 frontmatter 的新文件会补上 id 与标题，正文不变；
 移动按 id 认作同一份资料）。删除的资料历史仍在，可以在对话里让 Agent 找回。
 Agent 查到资料后直接作答，回答不展示资料来源。
+
+资料正文不会每轮都交给 Agent：程序每轮从各资料的标题和一句话说明生成一份资料目录（上限
+1500 字，按目录分组、最近更新优先），和长期记忆一起带给 Agent，Agent 需要细节时再去读原文。
+资料的说明可以在“资料”页或文件的 `summary` 字段里修改。
 
 ## 检查命令
 

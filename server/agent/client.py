@@ -13,6 +13,7 @@ Confirmation 调用。网关不区分触发来源：一轮的消息与材料由�
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from dataclasses import replace
@@ -47,7 +48,10 @@ from server.errors import DependencyUnavailableError, error_details
 from server.gateway.agent_contract import AgentEvent, AgentProtocolError, Turn
 from server.memory.service import MemoryStore
 from server.tools.memory.tools import judge_registry, review_registry
+from server.tools.personal_kb.catalog import CATALOG_TITLE
 from server.tools.registry import ToolDefinition
+
+logger = logging.getLogger(__name__)
 
 CONFIG_DIR_ENV = "QODERCN_CONFIG_DIR"
 LOOPBACK_HOST = "127.0.0.1"
@@ -129,6 +133,7 @@ class QoderGateway:
         self.settings = settings or get_settings()
         self.tool_server = tool_server
         self.memory_store = deps.memory_store or MemoryStore(self.settings.data_dir)
+        self.kb_store = deps.kb_store
         agent_dir = self.settings.data_dir / "agent"
         self.workspace = agent_dir / "workspace"
         config_dir = agent_dir / "config"
@@ -283,6 +288,17 @@ class QoderGateway:
         if not compacted:
             raise AgentProtocolError(COMPACTION_ERROR_MESSAGE)
 
+    def _catalog_materials(self) -> tuple[context.Material, ...]:
+        """常驻的资料目录：记忆全文之后、本轮材料之前。读不出来时本轮不带目录，不中断调用。"""
+        if self.kb_store is None:
+            return ()
+        try:
+            catalog = self.kb_store.catalog()
+        except Exception:
+            logger.exception("资料目录生成失败，本轮不注入")
+            return ()
+        return (context.Material(CATALOG_TITLE, catalog),) if catalog else ()
+
     def _options(
         self, turn: Turn, *, visible: list[ToolDefinition], path: str
     ) -> QoderAgentOptions:
@@ -292,7 +308,9 @@ class QoderGateway:
             for target, title in (("user", "关于你"), ("memory", "事实与约定"))
             if snapshot[target]["content"]
         )
-        ctx = context.assemble(materials=(*memory_materials, *turn.materials))
+        ctx = context.assemble(
+            materials=(*memory_materials, *self._catalog_materials(), *turn.materials)
+        )
         web_tools = list(WEB_TOOLS) if turn.kind is TurnKind.MESSAGE else []
         return QoderAgentOptions(
             # 内置工具只开放联网查询（见 WEB_TOOLS），本机设置一律关闭：模型能看到的其余

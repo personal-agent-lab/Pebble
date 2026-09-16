@@ -30,6 +30,7 @@ from server.errors import (
 )
 from server.sessions.service import timestamp
 from server.storage.datarepo import GITIGNORE, lock_for
+from server.tools.personal_kb.catalog import CatalogEntry, render_catalog
 from server.tools.personal_kb.index import (
     IndexDocument,
     KbIndex,
@@ -44,7 +45,7 @@ INDEX_FILENAME = "kb-index.sqlite3"
 MAX_RESULTS_DEFAULT = 10
 MAX_RESULTS_LIMIT = 20
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n?(.*)\Z", re.DOTALL)
-FIELD_ORDER = ("id", "title", "tags", "created_at", "updated_at")
+FIELD_ORDER = ("id", "title", "summary", "tags", "created_at", "updated_at")
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class KbStore:
         body: str,
         path: str | None = None,
         tags: list[str] | None = None,
+        summary: str | None = None,
     ) -> dict:
         """新建一份资料文件并提交；返回 id、相对路径、版本（commit）与引用。"""
         errors = []
@@ -89,7 +91,7 @@ class KbStore:
                     [{"field": "path", "message": "目标文件已存在，请改用 kb_update 修改"}]
                 )
             now = timestamp()
-            meta = self._build_meta(doc_id, title.strip(), now, now, tags)
+            meta = self._build_meta(doc_id, title.strip(), now, now, tags, summary)
             tree_before = self._kb_tree()
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
@@ -138,6 +140,7 @@ class KbStore:
                 "path": rel,
                 "title": meta.get("title"),
                 "tags": meta.get("tags"),
+                "summary": meta.get("summary"),
                 "created_at": meta.get("created_at"),
                 "updated_at": meta.get("updated_at"),
                 "heading": None,
@@ -202,6 +205,7 @@ class KbStore:
                         "id": meta.get("id"),
                         "path": rel,
                         "title": meta.get("title"),
+                        "summary": meta.get("summary"),
                         "tags": meta.get("tags"),
                         "version": self._file_commit(rel),
                     }
@@ -236,6 +240,7 @@ class KbStore:
         title: str | None = None,
         body: str | None = None,
         tags: list[str] | None = None,
+        summary: str | None = None,
     ) -> dict:
         """修改已有资料而非新建副本；版本不匹配则拒绝，不静默覆盖。"""
         with self._lock:
@@ -258,6 +263,11 @@ class KbStore:
                     meta["tags"] = list(tags)
                 else:
                     meta.pop("tags", None)
+            if summary is not None:
+                if summary.strip():
+                    meta["summary"] = summary.strip()
+                else:
+                    meta.pop("summary", None)
             meta["updated_at"] = timestamp()
 
             target = self.data_dir / rel
@@ -282,6 +292,30 @@ class KbStore:
                 previous_version=current,
                 index_status=index_status,
             )
+
+    def catalog(self, limit: int | None = None) -> str:
+        """每轮常驻的资料目录：先纳入用户改动，再从文件现算，保证与资料一致。"""
+        with self._lock:
+            self._intake()
+            entries = []
+            for file in self.kb_dir.rglob("*.md"):
+                meta = self._meta_of(file)
+                title = meta.get("title")
+                summary = meta.get("summary")
+                updated_at = meta.get("updated_at")
+                if hasattr(updated_at, "isoformat"):
+                    # 用户手写、未加引号的时间会被 YAML 解析成 datetime，统一回 ISO 文本再排序。
+                    updated_at = updated_at.isoformat()
+                named = isinstance(title, str) and title.strip()
+                entries.append(
+                    CatalogEntry(
+                        path=self._relative(file),
+                        title=title.strip() if named else file.stem,
+                        summary=summary if isinstance(summary, str) else None,
+                        updated_at=updated_at if isinstance(updated_at, str) else "",
+                    )
+                )
+            return render_catalog(entries) if limit is None else render_catalog(entries, limit)
 
     def archive(self, *, title: str, items: list[dict]) -> dict:
         """把一次任务的关键信息与逐项结果归档到 `kb/archive/`：原始内容与总结分节保存。"""
@@ -871,8 +905,11 @@ class KbStore:
         created_at: str,
         updated_at: str,
         tags: list[str] | None,
+        summary: str | None = None,
     ) -> dict:
         meta: dict = {"id": doc_id, "title": title}
+        if summary and summary.strip():
+            meta["summary"] = summary.strip()
         if tags:
             meta["tags"] = list(tags)
         meta["created_at"] = created_at

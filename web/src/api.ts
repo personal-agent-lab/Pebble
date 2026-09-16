@@ -220,6 +220,7 @@ export type KbListItem = {
   id: string | null;
   path: string;
   title: string | null;
+  summary?: string | null;
   tags: string[] | null;
   version: string;
 };
@@ -228,6 +229,7 @@ export type KbDocument = {
   id: string;
   path: string;
   title: string;
+  summary: string;
   tags: string[];
   created_at: string | null;
   updated_at: string | null;
@@ -263,12 +265,14 @@ export const getKbDocument = (path: string) =>
   request<KbDocument>(`/kb/document?${query({ path })}`);
 export const searchKb = (q: string) =>
   request<{ query: string; results: KbHit[] }>(`/kb/search?${query({ q })}`);
-export const createKbDocument = (fields: { title: string; body: string; path?: string; tags: string[] }) =>
+export const createKbDocument = (fields: {
+  title: string; summary: string; body: string; path?: string; tags: string[];
+}) =>
   request<KbWriteResult>("/kb/documents", { method: "POST", body: JSON.stringify(fields) });
 export const updateKbDocument = (
   path: string,
   expectedVersion: string,
-  fields: { title: string; body: string; tags: string[] },
+  fields: { title: string; summary: string; body: string; tags: string[] },
 ) => request<KbWriteResult>("/kb/document/update", {
   method: "POST",
   body: JSON.stringify({ path, expected_version: expectedVersion, ...fields }),

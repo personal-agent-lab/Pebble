@@ -18,7 +18,7 @@ flowchart TD
     Trigger[Trigger Source 首版为新邮件] --> Gateway
     Gateway --> Context[Context 每轮常驻材料]
     Context --> Memory[Memory]
-    Context --> KBIndex[KB 主题目录]
+    Context --> KBIndex[KB 资料目录]
     Context --> Agent[Agent Loop / Qoder Agent SDK]
     Agent --> Skills[Skills]
     Agent --> Tools[Tools]
@@ -35,7 +35,7 @@ flowchart TD
 个人上下文沿用四层边界（参考 OpenHuman 的划分，取舍见第 5 节）：
 
 - **Memory 与个人知识库**保存、整理和检索信息，不执行外部操作，也不决定下一步做什么。
-- **Context** 每轮装配常驻材料：长期记忆文件与资料主题目录，各有容量上限；历史对话、资料正文、邮件与日程不自动注入。
+- **Context** 每轮装配常驻材料：长期记忆全文与资料目录（资料的指针），各有容量上限；历史对话、资料正文、邮件与日程不自动注入。
 - **Agent Loop** 由 SDK 承担推理、规划与工具调用。
 - **Tools** 访问外部服务与本地资料；外部写入统一由 Confirmation 执行。
 
@@ -49,7 +49,7 @@ flowchart TD
 | --- | --- | --- |
 | Web Chat | PC 与手机共用响应式界面，以有序时间线展示对话和完整草稿卡，提供草稿编辑、定向修改、明确确认与逐项结果展示 | `web/`（TypeScript + React + Vite） |
 | Gateway | HTTP、SSE、认证与远程访问入口；接收用户与触发源输入，定位会话，启动 Agent 并返回结果 | `server/api/`（HTTP/SSE/认证）、`server/gateway/`（后台运行） |
-| Context | 每轮装配基础提示与常驻材料（`USER.md`、`MEMORY.md`、资料主题目录），控制各块容量；不预先检索资料或历史 | `server/agent/context.py` |
+| Context | 每轮装配基础提示与常驻材料（`USER.md`、`MEMORY.md`、资料目录），控制各块容量；不预先检索资料或历史 | `server/agent/context.py`、`server/agent/client.py` |
 | Agent Loop | 通过 Qoder Agent SDK 调用模型和工具，加载已生效 Skills，按目标决定下一步 | `server/agent/` |
 | Memory | 保存用户背景、偏好、长期目标与约定，每轮判断与后台回顾负责写入；不记录出处 | `server/memory/` |
 | Skills | 保存可复用流程，管理两条来源、草稿、审核、生效版本及 Git 历史 | `server/skills/` |
@@ -83,7 +83,7 @@ Pebble/
 │   │   ├── client.py         # SDK 客户端装配、消息流转与会话恢复
 │   │   ├── mcp.py            # 应用进程内的工具端点：按轮次登记模型可见工具
 │   │   ├── toolset.py        # 按装配依赖绑定业务工具，按轮次筛选模型可见范围
-│   │   ├── context.py        # 每轮系统提示、常驻材料（记忆、资料主题目录）与技能名单组装
+│   │   ├── context.py        # 每轮系统提示、常驻材料（记忆、资料目录）与技能名单组装
 │   │   └── prompt.py         # 面向个人助理的系统提示
 │   ├── storage/              # 实例数据目录的共享基础设施
 │   │   └── datarepo.py       # 数据目录 Git 仓库的进程内锁、.gitignore 与初始化，供 memory 与 personal_kb 复用
@@ -104,7 +104,8 @@ Pebble/
 │   │       ├── tools.py      # 列举、保存、读取、更新、历史版本、检索
 │   │       ├── service.py    # 文件与目录组织、Git 提交、引用生成、索引同步与按引用读取
 │   │       ├── index.py      # 分节切分、FTS5 索引与增量替换、重建与检索排序
-│   │       ├── topics.py     # 主题目录生成与后台主题整理（Phase 5，未实现）
+│   │       ├── catalog.py    # 每轮常驻的资料目录：按目录分组、最近更新优先、受字符上限约束
+│   │       ├── topics.py     # 后台主题整理（Phase 5，未实现）
 │   │       └── importers/    # 外部笔记来源适配器，首个为熊掌记（Phase 5，未实现）
 │   ├── sessions/             # Session Store
 │   │   ├── service.py        # 会话关联、运行状态、待确认内容与逐项结果
@@ -263,7 +264,7 @@ Skill 有两条来源，最终形态相同。用户自建的内容保存即生�
 
 长期状态与知识的组织参考 OpenHuman 的 Memory Tree 与 SuperContext（2026-09-16 查阅），借鉴思路而不照搬实现，完整取舍见 `kb-spec.md` 第 12 节：
 
-- **常驻与按需分开**：每轮只注入小容量的常驻材料（两个记忆文件与资料主题目录），其余按需检索，常驻材料总量由各块容量上限控制。
+- **常驻与按需分开**：每轮只注入小容量的常驻材料——两个记忆文件全文（不查就必须生效的内容）与资料目录（资料的指针，由程序从各资料的标题与 `summary` 现算，上限 1500 字符）——其余按需检索。
 - **整理而不堆积**：资料累积后，由 Agent 与后台主题整理维护 `kb/topics/` 下的主题页，代替分层摘要树；主题页是可读、可改、有版本的 Markdown，用户修改优先，可以随时从原始资料重新整理。
 - **来源适配器**：外部笔记（首个为熊掌记）经适配器转换为 Markdown 资料后写入，重复导入更新而不重复。
 - **不采用**：以数据库为准的存储、外部数据全量同步、每个数据块的出处记录，以及每个新会话前的预检索（按实测再决定）。
@@ -345,7 +346,8 @@ git 提交遵循 `AGENTS.md` 的约定：当前分支、英文 `[Module] Descrip
 | 日程直连创建的记录与唯一执行 | §3.3、§6.3 | 直接创建同样保存不可变版本并原子取得执行权，结果就地返回模型，不登记回传 | 确定性测试断言外部调用次数、执行记录与回传缺席 | 3 |
 | 索引增量更新与用户改动跟随 | §4.2、§6.5 | 写入后增量更新索引；检索前纳入用户改动；按 id 识别移动 | 真实材料检索验证；用户直接改文件、移动文件后检索命中，历史版本仍可读 | 3 |
 | 资料删除、移动与恢复 | §4.2、§6.5 | 三个工具只在用户对话轮可见；删除保留历史，恢复产生新提交 | 轮次可见范围断言 + 删除后检索不到、恢复后内容与历史一致 | 3 |
-| 常驻上下文与主题整理 | §2、§4.2、§4.5 | 常驻材料各有容量上限；后台整理只写 `kb/topics/`，基于当前版本写入，用户修改优先 | 确定性测试断言容量截断与路径限制、版本冲突时跳过 + 真实模型借助主题页作答 | 5 |
+| 资料目录 | §2、§4.2 | 程序每轮从资料文件现算，按目录分组、最近更新优先，受字符上限约束；注入失败不中断调用 | 确定性测试断言格式、上限、排序、用户改动跟随与注入位置 + 真实模型依据目录列出资料、细节仍读原文、保存时填写说明 | 4 |
+| 主题整理 | §4.2、§4.5 | 后台整理只写 `kb/topics/`，基于当前版本写入，用户修改优先 | 确定性测试断言路径限制、版本冲突时跳过 + 真实模型借助主题页作答 | 5 |
 | 外部笔记导入 | §4.2、§6.5 | 导入状态记录外部标识与上次导入版本；被用户改过的资料不覆盖 | 真实导出样本或数据库副本的导入、重复导入与冲突断言 | 5 |
 | 规则与已批准 Skill 跨会话生效 | §4.5、§6.6 | 每轮装配当前规则，加载器只提供已批准且版本一致的内容 | 新会话回归样例 | 3、5 |
 | Skill 两条来源与审核 | §4.5、§6.6 | 用户自建即生效；总结草稿存于发现目录之外，批准绑定内容版本 | loader 边界测试 + 审阅流程端到端 + 证据字段断言 | 5 |
@@ -356,7 +358,7 @@ git 提交遵循 `AGENTS.md` 的约定：当前分支、英文 `[Module] Descrip
 
 ## 10. 当前实现
 
-已实现：Web、Gateway、Agent 装配、Gmail 域、Calendar 域、长期 Memory 文件与每轮专用记忆判断（主 Agent 不再持有记忆工具）、后台记忆回顾、Personal KB Phase 1–4（`kb_list`/`kb_save`/`kb_read`/`kb_update`/`kb_history`/`kb_search`/`kb_delete`/`kb_move`/`kb_restore`/`kb_archive`，资料为 `kb/` 下的 Markdown 文件，由与 Memory 同一个数据目录本地 Git 仓库做版本；`kb-index.sqlite3` 是数据目录内的派生 FTS5 索引，按二级标题分节、写入后增量替换、以 `kb/` 的 Git tree 标识判断是否需要重建；引用带完整 commit 与行号区间，可按引用读回该版本原文，回答不展示来源；每次操作前把用户在文件系统里的改动纳入版本，移动按 frontmatter 的 `id` 识别；删除保留历史，`kb_list` 可列出已删除资料供恢复；资料管理界面为 `web/src/pages/KbPage.tsx`（浏览与搜索）与 `KbDocumentPage.tsx`（Milkdown 所见即所得编辑，按需懒加载），接口在 `api/routes.py` 的 `/api/kb/*`；模块在 `server/tools/personal_kb/`，经 `server/storage/datarepo.py` 与 Memory 共享进程内锁与 `.gitignore`；新增 `pyyaml` 依赖）、Session Store 与 Confirmation。SQLite schema 为 12（资料身份写在 frontmatter、版本走 Git；schema 11 曾新增回答来源表，schema 12 随撤销来源展示将其删除）。未实现：主题页与导入（Phase 5）、Skills、Memory 管理页面与历史检索、认证与 HTTPS 远程访问。
+已实现：Web、Gateway、Agent 装配、Gmail 域、Calendar 域、长期 Memory 文件与每轮专用记忆判断（主 Agent 不再持有记忆工具）、后台记忆回顾、Personal KB Phase 1–4（`kb_list`/`kb_save`/`kb_read`/`kb_update`/`kb_history`/`kb_search`/`kb_delete`/`kb_move`/`kb_restore`/`kb_archive`，资料为 `kb/` 下的 Markdown 文件，由与 Memory 同一个数据目录本地 Git 仓库做版本；`kb-index.sqlite3` 是数据目录内的派生 FTS5 索引，按二级标题分节、写入后增量替换、以 `kb/` 的 Git tree 标识判断是否需要重建；引用带完整 commit 与行号区间，可按引用读回该版本原文，回答不展示来源；每次操作前把用户在文件系统里的改动纳入版本，移动按 frontmatter 的 `id` 识别；删除保留历史，`kb_list` 可列出已删除资料供恢复；每份资料可带一句话说明 `summary`，`catalog.py` 据此每轮现算资料目录，经 `agent/client.py` 排在长期记忆之后注入；资料管理界面为 `web/src/pages/KbPage.tsx`（浏览与搜索）与 `KbDocumentPage.tsx`（Milkdown 所见即所得编辑，按需懒加载），接口在 `api/routes.py` 的 `/api/kb/*`；模块在 `server/tools/personal_kb/`，经 `server/storage/datarepo.py` 与 Memory 共享进程内锁与 `.gitignore`；新增 `pyyaml` 依赖）、Session Store 与 Confirmation。SQLite schema 为 12（资料身份写在 frontmatter、版本走 Git；schema 11 曾新增回答来源表，schema 12 随撤销来源展示将其删除）。未实现：主题页与导入（Phase 5）、Skills、Memory 管理页面与历史检索、认证与 HTTPS 远程访问。
 
 ### Gateway 与触发源
 
@@ -408,7 +410,7 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 - 触发源插孔仍带邮件域名（`MailSource`、`accept_new_mail`、`create_app(mail_source=...)`），与“通用层不持有域措辞”的约定不一致；第二个触发源接入时改为域中立命名。
 - 联网查询的来源没有独立呈现：`agent/client.py` 的流只取 `TextBlock`，`WebSearch` 结果里的 `Links`（标题与 URL）和 `WebFetch` 实际抓取的 URL 都被丢弃，回答末尾的来源列表是模型自己写进正文的 Markdown。已实测出现复述与实际不一致（一轮抓取 6 个页面，正文只列出 5 个）。所需数据在流里已经具备，是否持久化与展示尚未决定（个人知识库已决定回答不展示来源）。
 - 生效 Skill 名单恒为空，Skills 尚无代码；Personal KB 已实现 Phase 1–4（资料的保存、读取、更新、历史版本，分节检索与按引用读取，删除、移动、恢复与改动跟随，管理界面与任务归档；回答不展示来源），主题页与导入尚未实现；Memory 已有两个长期记忆文件、每轮专用记忆判断、后台记忆回顾、逐轮加载与本地 Git 历史，管理页面、历史检索和恢复尚未实现。
-- 资料主题目录、后台主题整理与外部笔记导入尚无代码；常驻上下文目前只有 `USER.md` 与 `MEMORY.md`。
+- 主题页、后台主题整理与外部笔记导入尚无代码。资料目录每轮都要纳入用户改动并解析全部资料的 frontmatter，资料数量很大时有额外开销；说明由模型填写，写得不好时 Agent 可能想不到去读对应资料。
 - 用户改动不是实时监听：直接改文件后，要等下一次资料库操作才纳入版本；每次操作都会先做一次 `git status`，资料库很大时有额外开销。删除、移动与恢复前需取得用户同意由工具说明约束模型遵守，程序只保证这三个工具只在用户对话轮可见。
 - 资料编辑页的“未保存离开”只拦截页面内的返回按钮与浏览器关闭或刷新；通过侧栏或底部 tab 跳走时不提示（当前路由不支持导航拦截）。资料管理接口与其他接口一样尚无认证。
 - 归档由模型自主判断，可能漏归档或在同一任务里重复归档；真实模型验收覆盖了“确认发送后归档一次”的主路径。

@@ -26,6 +26,7 @@ function DocumentRow({ document }: { document: KbListItem }) {
     <Link className="kb-row" to={documentLink(document.path)}>
       {DOC_ICON}
       <span className="kb-row-title">{displayTitle(document)}</span>
+      {document.summary && <span className="kb-row-summary">{document.summary}</span>}
       <span className="kb-row-file">{fileName(document.path)}</span>
     </Link>
   );

@@ -63,7 +63,7 @@ const open = async (path = `/kb/doc?path=${encodeURIComponent(PATH)}`) => {
 
 beforeEach(() => {
   current = {
-    id: "kb_1", path: PATH, title: "验收纪要", tags: ["项目"],
+    id: "kb_1", path: PATH, title: "验收纪要", summary: "二期验收结论", tags: ["项目"],
     created_at: "2026-09-14T01:00:00Z", updated_at: "2026-09-14T01:00:00Z",
     version: "c1", body: "## 结果\n\n* 通过",
   };
@@ -91,7 +91,9 @@ test("改了标签就带着读取时的版本保存，正文未改时原样提�
   await user.type(tags, "项目，验收");
   await user.click(screen.getByRole("button", { name: "保存" }));
 
-  expect(update).toHaveBeenCalledWith(PATH, "c1", { title: "验收纪要", body: "## 结果\n\n* 通过", tags: ["项目", "验收"] });
+  expect(update).toHaveBeenCalledWith(PATH, "c1", {
+    title: "验收纪要", summary: "二期验收结论", body: "## 结果\n\n* 通过", tags: ["项目", "验收"],
+  });
 });
 
 test("正文改过就提交编辑器里的内容；版本冲突时提示并可重新载入", async () => {
@@ -154,10 +156,13 @@ test("新建资料需要标题，保存后进入新资料", async () => {
   expect((save as HTMLButtonElement).disabled).toBe(true);
 
   await user.type(screen.getByLabelText("资料标题"), "实验一");
+  await user.type(screen.getByPlaceholderText(/一句话说明/), "实验要求与截止日期");
   await user.type(screen.getByPlaceholderText(/可选，例如/), "课程/lab1");
   await user.click(save);
 
-  expect(create).toHaveBeenCalledWith({ title: "实验一", body: "提交截止 10 月 8 日", tags: [], path: "课程/lab1" });
+  expect(create).toHaveBeenCalledWith({
+    title: "实验一", summary: "实验要求与截止日期", body: "提交截止 10 月 8 日", tags: [], path: "课程/lab1",
+  });
   await waitFor(() =>
     expect(screen.getByTestId("where").textContent).toBe(`/kb/doc?path=${encodeURIComponent("kb/课程/lab1.md")}`),
   );
@@ -174,4 +179,19 @@ test("输入后马上保存也能拿到最新正文；改了又改回去不产�
 
   expect(update).not.toHaveBeenCalled();
   expect(await screen.findByText("没有需要保存的改动")).toBeTruthy();
+});
+
+test("只改说明也能保存，说明原样提交", async () => {
+  update.mockResolvedValue({ id: "kb_1", path: PATH, title: "验收纪要", version: "c2", index_status: "ok" });
+  const user = userEvent.setup();
+  await open();
+  const summary = await screen.findByDisplayValue("二期验收结论");
+
+  await user.clear(summary);
+  await user.type(summary, "二期验收结论与遗留问题");
+  await user.click(screen.getByRole("button", { name: "保存" }));
+
+  expect(update.mock.calls[0][2]).toEqual({
+    title: "验收纪要", summary: "二期验收结论与遗留问题", body: "## 结果\n\n* 通过", tags: ["项目"],
+  });
 });

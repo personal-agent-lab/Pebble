@@ -33,6 +33,7 @@ from server.gateway.runtime import execution_result_content
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
 from server.tools.gmail.trigger import new_mail_content
+from server.tools.personal_kb.service import KbStore
 from server.tools.registry import SideEffect, ToolDefinition
 from tests.support.gmail_double import MockGmailClient
 from tests.support.mcp_http import mcp_session, tool_payload
@@ -322,6 +323,51 @@ def test_memory_is_reloaded_and_precedes_turn_materials(settings):
         "## 事实与约定\nPebble 使用 Python\n\n"
         "## 本轮材料\n只对本轮有效"
     )
+
+
+def test_kb_catalog_is_injected_after_memory_and_before_turn_materials(settings):
+    init_db()
+    kb = KbStore(settings.data_dir)
+    gateway = QoderGateway(
+        ToolDeps(
+            drafts=MailDraftStore(), tasks=SessionStore(), gmail=MockGmailClient(), kb_store=kb
+        ),
+        ToolServer(),
+        settings=configured(settings),
+    )
+    gateway.memory_store.apply("add", "user", "回答先给结论")
+    assert injected_context(options_for(gateway, TurnKind.MESSAGE)) == "## 关于你\n回答先给结论"
+
+    kb.save(title="星云验收纪要", body="通过。", path="项目/验收", summary="二期验收结论")
+    options = options_for(gateway, TurnKind.NEW_MAIL, materials=(Material("本轮材料", "新邮件"),))
+
+    assert injected_context(options) == (
+        "## 关于你\n回答先给结论\n\n"
+        "## 资料目录\n"
+        "资料库共 1 份资料；需要细节时用 kb_search 检索，或用 kb_read 读取原文。\n"
+        "- 项目/（1 份）\n"
+        "  - 星云验收纪要：二期验收结论\n\n"
+        "## 本轮材料\n新邮件"
+    )
+
+
+def test_catalog_failure_does_not_break_the_turn(settings, monkeypatch):
+    init_db()
+    kb = KbStore(settings.data_dir)
+    gateway = QoderGateway(
+        ToolDeps(
+            drafts=MailDraftStore(), tasks=SessionStore(), gmail=MockGmailClient(), kb_store=kb
+        ),
+        ToolServer(),
+        settings=configured(settings),
+    )
+
+    def broken():
+        raise RuntimeError("模拟读取失败")
+
+    monkeypatch.setattr(kb, "catalog", broken)
+    options = options_for(gateway, TurnKind.MESSAGE, materials=(Material("本轮材料", "照常进行"),))
+    assert injected_context(options) == "## 本轮材料\n照常进行"
 
 
 def test_turn_without_materials_does_not_register_context_hook(settings):

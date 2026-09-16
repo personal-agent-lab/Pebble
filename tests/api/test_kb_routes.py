@@ -35,6 +35,17 @@ def test_browse_create_read_save_move_and_delete(settings):
         assert document["version"] == created.json()["version"]
         assert document["id"] == created.json()["id"]
         assert document["created_at"] and document["updated_at"]
+        assert document["summary"] == ""
+
+        described = client.post(
+            "/api/kb/document/update",
+            json={"path": path, "expected_version": document["version"], "summary": "二期验收结论"},
+        )
+        assert described.status_code == 200
+        document = client.get("/api/kb/document", params={"path": path}).json()
+        assert document["summary"] == "二期验收结论"
+        listed = client.get("/api/kb/documents").json()["documents"]
+        assert listed[0]["summary"] == "二期验收结论"
 
         hits = client.get("/api/kb/search", params={"q": "CORAL"}).json()["results"]
         assert hits[0]["path"] == path and "CORAL-7421" in hits[0]["snippet"]
