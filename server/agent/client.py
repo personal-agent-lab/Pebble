@@ -21,6 +21,8 @@ from typing import Any
 from qodercn_agent_sdk import (
     AssistantMessage,
     HookMatcher,
+    PermissionResultAllow,
+    PermissionResultDeny,
     QoderAgentOptions,
     QoderSDKClient,
     ResultMessage,
@@ -74,6 +76,13 @@ COMPACTION_ERROR_MESSAGE = "短期上下文压缩失败"
 # 轮次暴露。触发轮与结果回传轮的输入来自外部内容，不能让其指令驱动网络请求把内容
 # 带出实例；WebFetch 是对指定页面的只读抓取，与 WebSearch 合起来才是完整的查资料能力。
 WEB_TOOLS = ("WebSearch", "WebFetch")
+
+
+async def authorize_web_tool(tool_name: str, _input: dict, _context: Any):
+    """批准本轮已显式开放的只读联网工具，拒绝所有意外权限请求。"""
+    if tool_name in WEB_TOOLS:
+        return PermissionResultAllow()
+    return PermissionResultDeny(message=f"未授权的工具：{tool_name}")
 
 
 def turn_context_hooks(additional_context: str):
@@ -293,6 +302,7 @@ class QoderGateway:
                 *web_tools,
                 *(f"mcp__{TOOL_SERVER_NAME}__{definition.name}" for definition in visible),
             ],
+            can_use_tool=authorize_web_tool if web_tools else None,
             mcp_servers={
                 TOOL_SERVER_NAME: {"type": "http", "url": self._tool_url(path)},
             },

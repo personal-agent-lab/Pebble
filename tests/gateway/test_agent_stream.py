@@ -10,10 +10,13 @@ from dataclasses import dataclass
 import pytest
 from qodercn_agent_sdk import (
     AssistantMessage,
+    PermissionResultAllow,
+    PermissionResultDeny,
     ResultMessage,
     StreamEvent,
     SystemMessage,
     TextBlock,
+    ToolPermissionContext,
 )
 
 from server.agent import client as agent_client
@@ -139,10 +142,26 @@ def test_web_tools_are_visible_only_on_user_initiated_turns(settings, kind):
     if kind is TurnKind.MESSAGE:
         assert options.tools == ["WebSearch", "WebFetch"]
         assert {"WebSearch", "WebFetch"} <= set(options.allowed_tools)
+        assert options.can_use_tool is not None
     else:
         # 触发轮与结果回传轮的输入来自外部内容，不能让其中的指令驱动联网请求。
         assert options.tools == []
         assert not {"WebSearch", "WebFetch"} & set(options.allowed_tools)
+        assert options.can_use_tool is None
+
+
+def test_user_turn_permission_callback_allows_only_declared_web_tools(settings):
+    options = options_for(make_gateway(settings), TurnKind.MESSAGE)
+    assert options.can_use_tool is not None
+    context = ToolPermissionContext()
+
+    fetch = asyncio.run(
+        options.can_use_tool("WebFetch", {"url": "https://example.com"}, context)
+    )
+    unexpected = asyncio.run(options.can_use_tool("Bash", {"command": "true"}, context))
+
+    assert isinstance(fetch, PermissionResultAllow)
+    assert isinstance(unexpected, PermissionResultDeny)
 
 
 @pytest.mark.parametrize("kind", list(TurnKind))
