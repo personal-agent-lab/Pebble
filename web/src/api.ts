@@ -57,23 +57,6 @@ export type Execution = {
   result: SendResult | null;
 };
 
-/** 引用：commit 是唯一版本标识，行号可定位到具体分节。 */
-export type SourceRef = {
-  id: string;
-  path: string;
-  heading: string | null;
-  lines: [number, number];
-  commit: string;
-};
-
-/** 一次真实读取资料留下的来源：本次读到的原文片段随引用一起展示。 */
-export type TimelineSource = {
-  source_id: string;
-  ref: SourceRef;
-  title: string | null;
-  excerpt: string;
-};
-
 export type TimelineItem =
   | {
       item_id: string;
@@ -82,7 +65,6 @@ export type TimelineItem =
       run_id: string;
       text: string;
       created_at: string;
-      sources?: TimelineSource[];
     }
   | {
       item_id: string;
@@ -122,7 +104,6 @@ export type AgentEvent =
       operation_id: string;
       version: number;
     }
-  | { type: "source"; run_id: string; source_id: string; source: TimelineSource }
   | { type: "done"; run_id: string }
   | { type: "error"; run_id: string; item_id: string; message: string }
   | { type: "notice"; run_id: string; item_id: string; text: string };
@@ -212,7 +193,7 @@ export const confirmOperation = (taskId: string, operationId: string, version: n
 export const verifyExecution = (operationId: string) =>
   request<Execution>(`/operations/${operationId}/verification`, { method: "POST" });
 
-const EVENT_TYPES = ["session", "text", "draft_saved", "source", "done", "error", "notice"] as const;
+const EVENT_TYPES = ["session", "text", "draft_saved", "done", "error", "notice"] as const;
 export function subscribeEvents(
   taskId: string,
   onEvent: (event: AgentEvent) => void,

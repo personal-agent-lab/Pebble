@@ -163,10 +163,6 @@ async def invoke(
         queued.put_nowait(
             {"type": "notice", "text": definition.notice_renderer(result)}
         )
-    if definition.source_extractor is not None:
-        source = definition.source_extractor(result)
-        if source is not None:
-            queued.put_nowait({"type": "source", "source": source})
     if isinstance(result, ToolFileResult):
         metadata = {**result.metadata, "filename": result.filename, "mime_type": result.mime_type}
         return CallToolResult(

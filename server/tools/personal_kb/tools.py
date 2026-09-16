@@ -2,16 +2,14 @@
 
 资料库语义全部写在这些工具的 description 里，不进基础提示，保持通用层领域中立。
 工具都不产生外部副作用，因此不经过 Confirmation；每次写入都留下可读文件与 Git 提交。
-读取成功时由 `kb_read_source` 提取来源记录，交给程序在时间线上展示实际读取的原文。
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 from server.tools.personal_kb.service import KbStore
 from server.tools.registry import SideEffect, tool
-
-# 时间线来源卡里的原文片段上限：足够核对引用，又不让一条回答被长资料撑开。
-EXCERPT_LIMIT = 600
 
 
 def _saved_notice(result: dict) -> str:
@@ -31,14 +29,18 @@ def _stale(result: dict) -> bool:
     return result.get("index_status") == "stale"
 
 
-def kb_read_source(result: dict) -> dict | None:
-    """读取成功后的来源记录：引用、标题与本次实际读到的原文片段。"""
-    ref = result.get("ref")
-    if not isinstance(ref, dict) or not ref.get("path") or not ref.get("commit"):
-        return None
-    body = (result.get("body") or "").strip()
-    excerpt = body if len(body) <= EXCERPT_LIMIT else f"{body[:EXCERPT_LIMIT]}…"
-    return {"ref": ref, "title": result.get("title"), "excerpt": excerpt}
+REF_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "path": {"type": "string"},
+        "heading": {"type": "string"},
+        "lines": {"type": "array", "items": {"type": "integer"}},
+        "commit": {"type": "string"},
+    },
+    "required": ["path", "commit", "lines"],
+    "additionalProperties": False,
+}
 
 
 @tool(
@@ -89,13 +91,13 @@ def kb_search(
 ) -> dict:
     """按关键词检索个人资料库里已有的资料分节，返回命中的摘要、所在分节与引用（ref）。
 
-    涉及资料中的具体事实时先用本工具检索，再对实际采用的结果调用 kb_read 读取原文；
-    只有检索摘要不能作为回答依据。按内容找资料一律用本工具，不要靠列举全部资料代替检索。
+    涉及资料中的具体事实时先用本工具检索，再用 kb_read 读取原文确认；只有检索摘要不能
+    作为回答依据。按内容找资料一律用本工具，不要靠列举全部资料代替检索。
     query 可以是中文词组、英文单词或编号；可选 source_kind（mail|calendar|kb|user|task）
     与 tag 限定范围；max_results 默认 10，上限 20。
 
     结果为空说明资料库里没有相关依据：如实告诉用户没有找到，不要凭印象作答。多份资料
-    互相冲突时，把相关几份都 kb_read 出来，说明冲突及各自来源，不要自行挑一个当事实。
+    互相冲突时，把相关几份都读出来，说明冲突及各自来源，不要自行挑一个当事实。
     """
     return kb_store.search(
         query=query, source_kind=source_kind, tag=tag, max_results=max_results
@@ -117,7 +119,7 @@ def kb_list(directory: str | None = None, *, kb_store: KbStore) -> dict:
 @tool(
     name="kb_read",
     side_effect=SideEffect.READONLY,
-    source_extractor=kb_read_source,
+    param_schemas={"ref": REF_SCHEMA},
 )
 def kb_read(
     path: str | None = None,
@@ -127,16 +129,15 @@ def kb_read(
     *,
     kb_store: KbStore,
 ) -> dict:
-    """读取资料库中一份资料的原文，按 path 或 id 定位，二者给其一即可；也可以按 ref 读取片段。
+    """读取资料库中一份资料的原文：按 path 或 id 读取整篇，或按 ref 只读取命中的分节。
 
-    返回 Markdown 原文，不做总结。需要查回答依据、核对资料具体事实，或用户想看某份资料时
-    使用。指定 version（某次提交的 commit）可读取该资料的历史版本，用于对照修改前后的内容；
+    返回 Markdown 原文，不做总结。需要核对资料具体事实，或用户想看某份资料时使用。
+    指定 version（某次提交的 commit）可读取该资料的历史版本，用于对照修改前后的内容；
     省略 version 读当前版本。
 
-    按 kb_search 返回的 ref 调用时，读取的是该引用所指版本（commit）与行号区间内的原文，
-    用于引用资料中的具体事实并给出可核对的来源。ref 必须原样取自 kb_search 或 kb_read 的
-    返回，不要自己拼行号或版本；引用对不上或行号越界会被拒绝。确认事实时优先按 ref 读取
-    命中片段，只有确实需要通读整篇时才改用 path 或 id。
+    按 ref 调用时读取该引用所指版本（commit）与行号区间内的原文，适合只看 kb_search
+    命中的分节。ref 必须原样取自 kb_search、kb_read 或 kb_save 的返回（必填 path、commit、
+    lines），不要自己拼行号或版本；引用对不上、行号越界或行号与资料分节不对应都会被拒绝。
     """
     return kb_store.read(path=path, doc_id=id, version=version, ref=ref)
 

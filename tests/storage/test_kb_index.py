@@ -50,7 +50,7 @@ def test_search_matches_chinese_english_numbered_and_tagged_sections(settings):
         source={"kind": "mail", "ref": "msg_1"},
     )
 
-    assert kb.search(query="沟通偏好")["results"][0]["path"].startswith("kb/inbox/")
+    assert kb.search(query="沟通偏好")["results"][0]["ref"]["path"].startswith("kb/inbox/")
     assert kb.search(query="结论")["results"][0]["title"] == "张老师"
     assert kb.search(query="CORAL-7421")["results"][0]["title"] == TITLE
     assert kb.search(query="离心机")["results"][0]["title"] == "实验室设备清单"
@@ -88,10 +88,11 @@ def test_sections_follow_second_level_headings_with_real_line_numbers(settings):
     first = hits[0]
 
     # 行号是文件的真实行号，含 frontmatter，可直接切出原文
-    assert first["lines"] == [8, 10]
+    assert first["lines"] == first["ref"]["lines"] == [8, 10]
+    assert first["path"] == saved["path"]
     assert first["heading"] == f"{TITLE} / 验收结果"
-    assert text_lines[first["lines"][0] - 1] == "## 验收结果"
-    assert "CORAL-7421" in text_lines[first["lines"][1] - 1]
+    assert text_lines[first["ref"]["lines"][0] - 1] == "## 验收结果"
+    assert "CORAL-7421" in text_lines[first["ref"]["lines"][1] - 1]
     assert first["ref"] == {
         "id": saved["id"],
         "path": saved["path"],
@@ -100,7 +101,7 @@ def test_sections_follow_second_level_headings_with_real_line_numbers(settings):
         "commit": saved["version"],
     }
 
-    second = kb.search(query="负责人")["results"][0]
+    second = kb.search(query="负责人")["results"][0]["ref"]
     assert second["heading"] == f"{TITLE} / 后续安排"
     assert text_lines[second["lines"][0] - 1] == "## 后续安排"
     assert second["lines"] == [12, 14]
@@ -113,7 +114,7 @@ def test_documents_without_headings_and_empty_sections_are_indexed(settings):
     kb.save(title="前言与分节", body="写在分节之前的开场白。\n\n## 正文\n\n分节内容。")
 
     assert kb.search(query="整篇就是一段正文")["results"][0]["heading"] == "无标题笔记"
-    empty = kb.search(query="只有标题")["results"][0]
+    empty = kb.search(query="只有标题")["results"][0]["ref"]
     assert empty["heading"] == "空分节 / 只有标题" and empty["lines"][0] == empty["lines"][1]
     preamble = kb.search(query="开场白")["results"][0]
     assert preamble["heading"] == "前言与分节"
@@ -165,8 +166,8 @@ def test_save_and_update_replace_only_the_affected_document(settings):
     )
 
     assert kb.search(query="旧版本")["results"] == []
-    assert kb.search(query="新版本")["results"][0]["path"] == first["path"]
-    assert kb.search(query="另一份资料")["results"][0]["path"] == second["path"]
+    assert kb.search(query="新版本")["results"][0]["ref"]["path"] == first["path"]
+    assert kb.search(query="另一份资料")["results"][0]["ref"]["path"] == second["path"]
     assert updated["index_status"] == "ok"
 
 
@@ -254,6 +255,11 @@ def test_ref_reads_the_exact_section_and_rejects_forged_refs(settings):
         kb.read(ref={**ref, "lines": [ref["lines"][0], 999]})
     with pytest.raises(KbValidationError):
         kb.read(ref={**ref, "lines": [0, 1]})
+    # 行号在范围内但不落在任何分节边界上：拼接出来的引用不算数
+    with pytest.raises(KbValidationError):
+        kb.read(ref={**ref, "lines": [ref["lines"][0], ref["lines"][1] - 1]})
+    with pytest.raises(KbValidationError):
+        kb.read(ref={**ref, "lines": [9, 13]})
     with pytest.raises(KbValidationError):
         kb.read(ref={**ref, "id": "kb_someoneelse"})
     with pytest.raises(KbValidationError):
@@ -264,6 +270,31 @@ def test_ref_reads_the_exact_section_and_rejects_forged_refs(settings):
         kb.read(ref={**ref, "commit": "0" * 40})
     with pytest.raises(NotFoundError):
         kb.read(ref={**ref, "path": "kb/inbox/missing.md"})
+
+
+def test_whole_body_range_ref_is_accepted(settings):
+    kb = store(settings)
+    saved = kb.save(title=TITLE, body=BODY, path="项目/验收.md")
+    ref = kb.search(query="CORAL-7421")["results"][0]["ref"]
+
+    # 整篇引用（save/read 返回的 ref）覆盖正文区间，可以读回整篇正文
+    whole = kb.read(doc_id=saved["id"])
+    read = kb.read(ref={**ref, "lines": whole["lines"]})
+
+    assert read["heading"] is None
+    assert read["body"] == whole["body"]
+
+
+def test_best_match_is_not_dropped_when_candidates_exceed_the_cap(settings):
+    kb = store(settings)
+    sections = "\n".join(f"## 群体 {index}\n\n燕鸥在湿地过冬。" for index in range(501))
+    kb.save(title="湿地鸟类普查", body=sections)
+    # 标题直接命中关键词的资料最后保存：截断若发生在排序之前，它会被直接丢弃
+    kb.save(title="燕鸥迁徙志", body="正文与关键词无关。")
+
+    results = kb.search(query="燕鸥")["results"]
+
+    assert results[0]["title"] == "燕鸥迁徙志"
 
 
 def test_old_ref_still_locates_the_content_it_quoted(settings):

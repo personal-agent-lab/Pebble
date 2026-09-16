@@ -107,14 +107,14 @@ def test_v9_migration_adds_memory_reviews_table(settings: Settings) -> None:
         )
 
 
-def test_v11_migration_adds_run_sources_without_touching_existing_timeline(
+def test_v12_migration_drops_run_sources_and_keeps_existing_timeline(
     settings: Settings,
 ) -> None:
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
     with session() as conn, write(conn):
         conn.execute("CREATE TABLE schema_meta (version INTEGER NOT NULL)")
-        conn.execute("INSERT INTO schema_meta VALUES (10)")
-        for version in range(1, 11):
+        conn.execute("INSERT INTO schema_meta VALUES (11)")
+        for version in range(1, 12):
             for statement in db.SCHEMA_MIGRATIONS[version]:
                 conn.execute(statement)
         conn.execute("INSERT INTO tasks VALUES ('t1','任务',NULL,'2026-09-01T00:00:00Z')")
@@ -129,6 +129,12 @@ def test_v11_migration_adds_run_sources_without_touching_existing_timeline(
             "(item_id, task_id, run_id, kind, role, text, operation_id, created_at) "
             "VALUES ('i1','t1','run1','text','assistant','旧回答',NULL,'2026-09-01T00:00:00Z')"
         )
+        conn.execute(
+            "INSERT INTO task_run_sources (source_id, task_id, run_id, sequence, doc_id, path, "
+            "title, heading, start_line, end_line, commit_sha, excerpt, created_at) "
+            "VALUES ('s1', 't1', 'run1', 1, 'kb_1', 'kb/inbox/a.md', '资料', NULL, "
+            "5, 7, 'abc', '原文片段', '2026-09-01T00:00:00Z')"
+        )
 
     assert init_db() == SCHEMA_VERSION
     with session() as conn:
@@ -136,19 +142,9 @@ def test_v11_migration_adds_run_sources_without_touching_existing_timeline(
         assert conn.execute(
             "SELECT text FROM task_timeline_items WHERE item_id='i1'"
         ).fetchone()["text"] == "旧回答"
-        source = (
-            "INSERT INTO task_run_sources (source_id, task_id, run_id, sequence, doc_id, path, "
-            "title, heading, start_line, end_line, commit_sha, excerpt, created_at) "
-            "VALUES (?, 't1', 'run1', 1, 'kb_1', 'kb/inbox/a.md', '资料', '资料 / 分节', "
-            "5, 7, 'abc', '原文片段', '2026-09-01T00:00:00Z')"
+        assert (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE name LIKE 'task_run_sources%'"
+            ).fetchall()
+            == []
         )
-        conn.execute(source, ("s1",))
-        # 同一轮同一版本与行号只记一次
-        with pytest.raises(sqlite3.IntegrityError):
-            conn.execute(source, ("s2",))
-        # 删除任务时来源一并清理
-        conn.execute("DELETE FROM task_run_sources WHERE task_id='t1'")
-        conn.execute("DELETE FROM task_timeline_items WHERE task_id='t1'")
-        conn.execute("DELETE FROM agent_runs WHERE task_id='t1'")
-        conn.execute("DELETE FROM tasks WHERE task_id='t1'")
-        assert conn.execute("SELECT COUNT(*) AS n FROM task_run_sources").fetchone()["n"] == 0

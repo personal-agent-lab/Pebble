@@ -1,11 +1,11 @@
-"""真实 Qoder 模型的资料库检索与引用验收（Phase 2）；显式运行，不进入 pytest。
+"""真实 Qoder 模型的资料库检索验收（Phase 2）；显式运行，不进入 pytest。
 
 走真实链路：GatewayRuntime 调度真实 SDK 子进程，工具经进程内 MCP 端点调用真实的
-KbStore、文件、Git 与 SQLite，时间线来源取自程序记录而不是模型自述。只在临时数据目录里
+KbStore、文件、Git 与 SQLite，工具轨迹取自程序记录而不是模型自述。只在临时数据目录里
 写入，不触碰实例 .data 与任何外部服务，也不需要 Gmail 或 iCloud 凭证。
 
-验证内容：检索后读原文再作答、来源与真实读取一致、更新后新回答用新版本而旧回答保留旧版本、
-资料互相冲突时列出冲突来源、查不到依据时不编造也不产生虚假来源。
+验证内容：检索后读原文再正确作答、读取的是真实资料、更新后回答用新版本、资料互相冲突时
+两份都读到并说明冲突、查不到依据时不编造。回答不向用户展示来源，因此只核对回答与工具轨迹。
 """
 
 from __future__ import annotations
@@ -108,16 +108,9 @@ class Harness:
             for item in timeline["items"]
             if item["kind"] == "text" and item["role"] == "assistant"
         ]
-        sources = [
-            source
-            for item in timeline["items"]
-            if item["kind"] == "text"
-            for source in item.get("sources", [])
-        ]
         return {
             "task_id": task_id,
             "answer": "".join(answers).strip(),
-            "sources": sources,
             "searches": list(self.searches),
             "reads": list(self.reads),
         }
@@ -136,12 +129,11 @@ class RecordingKbStore(KbStore):
         return super().search(**kwargs)
 
     def read(self, **kwargs) -> dict:
-        self._reads.append(
-            f"ref:{kwargs['ref']['path']}"
-            if kwargs.get("ref")
-            else f"document:{kwargs.get('path') or kwargs.get('doc_id')}"
-        )
-        return super().read(**kwargs)
+        result = super().read(**kwargs)
+        # 记录实际读到的资料位置：模型可能按 path、id 或 ref 定位，统一落到真实路径。
+        mode = "ref" if kwargs.get("ref") else "document"
+        self._reads.append(f"{mode}:{result['ref']['path']}")
+        return result
 
 
 def seed(kb: KbStore) -> dict:
@@ -171,32 +163,18 @@ async def verify(root: Path, settings: Settings, port: int) -> dict:
     try:
         documents = seed(harness.kb)
 
-        # 1–2. 全新会话提问：先检索、再读原文，答案与来源都要对得上真实资料。
+        # 1. 全新会话提问：先检索、再读原文，读的是真实资料，回答正确。
         asked = await harness.ask("资料库里星云项目这次验收的代号是什么？只回复代号本身。")
         if CODE not in asked["answer"]:
             raise AssertionError(f"回答没有给出资料里的代号：{asked['answer']!r}")
         if not asked["searches"]:
             raise AssertionError(f"模型没有调用 kb_search：{asked!r}")
-        if not asked["reads"]:
-            raise AssertionError(f"模型没有调用 kb_read：{asked!r}")
-        if not asked["sources"]:
-            raise AssertionError("时间线没有记录任何来源")
-        cited = [item for item in asked["sources"] if CODE in item["excerpt"]]
-        if not cited:
-            raise AssertionError(f"来源与真实读取不一致：{asked['sources']!r}")
-        if cited[0]["ref"]["commit"] != documents["plan"]["version"]:
-            raise AssertionError(f"来源版本不是保存时的版本：{cited[0]!r}")
-        if cited[0]["ref"]["path"] != documents["plan"]["path"]:
-            raise AssertionError(f"来源路径不是资料的真实位置：{cited[0]!r}")
+        if not any(read.endswith(documents["plan"]["path"]) for read in asked["reads"]):
+            raise AssertionError(f"模型没有读取含答案的资料原文：{asked!r}")
         report["search_then_read"] = "passed"
         report["trajectory"] = {"searches": asked["searches"], "reads": asked["reads"]}
-        report["citation_matches_file"] = {
-            "path": cited[0]["ref"]["path"],
-            "lines": cited[0]["ref"]["lines"],
-            "commit": cited[0]["ref"]["commit"][:7],
-        }
 
-        # 3. 更新资料后：新回答用新版本，旧回答仍保留旧版本原文。
+        # 2. 更新资料后：新回答用新版本。
         harness.kb.update(
             doc_id=documents["plan"]["id"],
             expected_version=documents["plan"]["version"],
@@ -209,47 +187,33 @@ async def verify(root: Path, settings: Settings, port: int) -> dict:
         after = await harness.ask("资料库里星云项目最新的验收代号是什么？只回复代号本身。")
         if REVISED_CODE not in after["answer"] or CODE in after["answer"]:
             raise AssertionError(f"更新后仍使用旧版本：{after['answer']!r}")
-        if not any(REVISED_CODE in item["excerpt"] for item in after["sources"]):
-            raise AssertionError(f"新来源没有指向新版本原文：{after['sources']!r}")
-        old = harness.service.get_timeline(asked["task_id"])
-        old_sources = [
-            source
-            for item in old["items"]
-            if item["kind"] == "text"
-            for source in item.get("sources", [])
-        ]
-        if old_sources != asked["sources"]:
-            raise AssertionError(f"旧回答的来源在资料更新后发生了变化：{old_sources!r}")
-        report["update_keeps_old_citation"] = "passed"
+        if not after["reads"]:
+            raise AssertionError(f"更新后没有重新读取原文：{after!r}")
+        report["update_uses_new_version"] = "passed"
 
-        # 4. 互相冲突的资料：两边都要读到，并说明冲突。
+        # 3. 互相冲突的资料：两边都要读到，并说明冲突。
         harness.kb.save(
             title="星云验收补充说明",
             body=f"## 验收结果\n\n另一份记录写的验收代号是 {CONFLICT_CODE}，与会签页一致。",
             path="项目/星云验收补充.md",
         )
         conflicted = await harness.ask(
-            "资料库里星云项目的验收代号有两个不同说法吗？把两份记录各自的代号和来源都说出来。"
+            "资料库里星云项目的验收代号有两个不同说法吗？把两份记录各自的代号和出处都说出来。"
         )
         if REVISED_CODE not in conflicted["answer"] or CONFLICT_CODE not in conflicted["answer"]:
             raise AssertionError(f"回答没有列出来自两份资料的冲突代号：{conflicted['answer']!r}")
-        cited_paths = {item["ref"]["path"] for item in conflicted["sources"]}
-        if len(cited_paths) < 2:
-            raise AssertionError(f"冲突回答没有记录两份来源：{conflicted['sources']!r}")
-        report["conflict_reported"] = sorted(cited_paths)
+        read_paths = {read.split(":", 1)[1] for read in conflicted["reads"]}
+        if len(read_paths) < 2:
+            raise AssertionError(f"冲突回答没有读取两份资料：{conflicted['reads']!r}")
+        report["conflict_reported"] = sorted(read_paths)
 
-        # 5. 查不到依据：不编造答案，也不产生虚假来源。
+        # 4. 查不到依据：不编造答案。
         missing = await harness.ask(
             f"资料库里有没有提到代号 {MISSING_CODE} 的记录？如果没有就直说没有。"
         )
         if MISSING_CODE in missing["answer"] and "没有" not in missing["answer"]:
             raise AssertionError(f"对不存在的资料给出了肯定答案：{missing['answer']!r}")
-        if any(MISSING_CODE in item["excerpt"] for item in missing["sources"]):
-            raise AssertionError(f"产生了指向不存在内容的来源：{missing['sources']!r}")
-        report["missing_material"] = {
-            "answer": missing["answer"],
-            "sources": len(missing["sources"]),
-        }
+        report["missing_material"] = {"answer": missing["answer"]}
         return report
     finally:
         await harness.stop()

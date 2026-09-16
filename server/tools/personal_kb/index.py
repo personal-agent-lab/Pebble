@@ -26,9 +26,6 @@ INDEX_SCHEMA = 1
 # trigram 分词器按三字符建立索引：1–2 个字的词无法用 MATCH 命中，改用同一张表的包含匹配。
 FTS_MIN_TERM = 3
 
-# 单次检索最多参与的候选条目：排序在 Python 里做（字段优先级先于相关度），先取有界的候选集。
-CANDIDATE_LIMIT = 500
-
 HEADING_RE = re.compile(r"^##(?!#)\s*(.*)$")
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
@@ -263,12 +260,18 @@ class KbIndex:
         tag: str | None,
         max_results: int,
     ) -> list[Hit]:
-        """按关键词检索分节，按字段优先级与相关度排序；摘要按词命中处截取。"""
+        """按关键词检索分节，按字段优先级与相关度排序；摘要按词命中处截取。
+
+        排序在 Python 里做（字段优先级先于相关度），必须先对全部候选排完序再截断，
+        否则最相关的结果可能被任意丢弃；正文只在截断后为最终命中取回。
+        """
         with session(self.path) as conn:
             rows = self._candidates(conn, terms=terms, source_kind=source_kind, tag=tag)
-        hits = [self._hit(row, terms) for row in rows]
-        hits.sort(key=lambda hit: (hit.rank, hit.score, hit.path, hit.start_line))
-        return hits[:max_results]
+            ranked = [(self._rank_key(row, terms), row) for row in rows]
+            ranked.sort(key=lambda item: item[0])
+            top = [row for _, row in ranked[:max_results]]
+            bodies = self._bodies(conn, [row["row_id"] for row in top]) if top else {}
+        return [self._hit(row, terms, bodies[row["row_id"]]) for row in top]
 
     def _candidates(
         self,
@@ -286,20 +289,37 @@ class KbIndex:
         if tag is not None:
             clauses.append("kb_sections.tags LIKE ? ESCAPE '\\'")
             params.append(f'%"{_escape_like(tag)}"%')
-        params.append(CANDIDATE_LIMIT)
         sql = (
-            "SELECT kb_sections.doc_id, kb_sections.path, kb_sections.title, "
-            "kb_sections.source_kind, kb_sections.tags, kb_sections.heading, "
-            "kb_sections.start_line, kb_sections.end_line, kb_sections.commit_sha, "
-            f"kb_sections_fts.body, {score} AS score "
+            "SELECT kb_sections.row_id, kb_sections.doc_id, kb_sections.path, "
+            "kb_sections.title, kb_sections.source_kind, kb_sections.tags, "
+            "kb_sections.heading, kb_sections.start_line, kb_sections.end_line, "
+            f"kb_sections.commit_sha, {score} AS score "
             "FROM kb_sections_fts JOIN kb_sections "
             "ON kb_sections.row_id = kb_sections_fts.rowid "
-            f"WHERE {' AND '.join(clauses)} LIMIT ?"
+            f"WHERE {' AND '.join(clauses)}"
         )
         return list(conn.execute(sql, params))
 
     @staticmethod
-    def _hit(row: sqlite3.Row, terms: list[str]) -> Hit:
+    def _bodies(conn: sqlite3.Connection, row_ids: list[int]) -> dict[int, str]:
+        placeholders = ",".join("?" * len(row_ids))
+        rows = conn.execute(
+            f"SELECT rowid, body FROM kb_sections_fts WHERE rowid IN ({placeholders})",
+            row_ids,
+        )
+        return {row["rowid"]: row["body"] for row in rows}
+
+    @staticmethod
+    def _rank_key(row: sqlite3.Row, terms: list[str]) -> tuple[int, float, str, int]:
+        return (
+            field_rank(row["title"], row["heading"], _as_tags(row["tags"]), terms),
+            float(row["score"] or 0.0),
+            row["path"],
+            row["start_line"],
+        )
+
+    @staticmethod
+    def _hit(row: sqlite3.Row, terms: list[str], body: str) -> Hit:
         tags = _as_tags(row["tags"])
         return Hit(
             doc_id=row["doc_id"],
@@ -311,7 +331,7 @@ class KbIndex:
             start_line=row["start_line"],
             end_line=row["end_line"],
             commit=row["commit_sha"],
-            snippet=snippet(row["body"], terms),
+            snippet=snippet(body, terms),
             score=float(row["score"] or 0.0),
             rank=field_rank(row["title"], row["heading"], tags, terms),
         )

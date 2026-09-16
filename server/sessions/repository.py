@@ -114,7 +114,6 @@ def delete_task(conn: sqlite3.Connection, task_id: str) -> None:
         (task_id,),
     )
     conn.execute("DELETE FROM task_timeline_items WHERE task_id = ?", (task_id,))
-    conn.execute("DELETE FROM task_run_sources WHERE task_id = ?", (task_id,))
     conn.execute("DELETE FROM memory_reviews WHERE task_id = ?", (task_id,))
     conn.execute(
         "DELETE FROM approval_executions WHERE operation_id IN "

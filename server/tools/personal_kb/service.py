@@ -122,7 +122,7 @@ class KbStore:
             meta, body = self._parse(raw)
             commit = self._full_commit(version) if version else self._file_commit(rel)
             doc_id = meta.get("id") or doc_id
-            lines = [1, self._line_count(raw)]
+            lines = self._body_lines(meta.get("title") or "", raw)
             return {
                 "id": doc_id,
                 "title": meta.get("title"),
@@ -160,7 +160,7 @@ class KbStore:
         with self._lock:
             try:
                 tree = self._kb_tree()
-                if not self._index.is_current(tree):
+                if not self._index.is_current(tree) or self._has_uncommitted_changes():
                     self._index.rebuild(tree, self._documents())
             except Exception as error:
                 # 索引跟不上资料时宁可说不可检索，也不拿可能过期的旧索引回答。
@@ -307,7 +307,7 @@ class KbStore:
         """
         try:
             tree = self._kb_tree()
-            if self._index.is_current(tree_before):
+            if self._index.is_current(tree_before) and not self._has_uncommitted_changes():
                 document = self._document(rel)
                 if document is not None:
                     self._index.replace(document, tree=tree)
@@ -351,6 +351,15 @@ class KbStore:
         """`kb/` 目录当前的 Git tree 标识；没有提交过资料时为空串。"""
         result = self._git_raw("rev-parse", "HEAD:kb")
         return result.stdout.strip() if result.returncode == 0 else ""
+
+    def _has_uncommitted_changes(self) -> bool:
+        """`kb/` 下是否存在未提交的磁盘变更（手动编辑、删除、新增未跟踪文件）。
+
+        Git tree 只反映已提交状态；手动改盘不会改变 tree，增量索引更新会漏掉这些文件，
+        旧分节留在索引里。用 `git status --porcelain` 在一条命令内检测全部偏离。
+        """
+        result = self._git_raw("status", "--porcelain", "--", "kb")
+        return bool(result.stdout.strip())
 
     # ------------------------------------------------------------------ 路径与定位
 
@@ -491,7 +500,9 @@ class KbStore:
             "title": meta.get("title"),
             "version": commit,
             "index_status": index_status,
-            "ref": cls._ref(doc_id, rel, None, [1, cls._line_count(text)], commit),
+            "ref": cls._ref(
+                doc_id, rel, None, cls._body_lines(meta.get("title") or "", text), commit
+            ),
         }
         if previous_version is not None:
             result["previous_version"] = previous_version
@@ -547,18 +558,24 @@ class KbStore:
             raise KbValidationError(
                 [{"field": "ref.lines", "message": f"引用行号超出资料范围（1–{total}）"}]
             )
-        fragment = "\n".join(raw.replace("\r\n", "\n").split("\n")[start - 1 : end])
+        sections = split_sections(meta.get("title") or "", raw)
         section = next(
-            (
-                item
-                for item in split_sections(meta.get("title") or "", raw)
-                if item.start_line == start and item.end_line == end
-            ),
+            (item for item in sections if item.start_line == start and item.end_line == end),
             None,
         )
-        heading = section.heading if section is not None else ref.get("heading")
-        if not isinstance(heading, str):
-            heading = None
+        # 引用必须原样来自 kb_search / kb_read：合法区间只有真实分节与整篇正文区间。
+        body_lines = [sections[0].start_line, sections[-1].end_line] if sections else [1, total]
+        if section is None and lines != body_lines and lines != [1, total]:
+            raise KbValidationError(
+                [
+                    {
+                        "field": "ref.lines",
+                        "message": "引用行号与资料分节不对应，请原样使用 kb_search 返回的 ref",
+                    }
+                ]
+            )
+        heading = section.heading if section is not None else None
+        fragment = "\n".join(raw.replace("\r\n", "\n").split("\n")[start - 1 : end])
         doc_id = meta.get("id") or ref_id
         return {
             "id": doc_id,
@@ -585,7 +602,19 @@ class KbStore:
 
     @staticmethod
     def _line_count(raw: str) -> int:
-        return len(raw.replace("\r\n", "\n").split("\n"))
+        lines = raw.replace("\r\n", "\n").split("\n")
+        # 结尾换行是最后一行的结束符，不产生新行；行号必须与编辑器里的真实行号一致。
+        if lines and lines[-1] == "":
+            lines.pop()
+        return len(lines)
+
+    @staticmethod
+    def _body_lines(title: str, raw: str) -> list[int]:
+        """正文（不含 frontmatter）的起止行号；返回正文要与行号严格对应。"""
+        sections = split_sections(title, raw)
+        if sections:
+            return [sections[0].start_line, sections[-1].end_line]
+        return [1, KbStore._line_count(raw)]
 
     def _content_at(self, rel: str, version: str | None) -> str:
         if version:

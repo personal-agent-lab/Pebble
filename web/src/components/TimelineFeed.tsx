@@ -4,7 +4,6 @@ import { type ApiError, type MessageTarget, type TimelineItem } from "../api";
 import MailDraftCard from "./MailDraftCard";
 import Markdown from "./Markdown";
 import MessageActions from "./MessageActions";
-import SourceCard from "./SourceCard";
 
 const STICK_PX = 48;
 
@@ -110,8 +109,6 @@ export default function TimelineFeed({ taskId, items, running, sendMessage, onCh
       return <div className={`msg ${agent ? "agent" : "user"}${grouped ? " cont" : ""}`} key={item.item_id}>
         <div className="msg-body"><span className="sr-only">{agent ? "Agent 说：" : "我说："}</span>
           <div className="bubble">{agent ? <Markdown text={item.text} /> : item.text}</div>
-          {agent && item.sources !== undefined && item.sources.length > 0
-            && <SourceCard sources={item.sources} />}
           {agent && ended && <MessageActions text={answerText(items, index)}
             createdAt={item.created_at} pinned={last} />}
         </div>

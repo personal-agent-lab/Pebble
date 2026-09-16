@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -230,6 +230,9 @@ SCHEMA_V11 = (
     "ON task_run_sources(run_id, commit_sha, path, start_line, end_line)",
 )
 
+# 撤销回答来源：产品不再向用户展示资料来源，来源记录表随之删除。
+SCHEMA_V12 = ("DROP TABLE task_run_sources",)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -242,6 +245,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     9: SCHEMA_V9,
     10: SCHEMA_V10,
     11: SCHEMA_V11,
+    12: SCHEMA_V12,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

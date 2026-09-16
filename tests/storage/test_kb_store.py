@@ -75,6 +75,22 @@ def test_read_returns_original_body_by_id_and_by_path(settings):
     assert by_path["id"] == saved["id"]
 
 
+def test_read_lines_cover_the_body_and_whole_body_ref_reads_back_the_body(settings):
+    store = KbStore(settings.data_dir)
+    saved = store.save(title="多分节", body="## 甲\n\n第一段。\n\n## 乙\n\n第二段。")
+    text_lines = (settings.data_dir / saved["path"]).read_text(encoding="utf-8").splitlines()
+
+    whole = store.read(doc_id=saved["id"])
+
+    # 整篇读取的行号覆盖正文区间（不含 frontmatter），与返回正文严格对应
+    assert whole["lines"] == [text_lines.index("## 甲") + 1, len(text_lines)]
+    assert saved["ref"]["lines"] == whole["lines"]
+
+    ref = store.search(query="第二段")["results"][0]["ref"]
+    fragment = store.read(ref={**ref, "lines": whole["lines"]})
+    assert fragment["body"] == whole["body"]
+
+
 def test_list_discovers_documents_without_knowing_path_or_id(settings):
     store = KbStore(settings.data_dir)
     first = store.save(title="验收会议纪要", body="第一份。")
@@ -221,10 +237,11 @@ def test_kb_tools_are_registered_with_correct_schema_and_turn_exposure(settings)
     assert search_props["tag"]["type"] == "string"
 
     kb_read = default_registry.get_tool("kb_read")
-    assert kb_read.parameters_schema["properties"]["ref"]["type"] == "object"
-    # 读取成功的来源由领域声明的提取器产出，通用层不认工具名。
-    assert kb_read.source_extractor is not None
-    assert default_registry.get_tool("kb_search").source_extractor is None
+    ref_prop = kb_read.parameters_schema["properties"]["ref"]
+    # 嵌套结构由工具声明必填字段，自动映射只给最粗的 object 类型
+    assert ref_prop["type"] == "object"
+    assert ref_prop["required"] == ["path", "commit", "lines"]
+    assert ref_prop["properties"]["lines"] == {"type": "array", "items": {"type": "integer"}}
 
     store = KbStore(settings.data_dir)
     tools = build_tools(ToolDeps(drafts=None, tasks=None, gmail=None, kb_store=store))
@@ -256,3 +273,30 @@ def test_kb_tools_are_registered_with_correct_schema_and_turn_exposure(settings)
 def test_kb_tools_are_skipped_when_store_unavailable(settings):
     tools = build_tools(ToolDeps(drafts=None, tasks=None, gmail=None))
     assert not [t for t in tools if t.name.startswith("kb_")]
+
+
+def _manually_edit(path, old, new):
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8"
+    )
+
+
+def test_manual_edit_then_save_another_does_not_return_stale_hits(settings):
+    store = KbStore(settings.data_dir)
+    store.save(title="alpha", body="## sec\nCORAL-7421")
+    target = next((settings.data_dir / "kb" / "inbox").glob("*.md"))
+    _manually_edit(target, "CORAL-7421", "REVISED-9000")
+
+    store.save(title="beta", body="无关正文。")
+
+    assert not store.search(query="CORAL-7421")["results"]
+    assert not store.search(query="REVISED-9000")["results"]
+
+
+def test_manual_edit_then_search_does_not_return_stale_hits(settings):
+    store = KbStore(settings.data_dir)
+    store.save(title="alpha", body="## sec\nCORAL-7421")
+    target = next((settings.data_dir / "kb" / "inbox").glob("*.md"))
+    _manually_edit(target, "CORAL-7421", "REVISED-9000")
+
+    assert not store.search(query="CORAL-7421")["results"]

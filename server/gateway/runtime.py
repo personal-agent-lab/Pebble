@@ -439,11 +439,6 @@ class GatewayRuntime:
                 published["item_id"] = timeline.insert_notice(
                     conn, row["task_id"], row["run_id"], event["text"]
                 )
-        elif kind == "source":
-            with session(self.path) as conn, write(conn):
-                published["source_id"] = timeline.insert_source(
-                    conn, row["task_id"], row["run_id"], event["source"]
-                )
         elif kind == "done":
             self._finish(row["run_id"], "done", None)
             self._schedule_retitle(row)
