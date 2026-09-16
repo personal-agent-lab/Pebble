@@ -25,6 +25,14 @@ const COMPOSE_ICON = (
   </svg>
 );
 
+/** 邮件触发的会话在列表里带这个标记，用户自己发起的不带。 */
+const MAIL_ICON = (
+  <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <polyline points="3.5 7 12 13 20.5 7" />
+  </svg>
+);
+
 const MORE_ICON = (
   <svg className="i" viewBox="0 0 24 24" fill="currentColor">
     <circle cx="5" cy="12" r="1.7" />
@@ -260,6 +268,9 @@ export function TaskLinks() {
   // 正在查看的任务始终留在列表里，收起时也不会从列表消失。
   const current = all.find((entry) => pathname.startsWith(`/tasks/${entry.task.task_id}`));
   if (current !== undefined && !visible.includes(current)) visible.push(current);
+  // 列表里出现邮件标记时，没有标记的行也留出同一条槽位，任务名左边才对得齐；
+  // 一条邮件任务都没有时不留，免得每行都带一段没有来由的缩进。
+  const reserveSource = visible.some((entry) => entry.task.source === "mail");
 
   return (
     <>
@@ -269,14 +280,19 @@ export function TaskLinks() {
         {visible.map((entry) => {
           const badge = taskBadge(entry.latestRun, entry.operations);
           const unread = seen.unread(entry.task.task_id, entry.operations);
+          const fromMail = entry.task.source === "mail";
           return (
             <div className="nav-task-row" key={entry.task.task_id}>
               <NavLink
                 to={`/tasks/${entry.task.task_id}`}
-                title={`${entry.task.goal} · ${badge.label}`}
+                title={`${entry.task.goal} · ${badge.label}${fromMail ? " · 由新邮件触发" : ""}`}
                 className={({ isActive }) => `nav-task${isActive ? " active" : ""}`}
               >
+                {reserveSource && (
+                  <span className="nav-task-source">{fromMail && MAIL_ICON}</span>
+                )}
                 <span className="t">{entry.task.goal}</span>
+                {fromMail && <span className="sr-only">由新邮件触发</span>}
                 {unread > 0 && <span className="nav-dot wait" aria-hidden />}
                 <span className="sr-only">{badge.label}</span>
               </NavLink>

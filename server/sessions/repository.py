@@ -3,10 +3,21 @@
 import sqlite3
 
 from server.errors import NotFoundError
+from server.sessions import runs
+
+# 触发源随任务一起读出，界面据此区分自动开始与用户亲自发起的会话。
+# 不另立一列：新邮件调用只由新邮件入口登记，有没有这种调用就是答案，旧库也无需迁移。
+TASK_SELECT = (
+    "SELECT t.*, CASE WHEN EXISTS("
+    "SELECT 1 FROM agent_runs r WHERE r.task_id = t.task_id AND r.kind = ?"
+    ") THEN 'mail' ELSE 'user' END AS source FROM tasks t"
+)
 
 
 def task(conn: sqlite3.Connection, task_id: str) -> dict:
-    row = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+    row = conn.execute(
+        f"{TASK_SELECT} WHERE t.task_id = ?", (runs.KIND_NEW_MAIL, task_id)
+    ).fetchone()
     if row is None:
         raise NotFoundError(task_id)
     return dict(row)
@@ -14,7 +25,10 @@ def task(conn: sqlite3.Connection, task_id: str) -> dict:
 
 def tasks(conn: sqlite3.Connection) -> list[dict]:
     return [
-        dict(row) for row in conn.execute("SELECT * FROM tasks ORDER BY created_at DESC, task_id")
+        dict(row)
+        for row in conn.execute(
+            f"{TASK_SELECT} ORDER BY t.created_at DESC, t.task_id", (runs.KIND_NEW_MAIL,)
+        )
     ]
 
 

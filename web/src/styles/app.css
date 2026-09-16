@@ -219,6 +219,10 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .nav-task:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
 /* 任务名一行截断：侧栏是索引，完整文案在任务对话里，悬停另有 title。 */
 .nav-task .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 邮件触发的标记跟着整行的颜色走，只压低一档：它说明来源，不该比任务名更显眼。
+   负 margin 把图标和标题之间的间距从行内的 8px 收到 6px，读起来仍是一组。 */
+.nav-task-source { display: flex; width: 14px; flex: none; margin-right: -2px; opacity: 0.65; }
+.nav-task-source .i { width: 14px; height: 14px; }
 /* 侧栏只标出还没读过的待确认，读过与其余状态都留给任务页，列表保持一列干净的标题。 */
 .nav-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--color-border); }
 .nav-dot.wait { background: var(--color-accent); }

@@ -57,7 +57,7 @@ def test_tasks_and_binding(stores):
     second = tasks.create_task("安排时间")
     assert tasks.list_tasks() == [second, first]
     assert tasks.list_task_operations(first["task_id"]) == []
-    assert set(first) == {"task_id", "goal", "sdk_session_id", "created_at"}
+    assert set(first) == {"task_id", "goal", "sdk_session_id", "created_at", "source"}
     for _ in range(2):
         assert tasks.bind_sdk_session(first["task_id"], "sdk1")["sdk_session_id"] == "sdk1"
     with pytest.raises(SessionConflictError):

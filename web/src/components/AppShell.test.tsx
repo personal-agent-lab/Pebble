@@ -7,8 +7,8 @@ import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { OperationSummary, Task, TaskDetail, Timeline } from "../api";
 
 const tasks: Task[] = [
-  { task_id: "task-1", goal: "没读过的任务", sdk_session_id: null, created_at: "2026-09-14T01:00:00Z" },
-  { task_id: "task-2", goal: "正在看的任务", sdk_session_id: null, created_at: "2026-09-14T02:00:00Z" },
+  { task_id: "task-1", goal: "没读过的任务", source: "mail", sdk_session_id: null, created_at: "2026-09-14T01:00:00Z" },
+  { task_id: "task-2", goal: "正在看的任务", source: "user", sdk_session_id: null, created_at: "2026-09-14T02:00:00Z" },
 ];
 const operations: Record<string, OperationSummary[]> = {
   "task-1": [{ operation_id: "op-1", type: "mail_draft", version: 1, status: "pending" }],
@@ -50,10 +50,10 @@ const open = async (path: string) => {
   await screen.findByText("没读过的任务", { selector: ROW });
 };
 
-const dotOf = (goal: string) => {
-  const label = [...document.querySelectorAll(ROW)].find((node) => node.textContent === goal);
-  return label?.closest("a")?.querySelector(".nav-dot") ?? null;
-};
+const rowOf = (goal: string) =>
+  [...document.querySelectorAll(ROW)].find((node) => node.textContent === goal)?.closest("a") ?? null;
+
+const dotOf = (goal: string) => rowOf(goal)?.querySelector(".nav-dot") ?? null;
 
 test("打开的任务读过就不再标记，其余任务照旧提醒", async () => {
   await open("/tasks/task-2");
@@ -83,4 +83,15 @@ test("草稿改出新版本重新提醒，读过的是那一版不是那条操�
   operations["task-2"] = [{ operation_id: "op-2", type: "mail_draft", version: 2, status: "pending" }];
   await open("/tasks");
   expect(dotOf("正在看的任务")).toBeTruthy();
+});
+
+test("邮件触发的任务在列表里带邮件标记，自己发起的只留空槽位", async () => {
+  await open("/tasks");
+
+  expect(rowOf("没读过的任务")?.querySelector(".nav-task-source svg")).toBeTruthy();
+  expect(rowOf("没读过的任务")?.textContent).toContain("由新邮件触发");
+  // 槽位照留，任务名才对得齐；标记本身不出现。
+  expect(rowOf("正在看的任务")?.querySelector(".nav-task-source")).toBeTruthy();
+  expect(rowOf("正在看的任务")?.querySelector(".nav-task-source svg")).toBeNull();
+  expect(rowOf("正在看的任务")?.textContent).not.toContain("由新邮件触发");
 });

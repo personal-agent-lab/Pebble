@@ -14,7 +14,16 @@ export type Run = {
   finished_at: string | null;
 };
 
-export type Task = { task_id: string; goal: string; sdk_session_id: string | null; created_at: string };
+/** 会话是谁开的头：`mail` 是收到新邮件自动开始，`user` 是用户自己发起。 */
+export type TaskSource = "mail" | "user";
+
+export type Task = {
+  task_id: string;
+  goal: string;
+  source: TaskSource;
+  sdk_session_id: string | null;
+  created_at: string;
+};
 export type TaskDetail = Task & { latest_run: Run | null };
 export type OperationSummary = {
   operation_id: string;
