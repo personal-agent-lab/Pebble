@@ -25,6 +25,7 @@ from server.tools.calendar.service import CalendarEventStore
 from server.tools.calendar.tools import CalendarReader
 from server.tools.gmail.client import BaseGmailClient
 from server.tools.gmail.service import MailDraftStore
+from server.tools.personal_kb.service import KbStore
 from server.tools.registry import SideEffect, ToolDefinition, ToolRegistry, default_registry
 
 
@@ -56,6 +57,7 @@ class ToolDeps:
     tasks: SessionStore
     gmail: BaseGmailClient
     memory_store: MemoryStore | None = None
+    kb_store: KbStore | None = None
     calendar: CalendarReader | None = None
     calendar_events: CalendarEventStore | None = None
     confirmations: ConfirmationService | None = None

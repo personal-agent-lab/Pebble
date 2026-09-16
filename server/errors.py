@@ -14,7 +14,7 @@ class NotFoundError(Exception):
 
 
 class VersionConflictError(Exception):
-    def __init__(self, current_version: int):
+    def __init__(self, current_version: int | str):
         self.current_version = current_version
         super().__init__(f"当前版本为 {current_version}")
 
@@ -67,6 +67,18 @@ class MemoryStoreUnavailableError(Exception):
     """长期记忆文件或本地版本仓库当前不可用。"""
 
 
+class KbValidationError(Exception):
+    """资料库操作的字段或路径不合法；`errors` 为字段与原因列表。"""
+
+    def __init__(self, errors: list[dict[str, str]]):
+        self.errors = errors
+        super().__init__(str(errors))
+
+
+class KbStoreUnavailableError(Exception):
+    """资料文件或本地版本仓库当前不可用。"""
+
+
 def error_details(error: Exception) -> dict | None:
     """已知业务异常的名称与附带字段；其他异常返回 None，由调用方按未预期错误处理。"""
     if isinstance(error, DependencyUnavailableError):
@@ -103,4 +115,8 @@ def error_details(error: Exception) -> dict | None:
         }
     if isinstance(error, MemoryStoreUnavailableError):
         return {"error": "memory_store_unavailable", "message": str(error)}
+    if isinstance(error, KbValidationError):
+        return {"error": "invalid_kb", "message": "资料库操作未通过校验", "errors": error.errors}
+    if isinstance(error, KbStoreUnavailableError):
+        return {"error": "kb_store_unavailable", "message": str(error)}
     return None

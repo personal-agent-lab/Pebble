@@ -20,6 +20,7 @@ from server.memory.service import MemoryStore
 from server.sessions.service import SessionStore
 from server.tools.calendar.service import CalendarEventStore
 from server.tools.gmail.service import MailDraftStore
+from server.tools.personal_kb.service import KbStore
 
 
 def create_app(
@@ -101,6 +102,7 @@ def create_production_app() -> FastAPI:
     drafts = MailDraftStore()
     calendar_events = CalendarEventStore()
     memory_store = MemoryStore(settings.data_dir)
+    kb_store = KbStore(settings.data_dir)
     # 三处用途各自构造客户端：检测在自己的顺序轮询里，工具随模型并发调用，发送与核实同为
     # Confirmation 串行调用故共用一个；不共享其余 HTTP 连接，凭证缺失在这里就失败。
     tool_client = create_gmail_client(settings)
@@ -121,6 +123,7 @@ def create_production_app() -> FastAPI:
                 tasks=tasks,
                 gmail=tool_client,
                 memory_store=memory_store,
+                kb_store=kb_store,
                 calendar=calendar_client,
                 calendar_events=calendar_events,
                 confirmations=confirmations,

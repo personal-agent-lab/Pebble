@@ -864,6 +864,7 @@ dependencies = [
     { name = "icalendar" },
     { name = "pydantic-settings" },
     { name = "python-multipart" },
+    { name = "pyyaml" },
     { name = "qodercn-agent-sdk" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -886,6 +887,7 @@ requires-dist = [
     { name = "icalendar", specifier = ">=7.3,<8" },
     { name = "pydantic-settings", specifier = ">=2.15" },
     { name = "python-multipart", specifier = ">=0.0.20" },
+    { name = "pyyaml", specifier = ">=6" },
     { name = "qodercn-agent-sdk", specifier = "==1.0.14" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.52" },
 ]

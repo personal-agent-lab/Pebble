@@ -120,6 +120,20 @@ class ToolRegistry:
         return list(self._tools.values())
 
     @staticmethod
+    def _concrete_type(param_type: Any) -> Any:
+        """剥离 `Optional[X]` / `X | None`，返回真实类型 X。
+
+        可选的数组/对象参数若直接取 `get_origin` 会得到 UnionType，落到默认 string；
+        先解包出唯一的非 None 成员，才能映射成正确的 array/object。
+        """
+        args = get_args(param_type)
+        if args and type(None) in args:
+            non_null = [arg for arg in args if arg is not type(None)]
+            if len(non_null) == 1:
+                return non_null[0]
+        return param_type
+
+    @staticmethod
     def _generate_parameters_schema(fn: Callable[..., Any]) -> dict[str, Any]:
         """根据函数类型注解与默认值，自动生成轻量 JSON Schema 描述。
 
@@ -146,7 +160,7 @@ class ToolRegistry:
             if param_name in ("self", "cls") or param.kind is inspect.Parameter.KEYWORD_ONLY:
                 continue
 
-            param_type = type_hints.get(param_name, Any)
+            param_type = ToolRegistry._concrete_type(type_hints.get(param_name, Any))
             json_type = type_mapping.get(get_origin(param_type) or param_type, "string")
 
             prop: dict[str, Any] = {"type": json_type}
