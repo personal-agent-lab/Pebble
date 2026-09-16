@@ -185,6 +185,14 @@ class KbIndex:
             self._set(conn, META_SCHEMA, str(INDEX_SCHEMA))
             self._set(conn, META_TREE, tree)
 
+    def drop(self, path: str, *, tree: str) -> None:
+        """移除一份已不存在的资料的条目；调用方保证索引在 `tree` 之前是完整的。"""
+        with session(self.path) as conn, write(conn):
+            self._create(conn)
+            self._drop_path(conn, path)
+            self._set(conn, META_SCHEMA, str(INDEX_SCHEMA))
+            self._set(conn, META_TREE, tree)
+
     def _discard(self) -> None:
         for suffix in ("", "-wal", "-shm"):
             path = self.path.with_name(self.path.name + suffix)

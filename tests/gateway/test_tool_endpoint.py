@@ -279,3 +279,67 @@ def test_judge_endpoint_exposes_judgment_tools(settings):
 
     asyncio.run(scenario())
     assert store.snapshot()["user"]["entries"] == ["用户在研究长期记忆机制"]
+
+
+def test_kb_destructive_tools_emit_notices_and_trigger_turns_can_only_save(settings):
+    tools, tasks = build(settings)
+    task_id = tasks.create_task("整理资料")["task_id"]
+    message_tools = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
+    trigger_tools = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.NEW_MAIL])
+
+    async def call(visible, name, arguments):
+        server = ToolServer()
+        queued: asyncio.Queue = asyncio.Queue()
+        async with (
+            server.serve(visible, task_id=task_id, queued=queued) as path,
+            mcp_session(server, f"{BASE_URL}{path}") as session,
+        ):
+            result = await session.call_tool(name, arguments)
+        notices = []
+        while not queued.empty():
+            notices.append(queued.get_nowait()["text"])
+        return result, notices
+
+    async def scenario():
+        # 新邮件轮可以保存资料，但拿不到删除
+        saved, notices = await call(
+            trigger_tools, "kb_save", {"title": "邀请约定", "body": "周四下午三点讨论。"}
+        )
+        payload = tool_payload(saved)
+        assert notices == [f"已保存资料：邀请约定。位置：{payload['path']}"]
+        refused, _ = await call(
+            trigger_tools,
+            "kb_delete",
+            {"expected_version": payload["version"], "id": payload["id"]},
+        )
+        assert refused.isError is True
+        assert tool_payload(refused)["error"] == "unknown_tool"
+
+        moved, notices = await call(
+            message_tools,
+            "kb_move",
+            {"expected_version": payload["version"], "id": payload["id"], "new_path": "课程/约定"},
+        )
+        moved_payload = tool_payload(moved)
+        assert notices == [f"已移动资料：邀请约定。{payload['path']} → kb/课程/约定.md"]
+
+        deleted, notices = await call(
+            message_tools,
+            "kb_delete",
+            {"expected_version": moved_payload["version"], "id": payload["id"]},
+        )
+        assert tool_payload(deleted)["path"] == "kb/课程/约定.md"
+        assert notices == [
+            "已删除资料：邀请约定。原位置：kb/课程/约定.md。历史版本仍保留，可以恢复"
+        ]
+
+        restored, notices = await call(
+            message_tools, "kb_restore", {"id": payload["id"], "version": payload["version"]}
+        )
+        restored_payload = tool_payload(restored)
+        assert restored_payload["path"] == payload["path"]
+        assert notices == [
+            f"已恢复资料：邀请约定。位置：{payload['path']}。恢复自版本：{payload['version']}"
+        ]
+
+    asyncio.run(scenario())

@@ -2,8 +2,11 @@
 
 资料本体是 Markdown 文件，版本即 Git 提交，与 `memory/` 共用同一个数据目录仓库与同一把
 进程锁。检索走 `kb-index.sqlite3` 这份不进 Git 的派生索引：它只收录内容与 Git 版本一致的
-文件，写入后在同一把锁内增量更新，缺失、损坏或与 `kb/` 目录状态不一致时整体重建。文件
-变更自动跟随、移动/重命名/删除与管理界面留待后续阶段。
+文件，写入后在同一把锁内增量更新，缺失、损坏或与 `kb/` 目录状态不一致时整体重建。
+
+用户可以直接在文件系统里改资料：每次公开操作开始前先把 `kb/` 下未提交的改动纳入版本
+（`_intake`），移动按 frontmatter 的 `id` 识别为同一份资料并单独提交，保证历史能跟随路径
+变化。删除只移除文件，版本历史保留，可按历史版本恢复。
 """
 
 from __future__ import annotations
@@ -77,6 +80,7 @@ class KbStore:
 
         doc_id = f"{ID_PREFIX}{uuid4().hex}"
         with self._lock:
+            self._intake()
             rel = self._normalize_rel(path) if path else self._default_rel(title, doc_id)
             target = self.data_dir / rel
             if target.exists():
@@ -96,10 +100,8 @@ class KbStore:
                 if isinstance(error, KbStoreUnavailableError):
                     raise
                 raise KbStoreUnavailableError("资料保存失败，已撤销") from error
-            index_status = self._sync_index(rel, tree_before)
-            return self._result(
-                doc_id, rel, meta, commit, rendered, index_status=index_status
-            )
+            index_status = self._sync_index([rel], tree_before)
+            return self._result(doc_id, rel, meta, commit, rendered, index_status=index_status)
 
     def read(
         self,
@@ -114,12 +116,20 @@ class KbStore:
         给 `ref` 时按引用里的 commit、路径与行号读取命中片段，而不是读整篇资料。
         """
         with self._lock:
+            self._intake()
             if ref is not None:
                 return self._read_ref(ref)
-            rel = self._locate(path, doc_id)
-            raw = self._content_at(rel, version)
+            if version:
+                commit = self._full_commit(version)
+                if commit is None:
+                    raise NotFoundError(f"{path or doc_id}@{version}")
+                rel = self._path_at(self._resolve(path, doc_id)[0], commit)
+                raw = self._content_at(rel, commit)
+            else:
+                rel = self._locate(path, doc_id)
+                raw = self._content_at(rel, None)
+                commit = self._file_commit(rel)
             meta, body = self._parse(raw)
-            commit = self._full_commit(version) if version else self._file_commit(rel)
             doc_id = meta.get("id") or doc_id
             lines = self._body_lines(meta.get("title") or "", raw)
             return {
@@ -155,9 +165,10 @@ class KbStore:
                 ]
             )
         with self._lock:
+            self._intake()
             try:
                 tree = self._kb_tree()
-                if not self._index.is_current(tree) or self._has_uncommitted_changes():
+                if not self._index.is_current(tree):
                     self._index.rebuild(tree, self._documents())
             except Exception as error:
                 # 索引跟不上资料时宁可说不可检索，也不拿可能过期的旧索引回答。
@@ -165,10 +176,16 @@ class KbStore:
             hits = self._index.search(terms=terms, tag=tag, max_results=limit)
         return {"query": query, "results": [self._hit_payload(hit) for hit in hits]}
 
-    def list(self, *, directory: str | None = None) -> dict:
-        """列出资料及其当前位置；用于尚不知道 path/id 时发现资料。"""
+    def list(self, *, directory: str | None = None, deleted: bool = False) -> dict:
+        """列出资料及其当前位置；用于尚不知道 path/id 时发现资料。
+
+        `deleted` 为真时改为列出已删除（且没有被恢复）的资料，附删除前最后的版本，供恢复。
+        """
         with self._lock:
+            self._intake()
             prefix = self._normalize_directory(directory)
+            if deleted:
+                return {"directory": prefix, "deleted": True, "documents": self._deleted(prefix)}
             documents = []
             for file in sorted((self.data_dir / prefix).rglob("*.md")):
                 try:
@@ -188,24 +205,22 @@ class KbStore:
             return {"directory": prefix, "documents": documents}
 
     def history(self, *, path: str | None = None, doc_id: str | None = None) -> dict:
-        """列出一份资料的已有版本，供 `read(version=...)` 读取历史原文。"""
+        """列出一份资料的已有版本（跟随移动，含已删除资料），供读取或恢复历史原文。"""
         with self._lock:
-            rel = self._locate(path, doc_id)
-            meta, _ = self._parse(self._content_at(rel, None))
-            result = self._git(
-                "log", "--format=%H%x00%cI%x00%s", "--", rel
-            ).stdout.splitlines()
-            versions = []
-            for line in result:
-                commit, changed_at, summary = line.split("\0", 2)
-                versions.append(
-                    {"version": commit, "changed_at": changed_at, "summary": summary}
-                )
+            self._intake()
+            rel, current = self._resolve(path, doc_id)
+            entries = self._history_entries(rel, doc_id)
+            exists = current is not None
+            latest = next((entry for entry in entries if not entry["deleted"]), None)
+            meta: dict = {}
+            if latest is not None:
+                meta, _ = self._parse(self._content_at(latest["path"], latest["version"]))
             return {
                 "id": meta.get("id") or doc_id,
                 "path": rel,
                 "title": meta.get("title"),
-                "versions": versions,
+                "deleted": not exists,
+                "versions": entries,
             }
 
     def update(
@@ -220,6 +235,7 @@ class KbStore:
     ) -> dict:
         """修改已有资料而非新建副本；版本不匹配则拒绝，不静默覆盖。"""
         with self._lock:
+            self._intake()
             rel = self._locate(path, doc_id)
             current = self._file_commit(rel)
             if expected_version != current:
@@ -252,7 +268,7 @@ class KbStore:
                 if isinstance(error, KbStoreUnavailableError):
                     raise
                 raise KbStoreUnavailableError("资料修改失败，文件已恢复") from error
-            index_status = self._sync_index(rel, tree_before)
+            index_status = self._sync_index([rel], tree_before)
             return self._result(
                 meta.get("id") or doc_id,
                 rel,
@@ -262,6 +278,140 @@ class KbStore:
                 previous_version=current,
                 index_status=index_status,
             )
+
+    def delete(
+        self,
+        *,
+        expected_version: str,
+        path: str | None = None,
+        doc_id: str | None = None,
+    ) -> dict:
+        """删除资料文件并提交；历史版本保留，可用 `restore` 找回。"""
+        with self._lock:
+            self._intake()
+            rel = self._locate(path, doc_id)
+            current = self._file_commit(rel)
+            if expected_version != current:
+                raise VersionConflictError(current)
+            meta, _ = self._parse(self._content_at(rel, None))
+            tree_before = self._kb_tree()
+            title = meta.get("title") or rel
+            self._git("rm", "--quiet", "--", rel)
+            try:
+                self._git("commit", "--quiet", "-m", f"[Kb] Delete {title}", "--", rel)
+            except KbStoreUnavailableError:
+                self._git_raw("reset", "--quiet", "HEAD", "--", rel)
+                self._git_raw("checkout", "--", rel)
+                raise
+            index_status = self._sync_index([rel], tree_before)
+            return {
+                "id": meta.get("id") or doc_id,
+                "path": rel,
+                "title": meta.get("title"),
+                "previous_version": current,
+                "version": self._head(),
+                "index_status": index_status,
+            }
+
+    def move(
+        self,
+        *,
+        expected_version: str,
+        new_path: str,
+        path: str | None = None,
+        doc_id: str | None = None,
+    ) -> dict:
+        """移动或重命名资料；内容与 `id` 不变，历史随路径跟随。"""
+        with self._lock:
+            self._intake()
+            rel = self._locate(path, doc_id)
+            current = self._file_commit(rel)
+            if expected_version != current:
+                raise VersionConflictError(current)
+            new_rel = self._normalize_rel(new_path)
+            if new_rel == rel:
+                raise KbValidationError([{"field": "new_path", "message": "新位置与当前位置相同"}])
+            target = self.data_dir / new_rel
+            if target.exists():
+                raise KbValidationError([{"field": "new_path", "message": "目标位置已有资料"}])
+            meta, _ = self._parse(self._content_at(rel, None))
+            tree_before = self._kb_tree()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            self._git("mv", "--", rel, new_rel)
+            title = meta.get("title") or new_rel
+            try:
+                self._git(
+                    "commit", "--quiet", "-m", f"[Kb] Move {title}", "--", rel, new_rel
+                )
+            except KbStoreUnavailableError:
+                self._git_raw("mv", "--", new_rel, rel)
+                raise
+            index_status = self._sync_index([rel, new_rel], tree_before)
+            return {
+                "id": meta.get("id") or doc_id,
+                "title": meta.get("title"),
+                "previous_path": rel,
+                "path": new_rel,
+                "previous_version": current,
+                "version": self._head(),
+                "index_status": index_status,
+            }
+
+    def restore(
+        self, *, version: str, path: str | None = None, doc_id: str | None = None
+    ) -> dict:
+        """把资料恢复为某个历史版本；已删除的资料在该版本所在路径重建。恢复产生新提交。"""
+        with self._lock:
+            self._intake()
+            rel, current = self._resolve(path, doc_id)
+            commit = self._full_commit(version)
+            entries = self._history_entries(rel, doc_id)
+            entry = next((item for item in entries if item["version"] == commit), None)
+            if commit is None or entry is None:
+                raise NotFoundError(f"{path or doc_id}@{version}")
+            if entry["deleted"]:
+                raise KbValidationError(
+                    [{"field": "version", "message": "该版本是删除记录，请选择删除之前的版本"}]
+                )
+            raw = self._content_at(entry["path"], commit)
+            meta, body = self._parse(raw)
+            exists = current is not None
+            target_rel = rel if exists else entry["path"]
+            target = self.data_dir / target_rel
+            if not exists and target.exists():
+                raise KbValidationError(
+                    [{"field": "path", "message": f"原位置 {target_rel} 已被其他资料占用"}]
+                )
+            previous_version = self._file_commit(rel) if exists else None
+            previous = target.read_bytes() if exists else None
+            meta["updated_at"] = timestamp()
+            tree_before = self._kb_tree()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            title = meta.get("title") or target_rel
+            try:
+                rendered = self._render(self._order(meta), body)
+                self._atomic_write(target, rendered)
+                new_commit = self._commit(target_rel, f"[Kb] Restore {title}")
+            except Exception as error:
+                if previous is not None:
+                    self._restore(target, previous)
+                else:
+                    self._discard_new(target, target_rel)
+                if isinstance(error, KbStoreUnavailableError):
+                    raise
+                raise KbStoreUnavailableError("资料恢复失败，已撤销") from error
+            index_status = self._sync_index([target_rel], tree_before)
+            result = self._result(
+                meta.get("id") or doc_id,
+                target_rel,
+                meta,
+                new_commit,
+                rendered,
+                previous_version=previous_version,
+                index_status=index_status,
+            )
+            result["restored_from"] = commit
+            return result
 
     # ------------------------------------------------------------------ 初始化
 
@@ -289,18 +439,21 @@ class KbStore:
 
     # ------------------------------------------------------------------ 索引同步
 
-    def _sync_index(self, rel: str, tree_before: str) -> str:
-        """写入后把索引对齐到当前版本：只替换这一份资料，索引本来就不完整时整体重建。
+    def _sync_index(self, paths: list[str], tree_before: str) -> str:
+        """写入后把索引对齐到当前版本：只替换受影响的资料，索引本来就不完整时整体重建。
 
         索引是派生数据：失败不回滚已提交的资料，返回 stale 由下一次检索重建。
         """
         try:
             tree = self._kb_tree()
-            if self._index.is_current(tree_before) and not self._has_uncommitted_changes():
-                document = self._document(rel)
-                if document is not None:
-                    self._index.replace(document, tree=tree)
-                    return "ok"
+            if self._index.is_current(tree_before):
+                for rel in paths:
+                    document = self._document(rel)
+                    if document is not None:
+                        self._index.replace(document, tree=tree)
+                    else:
+                        self._index.drop(rel, tree=tree)
+                return "ok"
             self._index.rebuild(tree, self._documents())
             return "ok"
         except Exception:
@@ -341,14 +494,171 @@ class KbStore:
         result = self._git_raw("rev-parse", "HEAD:kb")
         return result.stdout.strip() if result.returncode == 0 else ""
 
-    def _has_uncommitted_changes(self) -> bool:
-        """`kb/` 下是否存在未提交的磁盘变更（手动编辑、删除、新增未跟踪文件）。
+    # ------------------------------------------------------------------ 用户改动的跟随
 
-        Git tree 只反映已提交状态；手动改盘不会改变 tree，增量索引更新会漏掉这些文件，
-        旧分节留在索引里。用 `git status --porcelain` 在一条命令内检测全部偏离。
+    def _intake(self) -> None:
+        """把用户在 `kb/` 下直接做的改动纳入版本：补资料标识、识别移动，再提交。
+
+        移动（旧路径删除、新路径出现且 `id` 相同）先以原内容单独提交一次，使 Git 的
+        重命名追踪不受同时发生的内容修改影响；其余改动随后作为一次“用户编辑”提交。
         """
-        result = self._git_raw("status", "--porcelain", "--", "kb")
-        return bool(result.stdout.strip())
+        status = self._git_raw("status", "--porcelain", "--untracked-files=all", "--", "kb")
+        if status.returncode != 0:
+            raise KbStoreUnavailableError("无法检查资料库改动")
+        if not status.stdout.strip():
+            return
+        try:
+            self._git("add", "--all", "--", "kb")
+            changes = self._staged_changes()
+            known = self._head_ids()
+            deleted = {rel: known[rel] for rel, kind in changes if kind == "D" and rel in known}
+            present_ids = {
+                doc_id for rel, doc_id in known.items() if (self.data_dir / rel).exists()
+            }
+            moves = []
+            for rel, kind in changes:
+                if kind == "D" or not rel.endswith(".md"):
+                    continue
+                doc_id = self._ensure_identity(rel, kind == "A", present_ids)
+                if kind == "A" and doc_id is not None:
+                    origin = next(
+                        (old for old, old_id in deleted.items() if old_id == doc_id), None
+                    )
+                    if origin is not None:
+                        moves.append((origin, rel))
+                        del deleted[origin]
+            self._git("reset", "--quiet", "--", "kb")
+            if moves:
+                for origin, rel in moves:
+                    blob = self._git("rev-parse", f"HEAD:{origin}").stdout.strip()
+                    self._git("rm", "--cached", "--quiet", "--", origin)
+                    self._git("update-index", "--add", "--cacheinfo", f"100644,{blob},{rel}")
+                self._git("commit", "--quiet", "-m", f"[Kb] User move {len(moves)} file(s)")
+            self._git("add", "--all", "--", "kb")
+            if self._git_raw("diff", "--cached", "--quiet", "--", "kb").returncode != 0:
+                count = len(self._staged_changes())
+                self._git("commit", "--quiet", "-m", f"[Kb] User edit {count} file(s)")
+        except KbStoreUnavailableError:
+            self._git_raw("reset", "--quiet", "--", "kb")
+            raise
+        except (OSError, UnicodeError) as error:
+            self._git_raw("reset", "--quiet", "--", "kb")
+            raise KbStoreUnavailableError("无法纳入资料库改动") from error
+
+    def _staged_changes(self) -> list[tuple[str, str]]:
+        """暂存区里 `kb/` 的逐文件改动（A/M/D），不合并重命名。"""
+        result = self._git(
+            "diff", "--cached", "--name-status", "--no-renames", "-z", "--", "kb"
+        ).stdout
+        parts = [part for part in result.split("\0") if part]
+        return [(parts[index + 1], parts[index][0]) for index in range(0, len(parts) - 1, 2)]
+
+    def _head_ids(self) -> dict[str, str]:
+        """已提交版本里每份资料的 `id`，用于识别移动与复制。"""
+        listing = self._git_raw("ls-tree", "-r", "--name-only", "-z", "HEAD", "--", "kb")
+        ids = {}
+        for rel in (item for item in listing.stdout.split("\0") if item.endswith(".md")):
+            shown = self._git_raw("show", f"HEAD:{rel}")
+            try:
+                meta, _ = self._parse(shown.stdout)
+            except KbStoreUnavailableError:
+                continue
+            if isinstance(meta.get("id"), str):
+                ids[rel] = meta["id"]
+        return ids
+
+    def _ensure_identity(self, rel: str, added: bool, present_ids: set[str]) -> str | None:
+        """给缺少标识的资料补上 frontmatter；复制出来的文件换一个新 `id`。正文不改动。"""
+        target = self.data_dir / rel
+        try:
+            raw = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return None
+        normalized = raw.replace("\r\n", "\n")
+        match = FRONTMATTER_RE.match(normalized)
+        try:
+            meta = (yaml.safe_load(match.group(1)) or {}) if match else {}
+        except yaml.YAMLError:
+            return None
+        if not isinstance(meta, dict):
+            return None
+        doc_id = meta.get("id")
+        copied = added and isinstance(doc_id, str) and doc_id in present_ids
+        if isinstance(doc_id, str) and doc_id and not copied:
+            return doc_id
+        now = timestamp()
+        meta["id"] = f"{ID_PREFIX}{uuid4().hex}"
+        meta.setdefault("title", self._title_from(normalized, target.stem))
+        meta.setdefault("created_at", now)
+        meta.setdefault("updated_at", now)
+        front = yaml.safe_dump(
+            self._order(meta), allow_unicode=True, sort_keys=False, default_flow_style=False
+        ).strip()
+        body = match.group(2) if match else normalized
+        separator = "" if match else "\n"
+        self._atomic_write(target, f"---\n{front}\n---\n{separator}{body}")
+        return meta["id"]
+
+    @staticmethod
+    def _title_from(text: str, fallback: str) -> str:
+        for line in text.split("\n"):
+            if line.startswith("# "):
+                return line[2:].strip() or fallback
+        return fallback
+
+    def _history_entries(self, rel: str, doc_id: str | None = None) -> list[dict]:
+        """一份资料从新到旧的版本：跟随重命名，删除记录标明 `deleted`。
+
+        同一路径先后放过不同资料时，给出 `doc_id` 只保留这份资料自己的版本。
+        """
+        result = self._git(
+            "-c",
+            "core.quotepath=false",
+            "log",
+            "--follow",
+            "--name-status",
+            "--format=%x01%H%x00%cI%x00%s",
+            "--",
+            rel,
+        ).stdout
+        entries = []
+        for block in result.split("\x01")[1:]:
+            header, _, rest = block.partition("\n")
+            commit, changed_at, summary = header.split("\0", 2)
+            status_line = next((line for line in rest.splitlines() if line.strip()), "")
+            fields = status_line.split("\t")
+            kind = fields[0][:1] if fields else ""
+            entry_path = fields[-1] if len(fields) > 1 else rel
+            if doc_id is not None:
+                probe = f"{commit}^:{entry_path}" if kind == "D" else f"{commit}:{entry_path}"
+                try:
+                    meta, _ = self._parse(self._git_raw("show", probe).stdout)
+                except KbStoreUnavailableError:
+                    continue
+                if meta.get("id") != doc_id:
+                    continue
+            entries.append(
+                {
+                    "version": commit,
+                    "changed_at": changed_at,
+                    "summary": summary,
+                    "path": entry_path,
+                    "deleted": kind == "D",
+                }
+            )
+        return entries
+
+    def _path_at(self, rel: str, commit: str) -> str:
+        """资料在某个版本时所在的路径：取该版本及之前最近一次改动时的路径。"""
+        for entry in self._history_entries(rel):
+            reachable = self._git_raw(
+                "merge-base", "--is-ancestor", entry["version"], commit
+            ).returncode
+            if reachable == 0:
+                if entry["deleted"]:
+                    break
+                return entry["path"]
+        raise NotFoundError(f"{rel}@{commit}")
 
     # ------------------------------------------------------------------ 路径与定位
 
@@ -399,6 +709,107 @@ class KbStore:
                 raise NotFoundError(doc_id)
             return rel
         raise KbValidationError([{"field": "path", "message": "必须提供 path 或 id"}])
+
+    def _resolve(self, path: str | None, doc_id: str | None) -> tuple[str, str | None]:
+        """定位资料，包括已经删除的：返回（历史所在路径, 当前路径或 None）。
+
+        按 id 定位时，只有文件里的 id 相同才算这份资料仍存在；原位置被别的资料占用不算。
+        """
+        if path:
+            rel = self._normalize_rel(path)
+            if (self.data_dir / rel).exists():
+                return rel, rel
+            if self._git_raw("log", "-1", "--format=%H", "--", rel).stdout.strip():
+                return rel, None
+            raise NotFoundError(rel)
+        if doc_id:
+            current = self._find_by_id(doc_id)
+            if current is not None:
+                return current, current
+            deleted = self._find_deleted_by_id(doc_id)
+            if deleted is None:
+                raise NotFoundError(doc_id)
+            return deleted, None
+        raise KbValidationError([{"field": "path", "message": "必须提供 path 或 id"}])
+
+    def _deleted(self, prefix: str) -> list[dict]:
+        """已删除且当前不存在的资料，按删除时间从新到旧，每份资料只列最近一次删除。"""
+        present = {
+            meta.get("id")
+            for meta in (self._meta_of(file) for file in self.kb_dir.rglob("*.md"))
+            if meta
+        }
+        result = self._git_raw(
+            "-c",
+            "core.quotepath=false",
+            "log",
+            "--diff-filter=D",
+            "--name-only",
+            "--format=%x01%H%x00%cI",
+            "--",
+            prefix,
+        ).stdout
+        documents = []
+        seen: set[str] = set()
+        for block in result.split("\x01")[1:]:
+            header, _, rest = block.partition("\n")
+            commit, deleted_at = header.split("\0", 1)
+            for rel in (line.strip() for line in rest.splitlines()):
+                if not rel.endswith(".md"):
+                    continue
+                try:
+                    meta, _ = self._parse(self._git_raw("show", f"{commit}^:{rel}").stdout)
+                except KbStoreUnavailableError:
+                    continue
+                doc_id = meta.get("id")
+                if not isinstance(doc_id, str) or doc_id in present or doc_id in seen:
+                    continue
+                seen.add(doc_id)
+                last = self._git("log", "-1", "--format=%H", f"{commit}^", "--", rel).stdout
+                documents.append(
+                    {
+                        "id": doc_id,
+                        "path": rel,
+                        "title": meta.get("title"),
+                        "tags": meta.get("tags"),
+                        "deleted_at": deleted_at.strip(),
+                        "version": last.strip(),
+                    }
+                )
+        return documents
+
+    def _meta_of(self, file: Path) -> dict:
+        try:
+            meta, _ = self._parse(file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, KbStoreUnavailableError):
+            return {}
+        return meta
+
+    def _find_deleted_by_id(self, doc_id: str) -> str | None:
+        """在删除记录里按 `id` 找资料最后所在的路径，取最近一次删除。"""
+        result = self._git_raw(
+            "-c",
+            "core.quotepath=false",
+            "log",
+            "--diff-filter=D",
+            "--name-only",
+            "--format=%x01%H",
+            "--",
+            "kb",
+        ).stdout
+        for block in result.split("\x01")[1:]:
+            commit, _, rest = block.partition("\n")
+            for rel in (line.strip() for line in rest.splitlines()):
+                if not rel.endswith(".md"):
+                    continue
+                shown = self._git_raw("show", f"{commit.strip()}^:{rel}")
+                try:
+                    meta, _ = self._parse(shown.stdout)
+                except KbStoreUnavailableError:
+                    continue
+                if meta.get("id") == doc_id:
+                    return rel
+        return None
 
     def _find_by_id(self, doc_id: str) -> str | None:
         for file in sorted(self.kb_dir.rglob("*.md")):

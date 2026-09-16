@@ -186,22 +186,21 @@ def test_index_is_rebuilt_when_missing_corrupted_or_out_of_sync(settings):
     assert _meta(index_file, "tree") == _tree(settings.data_dir)
 
 
-def test_user_edits_without_a_commit_are_not_indexed(settings):
+def test_user_edits_are_taken_into_versions_before_search(settings):
     kb = store(settings)
     saved = kb.save(title=TITLE, body=BODY)
     path = settings.data_dir / saved["path"]
-    path.write_text(path.read_text(encoding="utf-8") + "\n尚未提交的补充说明。\n", encoding="utf-8")
+    path.write_text(path.read_text(encoding="utf-8") + "\n用户补充的说明。\n", encoding="utf-8")
     kb.save(title="另一份", body="## 分节\n\n与上面无关的正文。")
 
-    # 未纳入版本的内容不冒充已同步资料，也不影响其他资料的检索
-    assert kb.search(query="尚未提交")["results"] == []
+    # 用户改动在下一次操作前纳入版本，不需要手动提交即可检索
+    assert kb.search(query="用户补充")["results"][0]["path"] == saved["path"]
     assert kb.search(query="另一份")["results"]
 
-    # 重建时同样只收录与 Git 版本一致的文件
+    # 重建时同样收录已纳入版本的改动
     (settings.data_dir / "kb-index.sqlite3").unlink()
-    assert kb.search(query="尚未提交")["results"] == []
-    assert kb.search(query="CORAL-7421")["results"] == []
-    assert kb.search(query="另一份")["results"]
+    assert kb.search(query="用户补充")["results"]
+    assert kb.search(query="CORAL-7421")["results"]
 
 
 def test_rebuild_failure_refuses_to_answer_from_the_stale_index(settings, monkeypatch):

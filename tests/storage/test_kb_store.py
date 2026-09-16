@@ -245,29 +245,21 @@ def test_kb_tools_are_registered_with_correct_schema_and_turn_exposure(settings)
 
     store = KbStore(settings.data_dir)
     tools = build_tools(ToolDeps(drafts=None, tasks=None, gmail=None, kb_store=store))
-    kb_names = {t.name for t in tools if t.name.startswith("kb_")}
-    assert kb_names == {"kb_save", "kb_list", "kb_read", "kb_update", "kb_history", "kb_search"}
-
-    on_message = {
-        t.name
-        for t in exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
-        if t.name.startswith("kb_")
+    visible = {
+        kind: {
+            t.name
+            for t in exposed_tools(tools, allowed=ALLOWED_EFFECTS[kind])
+            if t.name.startswith("kb_")
+        }
+        for kind in TurnKind
     }
-    on_new_mail = {
-        t.name
-        for t in exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.NEW_MAIL])
-        if t.name.startswith("kb_")
-    }
-    # 写工具只在用户发起的轮次可见，触发轮与结果回传轮只读
-    assert on_message == {
-        "kb_save",
-        "kb_list",
-        "kb_read",
-        "kb_update",
-        "kb_history",
-        "kb_search",
-    }
-    assert on_new_mail == {"kb_list", "kb_read", "kb_history", "kb_search"}
+    readonly = {"kb_list", "kb_read", "kb_history", "kb_search"}
+    everyday = readonly | {"kb_save", "kb_update"}
+    destructive = {"kb_delete", "kb_move", "kb_restore"}
+    # 删除、移动与恢复只在用户亲自发起的轮次可见；新建与修改在触发轮与回传轮同样可用
+    assert visible[TurnKind.MESSAGE] == everyday | destructive
+    assert visible[TurnKind.NEW_MAIL] == everyday
+    assert visible[TurnKind.EXECUTION_RESULT] == everyday
 
 
 def test_kb_tools_are_skipped_when_store_unavailable(settings):
@@ -281,7 +273,7 @@ def _manually_edit(path, old, new):
     )
 
 
-def test_manual_edit_then_save_another_does_not_return_stale_hits(settings):
+def test_manual_edit_then_save_another_searches_the_edited_content(settings):
     store = KbStore(settings.data_dir)
     store.save(title="alpha", body="## sec\nCORAL-7421")
     target = next((settings.data_dir / "kb" / "inbox").glob("*.md"))
@@ -290,7 +282,7 @@ def test_manual_edit_then_save_another_does_not_return_stale_hits(settings):
     store.save(title="beta", body="无关正文。")
 
     assert not store.search(query="CORAL-7421")["results"]
-    assert not store.search(query="REVISED-9000")["results"]
+    assert store.search(query="REVISED-9000")["results"]
 
 
 def test_manual_edit_then_search_does_not_return_stale_hits(settings):
@@ -300,3 +292,4 @@ def test_manual_edit_then_search_does_not_return_stale_hits(settings):
     _manually_edit(target, "CORAL-7421", "REVISED-9000")
 
     assert not store.search(query="CORAL-7421")["results"]
+    assert store.search(query="REVISED-9000")["results"]

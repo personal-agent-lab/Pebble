@@ -4,7 +4,8 @@
 
 - 装配：工具函数上的仅关键字参数按名字绑定到 `ToolDeps` 的字段，绑定在装配期完成，
   缺依赖或名字对不上直接报错，不推迟到模型调用时；
-- 范围：按本轮允许的副作用筛选。新邮件轮只分析，写工具只出现在后续轮次。
+- 范围：按本轮允许的副作用筛选。新邮件轮除只读外只开放声明为各轮可用的本地写，
+  其余写工具只出现在后续轮次。
 
 接入新服务（日历、知识库等）时只需在 `ToolDeps` 加字段，工具函数声明同名仅关键字参数，
 装配与筛选逻辑不用改。
@@ -38,14 +39,23 @@ class TurnKind(StrEnum):
 
 
 # 每类轮次允许模型看到并调用的副作用集合。EXTERNAL_WRITE 永不出现，由 Confirmation 在用户
-# 确认最终版本后调用。DIRECT_EXTERNAL_WRITE 只出现在用户亲自发起的轮次：触发轮与结果回传轮
-# 的输入都来自系统而非用户，拿不到直接外部写，因此外部内容中的指令无法驱动写入。
+# 确认最终版本后调用。DIRECT_EXTERNAL_WRITE 与 LOCAL_WRITE_USER_TURN 只出现在用户亲自发起的
+# 轮次：触发轮与结果回传轮的输入都来自系统而非用户，外部内容中的指令无法驱动外部写入或删除。
+# 触发轮只额外开放 LOCAL_WRITE_ALL_TURNS，其写入有提示、有版本、可恢复。
 ALLOWED_EFFECTS: dict[TurnKind, frozenset[SideEffect]] = {
-    TurnKind.NEW_MAIL: frozenset({SideEffect.READONLY}),
+    TurnKind.NEW_MAIL: frozenset({SideEffect.READONLY, SideEffect.LOCAL_WRITE_ALL_TURNS}),
     TurnKind.MESSAGE: frozenset(
-        {SideEffect.READONLY, SideEffect.LOCAL_WRITE, SideEffect.DIRECT_EXTERNAL_WRITE}
+        {
+            SideEffect.READONLY,
+            SideEffect.LOCAL_WRITE,
+            SideEffect.LOCAL_WRITE_ALL_TURNS,
+            SideEffect.LOCAL_WRITE_USER_TURN,
+            SideEffect.DIRECT_EXTERNAL_WRITE,
+        }
     ),
-    TurnKind.EXECUTION_RESULT: frozenset({SideEffect.READONLY, SideEffect.LOCAL_WRITE}),
+    TurnKind.EXECUTION_RESULT: frozenset(
+        {SideEffect.READONLY, SideEffect.LOCAL_WRITE, SideEffect.LOCAL_WRITE_ALL_TURNS}
+    ),
 }
 
 

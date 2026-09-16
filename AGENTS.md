@@ -9,7 +9,7 @@
 - `docs/v1-spec.md`：需求范围、产品行为、验收标准。内容冲突时以此为准。
 - `docs/v1-design.md`：组件与代码结构（§2）、交付阶段（§7）、验证要求（§9）、当前实现与已知偏差（§10）。
 - `docs/memory-spec.md`、`docs/kb-spec.md`：记忆与个人资料库的功能规格。
-- `docs/contracts/`：按域的接口字段与语义。`mail.md`、`calendar.md` 已实现；`personal-kb.md` Phase 1–2 已实现、Phase 3–5 是约定；`skills.md` 中 Memory 已实现、Skills 是约定。
+- `docs/contracts/`：按域的接口字段与语义。`mail.md`、`calendar.md` 已实现；`personal-kb.md` Phase 1–3 已实现、Phase 4–5 是约定；`skills.md` 中 Memory 已实现、Skills 是约定。
 - `README.md`：启动与检查命令、远程访问现状。
 
 涉及功能、架构或执行流程的工作先读相关约定。用户要求与现有约定冲突时先明确差异，不自行改变产品行为。

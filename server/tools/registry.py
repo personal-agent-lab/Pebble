@@ -24,7 +24,11 @@ class SideEffect(StrEnum):
     """工具副作用声明，程序强制约束，模型不可篡改。"""
 
     READONLY = "readonly"  # 只读查询，不改变任何系统状态
-    LOCAL_WRITE = "local_write"  # 本地写入（如草稿生成、KB 保存）
+    LOCAL_WRITE = "local_write"  # 本地写入：用户对话轮与执行结果回传轮可见（如草稿生成）
+    # 本地写入，触发轮同样可见：结果有提示、有版本、可恢复（如资料的新建与修改）。
+    LOCAL_WRITE_ALL_TURNS = "local_write_all_turns"
+    # 本地写入，只在用户亲自发起的对话轮可见（如资料的删除、移动与恢复）。
+    LOCAL_WRITE_USER_TURN = "local_write_user_turn"
     # 外部写入，按轮次暴露给模型；可见范围由 `agent/toolset.py` 的 ALLOWED_EFFECTS 决定。
     DIRECT_EXTERNAL_WRITE = "direct_external_write"
     # 外部写入，严禁注册给模型；只由 Confirmation 在用户确认最终版本后调用。
