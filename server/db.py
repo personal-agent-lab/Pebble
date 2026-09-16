@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -233,6 +233,16 @@ SCHEMA_V11 = (
 # 撤销回答来源：产品不再向用户展示资料来源，来源记录表随之删除。
 SCHEMA_V12 = ("DROP TABLE task_run_sources",)
 
+# 历史对话检索：时间线条目的全文索引，是可从时间线重建的派生数据。检索前按需增量同步——
+# 已结束轮次里还没进索引的条目补进来，内容或执行状态变了的邮件草稿重写——不挂写入钩子。
+# 不设外键：删除任务时按任务清理，不受子表删除顺序约束。
+SCHEMA_V13 = (
+    "CREATE TABLE history_items (item_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, "
+    "fts_rowid INTEGER NOT NULL UNIQUE, op_version INTEGER, op_status TEXT)",
+    "CREATE INDEX history_items_task ON history_items(task_id)",
+    "CREATE VIRTUAL TABLE history_fts USING fts5(body, tokenize='trigram')",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -246,6 +256,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     10: SCHEMA_V10,
     11: SCHEMA_V11,
     12: SCHEMA_V12,
+    13: SCHEMA_V13,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

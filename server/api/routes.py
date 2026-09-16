@@ -13,6 +13,7 @@ from server.config import get_settings
 from server.db import schema_version, session
 from server.errors import DependencyUnavailableError
 from server.gateway.runtime import GatewayRuntime
+from server.sessions.history import HistoryStore
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
 from server.tools.personal_kb.service import KbStore
@@ -54,6 +55,13 @@ Confirmations = Annotated[ConfirmationService, Depends(get_confirmations)]
 
 
 Kb = Annotated[KbStore, Depends(get_kb)]
+
+
+def get_history(request: Request) -> HistoryStore:
+    return request.app.state.history
+
+
+History = Annotated[HistoryStore, Depends(get_history)]
 
 
 router = APIRouter()
@@ -233,6 +241,21 @@ def verify(operation_id: str, confirmations: Confirmations, agent: Agent) -> dic
     view = confirmations.verify_pending(operation_id)
     agent.kick()
     return view
+
+
+# ---------- 历史对话检索 ----------
+
+
+@router.get("/history/search", tags=["history"])
+def history_search(
+    history: History,
+    q: str,
+    after: str | None = None,
+    before: str | None = None,
+    limit: int = 20,
+) -> dict:
+    """页面上的历史搜索：与 Agent 的 history_search 同一套检索，不排除任何任务。"""
+    return history.search(q, after=after, before=before, max_results=limit)
 
 
 # ---------- 资料管理 ----------

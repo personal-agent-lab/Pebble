@@ -21,6 +21,7 @@ from inspect import Parameter, signature
 
 from server.approval.service import ConfirmationService
 from server.memory.service import MemoryStore
+from server.sessions.history import HistoryStore
 from server.sessions.service import SessionStore
 from server.tools.calendar.service import CalendarEventStore
 from server.tools.calendar.tools import CalendarReader
@@ -68,6 +69,7 @@ class ToolDeps:
     gmail: BaseGmailClient
     memory_store: MemoryStore | None = None
     kb_store: KbStore | None = None
+    history: HistoryStore | None = None
     calendar: CalendarReader | None = None
     calendar_events: CalendarEventStore | None = None
     confirmations: ConfirmationService | None = None

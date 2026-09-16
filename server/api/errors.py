@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from server.errors import (
     DependencyUnavailableError,
     DraftValidationError,
+    HistoryValidationError,
     KbIndexUnavailableError,
     KbStoreUnavailableError,
     KbValidationError,
@@ -31,6 +32,7 @@ STATUS_CODES: tuple[tuple[type[Exception], int], ...] = (
     (SessionConflictError, 409),
     (TaskActiveError, 409),
     (DraftValidationError, 422),
+    (HistoryValidationError, 422),
     (KbValidationError, 422),
     (KbStoreUnavailableError, 503),
     (KbIndexUnavailableError, 503),

@@ -67,6 +67,14 @@ class MemoryStoreUnavailableError(Exception):
     """长期记忆文件或本地版本仓库当前不可用。"""
 
 
+class HistoryValidationError(Exception):
+    """历史检索的输入不合法；`errors` 为字段与原因列表。"""
+
+    def __init__(self, errors: list[dict[str, str]]):
+        self.errors = errors
+        super().__init__(str(errors))
+
+
 class KbValidationError(Exception):
     """资料库操作的字段或路径不合法；`errors` 为字段与原因列表。"""
 
@@ -119,6 +127,8 @@ def error_details(error: Exception) -> dict | None:
         }
     if isinstance(error, MemoryStoreUnavailableError):
         return {"error": "memory_store_unavailable", "message": str(error)}
+    if isinstance(error, HistoryValidationError):
+        return {"error": "invalid_history", "message": "历史检索未通过校验", "errors": error.errors}
     if isinstance(error, KbValidationError):
         return {"error": "invalid_kb", "message": "资料库操作未通过校验", "errors": error.errors}
     if isinstance(error, KbStoreUnavailableError):

@@ -113,6 +113,12 @@ def delete_task(conn: sqlite3.Connection, task_id: str) -> None:
         "(SELECT operation_id FROM operations WHERE created_task_id = ?)",
         (task_id,),
     )
+    conn.execute(
+        "DELETE FROM history_fts WHERE rowid IN "
+        "(SELECT fts_rowid FROM history_items WHERE task_id = ?)",
+        (task_id,),
+    )
+    conn.execute("DELETE FROM history_items WHERE task_id = ?", (task_id,))
     conn.execute("DELETE FROM task_timeline_items WHERE task_id = ?", (task_id,))
     conn.execute("DELETE FROM memory_reviews WHERE task_id = ?", (task_id,))
     conn.execute(

@@ -19,6 +19,7 @@ from server.errors import DependencyUnavailableError
 from server.gateway.runtime import GatewayRuntime, MailSource
 from server.memory.review import MemoryReviewScheduler
 from server.memory.service import MemoryStore
+from server.sessions.history import HistoryStore
 from server.sessions.service import SessionStore
 from server.tools.calendar.service import CalendarEventStore
 from server.tools.gmail.service import MailDraftStore
@@ -40,6 +41,7 @@ def create_app(
     reviews: MemoryReviewScheduler | None = None,
     memory_store: MemoryStore | None = None,
     kb_store: KbStore | None = None,
+    history: HistoryStore | None = None,
     create_event=None,
     verify_event=None,
 ) -> FastAPI:
@@ -87,6 +89,7 @@ def create_app(
     app.state.agent = agent
     app.state.mail_source = mail_source
     app.state.kb_store = kb_store
+    app.state.history = history if history is not None else HistoryStore()
     # 可选外部服务的接入状态，由生产装配填写；测试装配不声明时健康检查不列出。
     app.state.services = {}
     install_error_handlers(app)
@@ -134,6 +137,7 @@ def create_production_app() -> FastAPI:
     calendar_events = CalendarEventStore()
     memory_store = MemoryStore(settings.data_dir)
     kb_store = KbStore(settings.data_dir)
+    history = HistoryStore()
     # 三处用途各自构造客户端：检测在自己的顺序轮询里，工具随模型并发调用，发送与核实同为
     # Confirmation 串行调用故共用一个；不共享其余 HTTP 连接。
     gmail, gmail_reason = _optional_gmail(settings)
@@ -160,6 +164,7 @@ def create_production_app() -> FastAPI:
                 gmail=tool_client,
                 memory_store=memory_store,
                 kb_store=kb_store,
+                history=history,
                 calendar=calendar_client,
                 calendar_events=calendar_events if calendar_client else None,
                 confirmations=confirmations,
@@ -175,6 +180,7 @@ def create_production_app() -> FastAPI:
         reviews=MemoryReviewScheduler(memory_store=memory_store),
         memory_store=memory_store,
         kb_store=kb_store,
+        history=history,
     )
     app.state.services = {
         "gmail": _service_state(gmail_reason),
