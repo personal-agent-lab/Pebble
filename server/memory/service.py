@@ -6,42 +6,23 @@ import os
 import re
 import subprocess
 import tempfile
-import threading
 from pathlib import Path
 
 from server.errors import MemoryFullError, MemoryStoreUnavailableError, MemoryValidationError
+from server.storage.datarepo import GITIGNORE
+from server.storage.datarepo import lock_for as _lock_for
 
 ENTRY_DELIMITER = "\n\n§\n\n"
 TARGETS = {
     "user": ("USER.md", 1375),
     "memory": ("MEMORY.md", 2200),
 }
-GITIGNORE = """*
-!.gitignore
-!memory/
-!memory/**
-!kb/
-!kb/**
-!skills/
-!skills/**
-!skill_drafts/
-!skill_drafts/**
-"""
 INITIAL_COMMIT = "[Memory] Initialize persistent memory"
 COMMIT_ACTIONS = {
     "add": "Add",
     "replace": "Replace",
     "remove": "Remove",
 }
-
-_locks_guard = threading.Lock()
-_locks: dict[Path, threading.RLock] = {}
-
-
-def _lock_for(path: Path) -> threading.RLock:
-    resolved = path.resolve()
-    with _locks_guard:
-        return _locks.setdefault(resolved, threading.RLock())
 
 
 class MemoryStore:
