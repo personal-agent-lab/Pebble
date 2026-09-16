@@ -33,6 +33,7 @@ def create_app(
     tool_server: ToolServer | None = None,
     confirmations: ConfirmationService | None = None,
     reviews: MemoryReviewScheduler | None = None,
+    memory_store: MemoryStore | None = None,
     create_event=None,
     verify_event=None,
 ) -> FastAPI:
@@ -51,7 +52,9 @@ def create_app(
         )
     )
     reviews = reviews if reviews is not None else MemoryReviewScheduler()
-    agent = GatewayRuntime(gateway, confirmations=confirmations, reviews=reviews)
+    agent = GatewayRuntime(
+        gateway, confirmations=confirmations, reviews=reviews, memory_store=memory_store
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -131,6 +134,7 @@ def create_production_app() -> FastAPI:
         tool_server=tool_server,
         confirmations=confirmations,
         reviews=MemoryReviewScheduler(memory_store=memory_store),
+        memory_store=memory_store,
     )
 
 

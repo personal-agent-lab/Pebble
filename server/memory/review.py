@@ -21,13 +21,16 @@ from server.sessions import repository
 from server.sessions.service import timestamp
 
 REVIEW_INSTRUCTIONS = (
-    "你是 Pebble 的后台记忆整理程序，独立于用户对话运行。你会收到一段任务对话记录和"
-    "当前长期记忆，任务是找出对话中值得跨会话长期保留的用户信息，并用 memory_add 工具"
-    "逐条新增。除此之外不做任何其他事：不面向用户回复、不改写对话、不调用其他工具。\n"
+    "你是 Pebble 的后台记忆整理程序，独立于用户对话运行。用户单轮明确表达的事实与偏好"
+    "由对话中的即时记忆判断负责，不是你补漏的对象。你会收到一段任务对话记录和"
+    "当前长期记忆，任务是找出单轮看不出来、连续多轮后才稳定下来的用户信息，"
+    "并用 memory_add 工具逐条新增。除此之外不做任何其他事：不面向用户回复、不改写对话、"
+    "不调用其他工具。\n"
     "\n"
     "依次检查这些问题：\n"
     "- 用户是谁：身份、角色、长期目标、正在进行的学习或研究方向有没有新的稳定信息？\n"
-    "- 用户的偏好与习惯：表达方式、语言、格式、工作节奏有没有稳定表现？\n"
+    "- 用户的偏好与习惯：表达方式、语言、格式、工作节奏有没有跨多轮重复出现的稳定表现？"
+    "只出现一次的不算。\n"
     "- 用户对助理的期待：哪些做法被明确认可或纠正过，下次仍应沿用？\n"
     "- 这条信息换一个会话仍然有用吗？只在当前任务内有意义的不算。\n"
     "\n"
@@ -184,13 +187,17 @@ def max_run_rowid(conn: sqlite3.Connection, task_id: str) -> int:
 def window_text_items(
     conn: sqlite3.Connection, task_id: str, from_rowid: int, through_rowid: int
 ) -> list[dict]:
-    """回顾窗口内的对话文本：只取窗口内已结束调用的 text 项，草稿卡片与错误项不算对话。"""
+    """回顾窗口内的对话文本：只取窗口内已结束调用的 text 与 notice 项。
+
+    notice 是程序生成的记忆提示：即时判断的保存结果与追问属于回顾要参考的上下文。
+    草稿卡片与错误项不算对话。
+    """
     return [
         dict(row)
         for row in conn.execute(
-            "SELECT i.role, i.text FROM task_timeline_items i "
+            "SELECT i.kind, i.role, i.text FROM task_timeline_items i "
             "JOIN agent_runs r ON r.run_id = i.run_id "
-            "WHERE i.task_id = ? AND i.kind = 'text' "
+            "WHERE i.task_id = ? AND i.kind IN ('text', 'notice') "
             "AND r.rowid > ? AND r.rowid <= ? ORDER BY i.rowid",
             (task_id, from_rowid, through_rowid),
         )
@@ -199,7 +206,11 @@ def window_text_items(
 
 def render_transcript(items: list[dict]) -> str:
     labels = {"user": "用户", "assistant": "助手"}
-    return "\n".join(f"{labels.get(item['role'], item['role'])}：{item['text']}" for item in items)
+    return "\n".join(
+        f"{'系统' if item.get('kind') == 'notice' else labels.get(item['role'], item['role'])}"
+        f"：{item['text']}"
+        for item in items
+    )
 
 
 def build_review_message(transcript: str, snapshot: dict) -> str:

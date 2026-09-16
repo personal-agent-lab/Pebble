@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -197,6 +197,25 @@ SCHEMA_V9 = (
     "WHERE status IN ('pending','running')",
 )
 
+# 程序提示：记忆判断产生的“已记住/已修改/想确认”等提示是时间线上的独立一类，
+# 不由模型输出，role 为空以区别于对话文本。重建表以放宽 kind 检查。
+SCHEMA_V10 = (
+    "CREATE TABLE task_timeline_items_new (item_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "run_id TEXT NOT NULL REFERENCES agent_runs(run_id), "
+    "kind TEXT NOT NULL CHECK(kind IN ('text','mail_draft','error','notice')), "
+    "role TEXT CHECK(role IN ('user','assistant')), text TEXT, "
+    "operation_id TEXT REFERENCES operations(operation_id), created_at TEXT NOT NULL, "
+    "CHECK ((kind = 'text') = (role IS NOT NULL AND text IS NOT NULL)), "
+    "CHECK ((kind = 'mail_draft') = (operation_id IS NOT NULL)), "
+    "CHECK (kind NOT IN ('error','notice') OR (role IS NULL AND text IS NOT NULL)))",
+    "INSERT INTO task_timeline_items_new SELECT * FROM task_timeline_items",
+    "DROP TABLE task_timeline_items",
+    "ALTER TABLE task_timeline_items_new RENAME TO task_timeline_items",
+    "CREATE UNIQUE INDEX task_timeline_mail_draft ON task_timeline_items(task_id,operation_id) "
+    "WHERE kind='mail_draft'",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -207,6 +226,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     7: SCHEMA_V7,
     8: SCHEMA_V8,
     9: SCHEMA_V9,
+    10: SCHEMA_V10,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

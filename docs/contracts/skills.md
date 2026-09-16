@@ -115,13 +115,19 @@ approved_at: 2026-09-14T10:30:00+08:00
 | `skill_propose` | 本地写 | 产出或更新草稿，不能批准 |
 | `skill_list` | 只读 | 生效名单与草稿名单，含状态与版本一致性 |
 | `skill_read` | 只读 | 读取完整内容 |
-| `memory` | 本地写 | 在 `user` 或 `memory` 中新增、替换或删除条目 |
 
 `skill_propose` 输入 `name`、`description`、`triggers[]`、`inputs[]`、`tools[]`、`steps`、`side_effects[]`、`requires_confirmation`、`evidence`，输出 `id`、`path`、`status: "draft"`。同一 `name` 的草稿已存在时更新它，不新建第二份。
 
-`memory` 输入 `action: add | replace | remove`、`target: user | memory`、可选 `content` 与 `old_text`。新增要求非空 `content`；替换要求非空 `content` 且 `old_text` 只匹配一个条目；删除要求 `old_text` 只匹配一个条目。完全相同的新增不重复写入，也不产生空提交。成功输出 `target`、`action`、`changed`、`entries`、`usage` 与当前 `commit`。
+草稿写入属本地写：用户对话轮与执行结果回传轮可用；新邮件触发轮只允许只读工具，因此纯触发轮不沉淀内容，避免在用户未参与时写文件。
 
-草稿与规则写入属本地写：用户对话轮与执行结果回传轮可用；新邮件触发轮只允许只读工具，因此纯触发轮不沉淀内容，避免在用户未参与时写文件。
+Memory 不向前台对话暴露工具，写入集中在两个独立的一次性会话，都不接续对话、不进入任何任务历史：
+
+| 会话 | 时机 | 工具 |
+| --- | --- | --- |
+| 每轮记忆判断 | 每个用户消息轮与主回答并行 | `memory_add`、`memory_replace`、`memory_remove`、`memory_ask` |
+| 后台记忆回顾 | 每攒够若干个已完成消息轮，只找跨轮模式 | 仅 `memory_add` |
+
+`memory_add` 输入 `target` 与非空 `content`；`memory_replace` 另要求 `old_text` 只匹配一个现有条目；`memory_remove` 只输入 `target` 与 `old_text`。完全相同的新增不重复写入，也不产生空提交。成功输出 `target`、`action`、`changed`、`entries`、`usage`、当前 `commit`，替换与删除另附原条目 `old`。`memory_ask` 输入一句确认问题，不做任何写入，问题由程序作为提示展示给用户。每轮判断的写入结果与追问由程序渲染成用户可见的提示（见 `memory-spec.md` §5.3），模型自述不作为事实来源；后台回顾不进入时间线，也不向用户发通知。
 
 ## 8. 错误
 

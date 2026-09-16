@@ -90,6 +90,18 @@ def insert_error(conn: sqlite3.Connection, task_id: str, run_id: str, text: str)
     return item_id
 
 
+def insert_notice(conn: sqlite3.Connection, task_id: str, run_id: str, text: str) -> str:
+    """程序生成的提示（如记忆变更结果）：不是模型输出，role 为空。"""
+    item_id = str(uuid4())
+    conn.execute(
+        "INSERT INTO task_timeline_items "
+        "(item_id, task_id, run_id, kind, role, text, operation_id, created_at) "
+        "VALUES (?, ?, ?, 'notice', NULL, ?, NULL, ?)",
+        (item_id, task_id, run_id, text, timestamp()),
+    )
+    return item_id
+
+
 class TimelineStore:
     def __init__(self, path: Path | None = None):
         self.path = path
@@ -116,7 +128,7 @@ class TimelineStore:
                             "text": item["text"],
                         }
                     )
-                elif item["kind"] == "error":
+                elif item["kind"] in ("error", "notice"):
                     items.append({**base, "text": item["text"]})
                 elif item["kind"] == "mail_draft":
                     operation_id = item["operation_id"]

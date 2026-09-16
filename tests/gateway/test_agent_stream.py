@@ -145,20 +145,21 @@ def test_web_tools_are_visible_only_on_user_initiated_turns(settings, kind):
         assert not {"WebSearch", "WebFetch"} & set(options.allowed_tools)
 
 
-@pytest.mark.parametrize("kind", [TurnKind.MESSAGE, TurnKind.EXECUTION_RESULT])
-def test_memory_tool_is_available_only_on_local_write_turns(settings, kind):
+@pytest.mark.parametrize("kind", list(TurnKind))
+def test_memory_tools_are_never_visible_in_foreground_turns(settings, kind):
     names = {
         name.rsplit("__", 1)[-1] for name in options_for(make_gateway(settings), kind).allowed_tools
     }
 
-    assert "memory" in names
-    # 只新增工具只在回顾会话出现，前台轮不重复暴露。
-    assert "memory_add" not in names
+    # 记忆写入只发生在判断与回顾的一次性会话，前台任何轮次都看不到记忆工具。
+    assert not {name for name in names if name.startswith("memory")}
 
 
 def test_review_options_expose_only_add_tool_in_fresh_session(settings):
     gateway = make_gateway(settings)
-    options = gateway._review_options("回顾指令", f"{MCP_MOUNT_PATH}/{TURN_TOKEN}")
+    options = gateway._oneshot_options(
+        "回顾指令", f"{MCP_MOUNT_PATH}/{TURN_TOKEN}", gateway.review_tools
+    )
 
     assert options.allowed_tools == [f"mcp__{TOOL_SERVER_NAME}__memory_add"]
     assert options.tools == []
@@ -171,6 +172,23 @@ def test_review_options_expose_only_add_tool_in_fresh_session(settings):
     }
     assert options.allowed_mcp_server_names == [TOOL_SERVER_NAME]
     assert options.system_prompt == "回顾指令"
+    assert options.resume is None
+    assert options.hooks is None
+    assert options.include_partial_messages is False
+
+
+def test_judge_options_expose_judgment_tools_in_fresh_session(settings):
+    gateway = make_gateway(settings)
+    options = gateway._oneshot_options(
+        "判断指令", f"{MCP_MOUNT_PATH}/{TURN_TOKEN}", gateway.judge_tools
+    )
+
+    assert options.allowed_tools == [
+        f"mcp__{TOOL_SERVER_NAME}__{name}"
+        for name in ("memory_add", "memory_replace", "memory_remove", "memory_ask")
+    ]
+    assert options.tools == []
+    assert options.system_prompt == "判断指令"
     assert options.resume is None
     assert options.hooks is None
     assert options.include_partial_messages is False
@@ -531,34 +549,42 @@ def run_tools(gateway: QoderGateway, monkeypatch, *calls: ToolCall, task_id="tas
     return events, captured["results"]
 
 
-def test_memory_tool_uses_real_mcp_and_persists_file(settings, monkeypatch):
+def run_judge(gateway: QoderGateway, monkeypatch, *calls: ToolCall, task_id="task-1"):
+    """在一次性判断会话里按序调用工具，返回记录到的工具调用与结果。"""
+    script = [*calls, result()]
+    install_sdk(monkeypatch, gateway, script)
+    return asyncio.run(gateway.judge_memory(task_id, "判断指令", "判断材料"))
+
+
+def test_judge_memory_records_real_tool_results(settings, monkeypatch):
     gateway = make_gateway(settings)
 
-    _, results = run_tools(
+    records = run_judge(
         gateway,
         monkeypatch,
-        ToolCall("memory", {"action": "add", "target": "user", "content": "默认使用中文"}),
+        ToolCall("memory_add", {"target": "user", "content": "默认使用中文"}),
+        ToolCall("memory_ask", {"question": "要改哪一条？"}),
     )
 
-    assert results[0].isError is False
-    payload = tool_payload(results[0])
-    assert payload["changed"] is True
-    assert payload["entries"] == ["默认使用中文"]
-    assert len(payload["commit"]) == 40
+    assert [record["tool"] for record in records] == ["memory_add", "memory_ask"]
+    first = records[0]
+    assert first["arguments"] == {"target": "user", "content": "默认使用中文"}
+    assert first["result"]["changed"] is True
+    assert first["result"]["entries"] == ["默认使用中文"]
+    assert records[1]["result"] == {"question": "要改哪一条？"}
     assert (settings.data_dir / "memory" / "USER.md").read_text() == "默认使用中文"
 
 
-def test_memory_tool_returns_structured_capacity_error(settings, monkeypatch):
+def test_judge_memory_records_structured_errors(settings, monkeypatch):
     gateway = make_gateway(settings)
 
-    _, results = run_tools(
+    records = run_judge(
         gateway,
         monkeypatch,
-        ToolCall("memory", {"action": "add", "target": "user", "content": "甲" * 1376}),
+        ToolCall("memory_add", {"target": "user", "content": "甲" * 1376}),
     )
 
-    assert results[0].isError is True
-    assert tool_payload(results[0]) == {
+    assert records[0]["error"] == {
         "error": "memory_full",
         "message": "user 记忆需要 1376 个字符，上限为 1375",
         "target": "user",

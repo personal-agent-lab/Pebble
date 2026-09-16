@@ -93,6 +93,9 @@ export default function TimelineFeed({ taskId, items, running, sendMessage, onCh
       if (item.kind === "error") return <div className="sys-row" key={item.item_id}>
         <span className="error-text">本轮处理失败：{item.text}</span><span className="rule" />
       </div>;
+      if (item.kind === "notice") return <div className="sys-row" key={item.item_id}>
+        <span>{item.text}</span><span className="rule" />
+      </div>;
       if (item.kind === "mail_draft") return <MailDraftCard key={item.item_id} taskId={taskId} item={item}
         sendMessage={sendMessage} onChanged={onChanged} />;
       const agent = item.role === "assistant";

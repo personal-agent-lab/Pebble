@@ -15,6 +15,7 @@ from uuid import uuid4
 from server.agent.context import Material
 from server.agent.toolset import TurnKind
 from server.approval.service import ConfirmationService
+from server.config import get_settings
 from server.db import session, write
 from server.errors import DependencyUnavailableError, NotFoundError
 from server.gateway.agent_contract import (
@@ -24,11 +25,13 @@ from server.gateway.agent_contract import (
     Turn,
     checked_event,
 )
+from server.memory.judge import run_judgment
 from server.memory.review import (
     REVIEW_INTERRUPTED_REASON,
     MemoryReviewScheduler,
     interrupt_running_reviews,
 )
+from server.memory.service import MemoryStore
 from server.sessions import repository as operations
 from server.sessions import runs as repo
 from server.sessions import timeline
@@ -104,11 +107,14 @@ class GatewayRuntime:
         *,
         confirmations: ConfirmationService | None = None,
         reviews: MemoryReviewScheduler | None = None,
+        memory_store: MemoryStore | None = None,
         path: Path | None = None,
     ):
         self.gateway = gateway
         self.confirmations = confirmations
         self.reviews = reviews
+        # 每轮记忆判断要读当前长期记忆组装输入；缺省时按数据目录自建，与网关共享进程级锁。
+        self.memory_store = memory_store or MemoryStore(get_settings().data_dir)
         self.path = path
         self.events = EventHub()
         self._sessions = SessionStore(path)
@@ -118,6 +124,7 @@ class GatewayRuntime:
         self._review_tasks: dict[str, asyncio.Task] = {}
         self._sends: dict[str, asyncio.Task] = {}
         self._titles: set[asyncio.Task] = set()
+        self._judges: set[asyncio.Task] = set()
         self._closed = False
 
     def require_gateway(self) -> None:
@@ -298,10 +305,16 @@ class GatewayRuntime:
         # 同步发送已经在线程池中开始，正常关闭时等待结果落盘。
         if self._sends:
             await asyncio.gather(*list(self._sends.values()), return_exceptions=True)
-        for task in [*self._active.values(), *self._titles, *self._review_tasks.values()]:
+        # 进行中的记忆判断无状态，随关闭直接丢弃；提示在下一轮判断时基于落库内容重算。
+        for task in [
+            *self._active.values(),
+            *self._titles,
+            *self._judges,
+            *self._review_tasks.values(),
+        ]:
             task.cancel()
         await asyncio.gather(
-            *[*self._active.values(), *self._titles, *self._review_tasks.values()],
+            *[*self._active.values(), *self._titles, *self._judges, *self._review_tasks.values()],
             return_exceptions=True,
         )
 
@@ -326,6 +339,7 @@ class GatewayRuntime:
         try:
             if not self._claim(run_id):
                 return
+            self._schedule_memory_judgment(row)
             try:
                 await self._stream(row)
             except Exception as error:
@@ -435,6 +449,39 @@ class GatewayRuntime:
     def _bind_session(self, task_id: str, sdk_session_id: str) -> None:
         self._sessions.bind_sdk_session(task_id, sdk_session_id)
         self.kick()
+
+    # ---------- 每轮记忆判断 ----------
+
+    def _schedule_memory_judgment(self, row: dict) -> None:
+        """用户消息轮开始时并行启动记忆判断：不占串行调度，不阻塞主回答，无状态不落库。"""
+        if self.gateway is None or row["kind"] != repo.KIND_MESSAGE:
+            return
+        message = json.loads(row["input"])["message"]
+        task = asyncio.create_task(self._judge(row, message))
+        self._judges.add(task)
+        task.add_done_callback(self._judges.discard)
+
+    async def _judge(self, row: dict, message: str) -> None:
+        """执行一轮记忆判断并把程序提示落库、推给页面；判断失败不影响本轮回答。"""
+        task_id = row["task_id"]
+        try:
+            notices = await run_judgment(
+                self.gateway, self.memory_store, self.path, task_id=task_id, message=message
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("记忆判断失败，本轮不生成记忆提示")
+            return
+        for text in notices:
+            with session(self.path) as conn, write(conn):
+                try:
+                    operations.task(conn, task_id)
+                except NotFoundError:
+                    return  # 任务在判断期间被删除
+                item_id = timeline.insert_notice(conn, task_id, row["run_id"], text)
+            self.events.publish(
+                task_id,
+                {"run_id": row["run_id"], "item_id": item_id, "type": "notice", "text": text},
+            )
 
     # ---------- 任务标题 ----------
 

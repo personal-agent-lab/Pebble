@@ -19,6 +19,7 @@ from server.agent.toolset import ToolDeps, build_tools
 from server.config import Settings
 from server.db import init_db
 from server.main import create_app
+from server.memory.judge import JUDGE_INSTRUCTIONS
 from server.sessions.service import SessionStore
 from server.tools.gmail.sender import send_message
 from server.tools.gmail.service import MailDraftStore
@@ -52,7 +53,9 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
             self.options = options
             self.sid = options.resume or str(uuid4())
             self.is_title = options.system_prompt == TITLE_PROMPT
-            if not self.is_title:
+            # 每轮记忆判断是独立的一次性调用：不登记会话、不进脚本分支，直接结束。
+            self.is_judge = options.system_prompt == JUDGE_INSTRUCTIONS
+            if not self.is_title and not self.is_judge:
                 sessions.append(self.sid)
 
         async def __aenter__(self):
@@ -82,6 +85,9 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
 
         async def receive_response(self):
             yield SystemMessage("init", {"session_id": self.sid})
+            if self.is_judge:
+                yield ResultMessage("success", 1, 1, False, 1, self.sid)
+                return
             if self.is_title:
                 yield self.say("邀请回复")
                 yield ResultMessage("success", 1, 1, False, 1, self.sid)

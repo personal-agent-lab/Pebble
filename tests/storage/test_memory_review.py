@@ -215,6 +215,7 @@ def test_window_text_items_bounds_and_kinds(scheduler):
         task_id = make_task(conn)
         first = seed_round(conn, task_id, "第一轮")
         second = seed_round(conn, task_id, "第二轮")
+        timeline.insert_notice(conn, task_id, second, "已记住：第二轮")
         error_run = add_run(conn, task_id, repo.KIND_MESSAGE)
         timeline.insert_error(conn, task_id, error_run, "出错了")
         with write(conn):
@@ -232,10 +233,20 @@ def test_window_text_items_bounds_and_kinds(scheduler):
         items = window_text_items(conn, task_id, from_rowid, through_rowid)
         empty = window_text_items(conn, task_id, through_rowid, through_rowid)
     assert items == [
-        {"role": "user", "text": "第二轮"},
-        {"role": "assistant", "text": "回复 第二轮"},
+        {"kind": "text", "role": "user", "text": "第二轮"},
+        {"kind": "text", "role": "assistant", "text": "回复 第二轮"},
+        {"kind": "notice", "role": None, "text": "已记住：第二轮"},
     ]
     assert empty == []
+
+
+def test_render_transcript_labels_notice_as_system():
+    items = [
+        {"role": "user", "text": "你好"},
+        {"kind": "notice", "role": None, "text": "已记住：你好"},
+        {"role": "assistant", "text": "你好！"},
+    ]
+    assert render_transcript(items) == "用户：你好\n系统：已记住：你好\n助手：你好！"
 
 
 def test_render_transcript_labels_roles():

@@ -71,14 +71,14 @@ class MemoryStore:
         with self._lock:
             current = self._target_snapshot(target)
             entries = list(current["entries"])
-            changed = self._change(entries, action, content, old_text)
+            changed, old = self._change(entries, action, content, old_text)
             serialized = self._serialize(entries)
             limit = TARGETS[target][1]
             if len(serialized) > limit:
                 raise MemoryFullError(target, len(serialized), limit)
 
             if not changed:
-                return self._result(target, action, False, entries, self._head())
+                return self._result(target, action, False, entries, self._head(), old)
 
             path = self._path(target)
             previous = path.read_bytes()
@@ -90,7 +90,7 @@ class MemoryStore:
                 if isinstance(error, MemoryStoreUnavailableError):
                     raise
                 raise MemoryStoreUnavailableError("长期记忆保存失败，文件已恢复") from error
-            return self._result(target, action, True, entries, commit)
+            return self._result(target, action, True, entries, commit, old)
 
     def _initialize(self) -> None:
         try:
@@ -169,13 +169,16 @@ class MemoryStore:
             raise MemoryValidationError(errors)
 
     @staticmethod
-    def _change(entries: list[str], action: str, content: str | None, old_text: str | None) -> bool:
+    def _change(
+        entries: list[str], action: str, content: str | None, old_text: str | None
+    ) -> tuple[bool, str | None]:
+        """返回（是否有有效修改, 被替换或移除的原条目）；新增没有原条目。"""
         normalized = (content or "").strip()
         if action == "add":
             if normalized in entries:
-                return False
+                return False, None
             entries.append(normalized)
-            return True
+            return True, None
 
         needle = (old_text or "").strip()
         matches = [index for index, entry in enumerate(entries) if needle in entry]
@@ -183,15 +186,16 @@ class MemoryStore:
             reason = "没有找到匹配条目" if not matches else "匹配到多个条目，请提供更具体的片段"
             raise MemoryValidationError([{"field": "old_text", "message": reason}])
         index = matches[0]
+        old = entries[index]
         if action == "remove":
             entries.pop(index)
-            return True
-        if entries[index] == normalized:
-            return False
+            return True, old
+        if old == normalized:
+            return False, old
         entries.pop(index)
         if normalized not in entries:
             entries.insert(index, normalized)
-        return True
+        return True, old
 
     @staticmethod
     def _parse(content: str) -> list[str]:
@@ -210,7 +214,13 @@ class MemoryStore:
         return self.memory_dir / TARGETS[target][0]
 
     def _result(
-        self, target: str, action: str, changed: bool, entries: list[str], commit: str
+        self,
+        target: str,
+        action: str,
+        changed: bool,
+        entries: list[str],
+        commit: str,
+        old: str | None,
     ) -> dict:
         content = self._serialize(entries)
         return {
@@ -220,6 +230,7 @@ class MemoryStore:
             "entries": entries,
             "usage": {"chars": len(content), "limit": TARGETS[target][1]},
             "commit": commit,
+            "old": old,
         }
 
     def _commit(self, path: Path, action: str, target: str) -> str:

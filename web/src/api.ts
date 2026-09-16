@@ -72,6 +72,13 @@ export type TimelineItem =
       run_id: string;
       text: string;
       created_at: string;
+    }
+  | {
+      item_id: string;
+      kind: "notice";
+      run_id: string;
+      text: string;
+      created_at: string;
     };
 
 export type Timeline = { task_id: string; sdk_session_id: string | null; items: TimelineItem[] };
@@ -89,7 +96,8 @@ export type AgentEvent =
       version: number;
     }
   | { type: "done"; run_id: string }
-  | { type: "error"; run_id: string; item_id: string; message: string };
+  | { type: "error"; run_id: string; item_id: string; message: string }
+  | { type: "notice"; run_id: string; item_id: string; text: string };
 
 export class ApiError extends Error {
   readonly name = "ApiError";
@@ -176,7 +184,7 @@ export const confirmOperation = (taskId: string, operationId: string, version: n
 export const verifyExecution = (operationId: string) =>
   request<Execution>(`/operations/${operationId}/verification`, { method: "POST" });
 
-const EVENT_TYPES = ["session", "text", "draft_saved", "done", "error"] as const;
+const EVENT_TYPES = ["session", "text", "draft_saved", "done", "error", "notice"] as const;
 export function subscribeEvents(
   taskId: string,
   onEvent: (event: AgentEvent) => void,

@@ -31,7 +31,7 @@ from qodercn_agent_sdk import (
 )
 
 from server.agent import context
-from server.agent.mcp import TOOL_SERVER_NAME, ToolServer
+from server.agent.mcp import TOOL_ERROR_MESSAGE, TOOL_SERVER_NAME, ToolServer
 from server.agent.prompt import TITLE_PROMPT
 from server.agent.toolset import (
     ALLOWED_EFFECTS,
@@ -41,10 +41,10 @@ from server.agent.toolset import (
     exposed_tools,
 )
 from server.config import Settings, get_settings
-from server.errors import DependencyUnavailableError
+from server.errors import DependencyUnavailableError, error_details
 from server.gateway.agent_contract import AgentEvent, AgentProtocolError, Turn
 from server.memory.service import MemoryStore
-from server.tools.memory.tools import review_registry
+from server.tools.memory.tools import judge_registry, review_registry
 from server.tools.registry import ToolDefinition
 
 CONFIG_DIR_ENV = "QODERCN_CONFIG_DIR"
@@ -93,6 +93,24 @@ def turn_context_hooks(additional_context: str):
     return {"SessionStart": [HookMatcher(hooks=[inject])]}
 
 
+def _recording(definition: ToolDefinition, records: list[dict]) -> ToolDefinition:
+    """包一层记录：判断提示要按真实工具结果生成，不能用模型的自述。"""
+
+    def recorded(**kwargs):
+        try:
+            result = definition.func(**kwargs)
+        except Exception as error:
+            details = error_details(error)
+            if details is None:
+                details = {"error": "unexpected", "message": TOOL_ERROR_MESSAGE}
+            records.append({"tool": definition.name, "arguments": kwargs, "error": details})
+            raise
+        records.append({"tool": definition.name, "arguments": kwargs, "result": result})
+        return result
+
+    return replace(definition, func=recorded)
+
+
 class QoderGateway:
     """`AgentGateway` 的 SDK 实现：依赖在构造时装配一次，每次调用各自启动子进程。"""
 
@@ -114,6 +132,10 @@ class QoderGateway:
         # 后台记忆回顾的一次性会话只用只新增工具，不与前台工具混在同一个注册表。
         self.review_tools = build_tools(
             replace(deps, memory_store=self.memory_store), registry=review_registry
+        )
+        # 每轮记忆判断的一次性会话用判断工具集：新增、替换、停止使用与追问。
+        self.judge_tools = build_tools(
+            replace(deps, memory_store=self.memory_store), registry=judge_registry
         )
         self._check_model_config()
 
@@ -148,7 +170,7 @@ class QoderGateway:
         async with self.tool_server.serve(
             self.review_tools, task_id=task_id, queued=queued
         ) as path:
-            options = self._review_options(instructions, path)
+            options = self._oneshot_options(instructions, path, self.review_tools)
             async with QoderSDKClient(options) as client:
                 await client.query(transcript)
                 async for message in client.receive_response():
@@ -161,6 +183,27 @@ class QoderGateway:
                             detail = (message.result or "").strip() or MODEL_ERROR_MESSAGE
                             raise AgentProtocolError(detail)
                         return "".join(parts).strip()
+        raise AgentProtocolError(NO_TERMINAL_MESSAGE)
+
+    async def judge_memory(self, task_id: str, instructions: str, message: str) -> list[dict]:
+        """一次性记忆判断：带判断工具集，不接续会话；返回按调用顺序记录的工具调用与结果。
+
+        判断对用户可见的提示由调用方按这些真实记录生成，不使用模型的文本回复。
+        """
+        records: list[dict] = []
+        tools = [_recording(definition, records) for definition in self.judge_tools]
+        # 判断工具不发草稿事件，队列恒为空，仅为满足端点签名传入。
+        queued: asyncio.Queue = asyncio.Queue()
+        async with self.tool_server.serve(tools, task_id=task_id, queued=queued) as path:
+            options = self._oneshot_options(instructions, path, tools)
+            async with QoderSDKClient(options) as client:
+                await client.query(message)
+                async for reply in client.receive_response():
+                    if isinstance(reply, ResultMessage):
+                        if reply.is_error:
+                            detail = (reply.result or "").strip() or MODEL_ERROR_MESSAGE
+                            raise AgentProtocolError(detail)
+                        return records
         raise AgentProtocolError(NO_TERMINAL_MESSAGE)
 
     # ---------- 调用执行 ----------
@@ -282,13 +325,15 @@ class QoderGateway:
             **self._model_options(hosted_model=self.settings.title_model),
         )
 
-    def _review_options(self, instructions: str, path: str) -> QoderAgentOptions:
-        # 与标题生成同形，但经本轮 MCP 端点带上只新增工具；无 resume，每次都是全新会话。
+    def _oneshot_options(
+        self, instructions: str, path: str, tools: list[ToolDefinition]
+    ) -> QoderAgentOptions:
+        # 与标题生成同形，但经本轮 MCP 端点带上指定工具集；无 resume，每次都是全新会话。
         return QoderAgentOptions(
             tools=[],
             allowed_tools=[
                 f"mcp__{TOOL_SERVER_NAME}__{definition.name}"
-                for definition in self.review_tools
+                for definition in tools
             ],
             mcp_servers={
                 TOOL_SERVER_NAME: {"type": "http", "url": self._tool_url(path)},
