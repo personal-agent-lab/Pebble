@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import KbPage from "./pages/KbPage";
+import SearchPage from "./pages/SearchPage";
 import TaskListPage from "./pages/TaskListPage";
 import TaskPage from "./pages/TaskPage";
 import { SeenProvider } from "./seen";
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/tasks" replace />} />
           <Route path="/tasks" element={<TaskListPage />} />
           <Route path="/tasks/:taskId" element={<TaskPage />} />
+          <Route path="/search" element={<SearchPage />} />
           <Route path="/kb" element={<KbPage />} />
           <Route path="/kb/doc" element={<Suspense fallback={loading}><KbDocumentPage /></Suspense>} />
           <Route path="/kb/new" element={<Suspense fallback={loading}><KbDocumentPage creating /></Suspense>} />

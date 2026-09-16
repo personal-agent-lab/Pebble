@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { type ApiError, type MessageTarget, type TimelineItem } from "../api";
 import MailDraftCard from "./MailDraftCard";
@@ -6,6 +6,10 @@ import Markdown from "./Markdown";
 import MessageActions from "./MessageActions";
 
 const STICK_PX = 48;
+const FOCUS_MS = 2400;
+
+/** 时间线条目的页面锚点：历史搜索结果链接到 `/tasks/:id#item-<item_id>`。 */
+export const itemAnchor = (itemId: string) => `item-${itemId}`;
 
 /**
  * 消息流的滚动容器：桌面是 .feed，手机折叠成整页滚动。
@@ -52,13 +56,17 @@ type Props = {
   taskId: string;
   items: TimelineItem[];
   running: boolean;
+  /** 从历史搜索跳转过来时要定位的条目：滚到它并短暂高亮，不再自动贴底。 */
+  focusItemId?: string | null;
   sendMessage: (message: string, target: MessageTarget) => Promise<ApiError | null>;
   onChanged: () => Promise<void>;
 };
 
-export default function TimelineFeed({ taskId, items, running, sendMessage, onChanged }: Props) {
+export default function TimelineFeed({ taskId, items, running, focusItemId = null, sendMessage, onChanged }: Props) {
   const anchor = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
+  const stick = useRef(focusItemId === null);
+  const focused = useRef<string | null>(null);
+  const [highlight, setHighlight] = useState<string | null>(null);
   useEffect(() => {
     let scroller = scrollParent(anchor.current);
     let target = scrollEventTarget(scroller);
@@ -88,16 +96,33 @@ export default function TimelineFeed({ taskId, items, running, sendMessage, onCh
   const signature = contentSignature(items);
   useEffect(() => { if (stick.current) anchor.current?.scrollIntoView({ block: "end" }); }, [signature, running]);
 
+  // 定位只做一次：条目读出来之后滚到它；之后的新内容照常，不再把视图拽回这里。
+  const present = focusItemId !== null && items.some((item) => item.item_id === focusItemId);
+  useEffect(() => {
+    if (focusItemId === null || !present || focused.current === focusItemId) return;
+    focused.current = focusItemId;
+    stick.current = false;
+    document.getElementById(itemAnchor(focusItemId))?.scrollIntoView({ block: "center" });
+    setHighlight(focusItemId);
+    const timer = window.setTimeout(() => setHighlight(null), FOCUS_MS);
+    return () => window.clearTimeout(timer);
+  }, [focusItemId, present]);
+  const mark = (itemId: string) => ({
+    id: itemAnchor(itemId),
+    "data-focus": highlight === itemId ? "true" : undefined,
+  });
+
   return <>
     {items.map((item, index) => {
-      if (item.kind === "error") return <div className="sys-row" key={item.item_id}>
+      if (item.kind === "error") return <div className="sys-row" key={item.item_id} {...mark(item.item_id)}>
         <span className="error-text">本轮处理失败：{item.text}</span><span className="rule" />
       </div>;
-      if (item.kind === "notice") return <div className="sys-row" key={item.item_id}>
+      if (item.kind === "notice") return <div className="sys-row" key={item.item_id} {...mark(item.item_id)}>
         <span>{item.text}</span><span className="rule" />
       </div>;
-      if (item.kind === "mail_draft") return <MailDraftCard key={item.item_id} taskId={taskId} item={item}
-        sendMessage={sendMessage} onChanged={onChanged} />;
+      if (item.kind === "mail_draft") return <div className="focus-frame" key={item.item_id} {...mark(item.item_id)}>
+        <MailDraftCard taskId={taskId} item={item} sendMessage={sendMessage} onChanged={onChanged} />
+      </div>;
       const agent = item.role === "assistant";
       const previous = items[index - 1];
       const next = items[index + 1];
@@ -106,7 +131,8 @@ export default function TimelineFeed({ taskId, items, running, sendMessage, onCh
       // 否则复制到的是半截文字，时间也还不是这段回答的时间。
       const last = index === items.length - 1;
       const ended = !(next?.kind === "text" && next.role === "assistant") && !(last && running);
-      return <div className={`msg ${agent ? "agent" : "user"}${grouped ? " cont" : ""}`} key={item.item_id}>
+      return <div className={`msg ${agent ? "agent" : "user"}${grouped ? " cont" : ""}`} key={item.item_id}
+        {...mark(item.item_id)}>
         <div className="msg-body"><span className="sr-only">{agent ? "Agent 说：" : "我说："}</span>
           <div className="bubble">{agent ? <Markdown text={item.text} /> : item.text}</div>
           {agent && ended && <MessageActions text={answerText(items, index)}

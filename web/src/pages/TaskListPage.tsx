@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { ApiError, createTask, sendMessage } from "../api";
 import AppShell, { TaskLinks } from "../components/AppShell";
@@ -126,7 +126,10 @@ export default function TaskListPage() {
 
           {/* 手机没有侧栏：任务列表改挂在这里，两端都能从任务页进入已有任务。 */}
           <div className="narrow-only task-nav">
-            <div className="task-nav-head">任务列表</div>
+            <div className="task-nav-head">
+              <span>任务列表</span>
+              <Link to="/search" className="task-nav-search">搜索对话</Link>
+            </div>
             <TaskLinks />
           </div>
         </div>

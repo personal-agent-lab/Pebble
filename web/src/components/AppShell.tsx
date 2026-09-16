@@ -18,6 +18,13 @@ const TASKS_ICON = (
   </svg>
 );
 
+const SEARCH_ICON = (
+  <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="11" cy="11" r="7" />
+    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+  </svg>
+);
+
 const COMPOSE_ICON = (
   <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 20h9" />
@@ -334,6 +341,14 @@ function SidebarTasks() {
         {TASKS_ICON}
         <span className="nav-head-title">任务</span>
         {unread > 0 && <span className="nav-head-count">{unread} 待确认</span>}
+        <NavLink
+          to="/search"
+          title="搜索对话"
+          aria-label="搜索对话"
+          className={({ isActive }) => `nav-new nav-search${isActive ? " active" : ""}`}
+        >
+          {SEARCH_ICON}
+        </NavLink>
         <NavLink
           to="/tasks"
           end

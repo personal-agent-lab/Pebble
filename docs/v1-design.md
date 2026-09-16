@@ -111,7 +111,8 @@ Pebble/
 │   │   ├── service.py        # 会话关联、运行状态、待确认内容与逐项结果
 │   │   ├── repository.py     # 任务与操作 SQL
 │   │   ├── runs.py           # 后台调用记录 SQL
-│   │   └── timeline.py       # 有序文字、草稿卡、提示与错误项的物化读取
+│   │   ├── timeline.py       # 有序文字、草稿卡、提示与错误项的物化读取
+│   │   └── history.py        # 历史对话检索：FTS5 派生索引、检索前增量同步、前后文读取
 │   ├── approval/             # Confirmation
 │   │   ├── service.py        # 授权后的执行：版本校验、取得执行权、发送或创建与结果保存
 │   │   └── repository.py     # 确认记录与执行结果 SQL
@@ -301,7 +302,7 @@ SDK 显式限定项目工具和必要的 Skill 能力，使用独立工作目录
 
 ## 7. 交付阶段
 
-按 `v1-spec.md` 第 5 节的两个验收场景逐步交付完整链路。本节状态随实施更新；阶段 2 已完成代码接入，阶段 3 进行中：Calendar、长期 Memory 最小闭环与 Personal KB Phase 1–3（Markdown 文件 + Git 版本的保存/读取/更新，SQLite FTS5 分节索引、按引用读取原文，删除、移动、恢复与用户改动的自动跟随；回答不展示来源）已接入；资料管理界面与任务归档已接入；主题页与导入，Memory 管理页面与历史检索尚未实现；自动化测试使用外部边界替身，真实账号验收尚未完成。
+按 `v1-spec.md` 第 5 节的两个验收场景逐步交付完整链路。本节状态随实施更新；阶段 2 已完成代码接入，阶段 3 进行中：Calendar、长期 Memory 最小闭环与 Personal KB Phase 1–3（Markdown 文件 + Git 版本的保存/读取/更新，SQLite FTS5 分节索引、按引用读取原文，删除、移动、恢复与用户改动的自动跟随；回答不展示来源）已接入；资料管理界面与任务归档已接入；主题页与导入，历史对话检索已接入；Memory 管理页面尚未实现；自动化测试使用外部边界替身，真实账号验收尚未完成。
 
 | 阶段 | 交付物 | 通过条件 |
 | --- | --- | --- |
@@ -358,7 +359,7 @@ git 提交遵循 `AGENTS.md` 的约定：当前分支、英文 `[Module] Descrip
 
 ## 10. 当前实现
 
-已实现：Web、Gateway、Agent 装配、Gmail 域、Calendar 域、长期 Memory 文件与每轮专用记忆判断（主 Agent 不再持有记忆工具）、后台记忆回顾、Personal KB Phase 1–4（`kb_list`/`kb_save`/`kb_read`/`kb_update`/`kb_history`/`kb_search`/`kb_delete`/`kb_move`/`kb_restore`/`kb_archive`，资料为 `kb/` 下的 Markdown 文件，由与 Memory 同一个数据目录本地 Git 仓库做版本；`kb-index.sqlite3` 是数据目录内的派生 FTS5 索引，按二级标题分节、写入后增量替换、以 `kb/` 的 Git tree 标识判断是否需要重建；引用带完整 commit 与行号区间，可按引用读回该版本原文，回答不展示来源；每次操作前把用户在文件系统里的改动纳入版本，移动按 frontmatter 的 `id` 识别；删除保留历史，`kb_list` 可列出已删除资料供恢复；每份资料可带一句话说明 `summary`，`catalog.py` 据此每轮现算资料目录，经 `agent/client.py` 排在长期记忆之后注入；资料管理界面为 `web/src/pages/KbPage.tsx`（浏览与搜索）与 `KbDocumentPage.tsx`（Milkdown 所见即所得编辑，按需懒加载），接口在 `api/routes.py` 的 `/api/kb/*`；模块在 `server/tools/personal_kb/`，经 `server/storage/datarepo.py` 与 Memory 共享进程内锁与 `.gitignore`；新增 `pyyaml` 依赖）、Session Store 与 Confirmation。SQLite schema 为 12（资料身份写在 frontmatter、版本走 Git；schema 11 曾新增回答来源表，schema 12 随撤销来源展示将其删除）。未实现：主题页与导入（Phase 5）、Skills、Memory 管理页面与历史检索、认证与 HTTPS 远程访问。
+已实现：Web、Gateway、Agent 装配、Gmail 域、Calendar 域、长期 Memory 文件与每轮专用记忆判断（主 Agent 不再持有记忆工具）、后台记忆回顾、Personal KB Phase 1–4（`kb_list`/`kb_save`/`kb_read`/`kb_update`/`kb_history`/`kb_search`/`kb_delete`/`kb_move`/`kb_restore`/`kb_archive`，资料为 `kb/` 下的 Markdown 文件，由与 Memory 同一个数据目录本地 Git 仓库做版本；`kb-index.sqlite3` 是数据目录内的派生 FTS5 索引，按二级标题分节、写入后增量替换、以 `kb/` 的 Git tree 标识判断是否需要重建；引用带完整 commit 与行号区间，可按引用读回该版本原文，回答不展示来源；每次操作前把用户在文件系统里的改动纳入版本，移动按 frontmatter 的 `id` 识别；删除保留历史，`kb_list` 可列出已删除资料供恢复；每份资料可带一句话说明 `summary`，`catalog.py` 据此每轮现算资料目录，经 `agent/client.py` 排在长期记忆之后注入；资料管理界面为 `web/src/pages/KbPage.tsx`（浏览与搜索）与 `KbDocumentPage.tsx`（Milkdown 所见即所得编辑，按需懒加载），接口在 `api/routes.py` 的 `/api/kb/*`；模块在 `server/tools/personal_kb/`，经 `server/storage/datarepo.py` 与 Memory 共享进程内锁与 `.gitignore`；新增 `pyyaml` 依赖）、Session Store 与 Confirmation。SQLite schema 为 13（schema 13 新增历史检索的派生索引表 `history_items` 与 `history_fts`；资料身份写在 frontmatter、版本走 Git；schema 11 曾新增回答来源表，schema 12 随撤销来源展示将其删除）。未实现：主题页与导入（Phase 5）、Skills、Memory 管理页面与历史检索、认证与 HTTPS 远程访问。
 
 ### Gateway 与触发源
 
@@ -368,7 +369,7 @@ git 提交遵循 `AGENTS.md` 的约定：当前分支、英文 `[Module] Descrip
 
 任务创建时以触发文案或用户首句作为目标；首个调用成功结束后，运行时把该轮对话文本交给一次性的无工具模型调用生成不超过 12 字的短标题，改写任务目标。生成失败或为空时保留原目标；该调用不接续任务会话，也不进入对话历史。
 
-schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`。schema 4 将回复专用草稿表收敛为新邮件与回复共用的 `mail_drafts` 和 `mail_draft_versions`。schema 5 增加 `task_timeline_items`。schema 6 移除邮件附件绑定。schema 7 增加日程内容表、`creating/created` 状态与日程时间线卡，并将执行结果统一保存为 JSON。schema 8 取消日程卡与待确认预览：时间线类型收回 `text`、`mail_draft`、`error`，删除历史日程卡条目，日程内容表改名为 `calendar_events` 和 `calendar_event_versions`，操作与执行记录保留。schema 9 增加 `memory_reviews`（周期与手动后台记忆回顾的状态机，部分唯一索引保证每任务至多一条未完成回顾）。schema 10 为时间线增加 `notice` 类型（程序生成的记忆提示：挂在触发它的消息轮上，无角色）。schema 11 增加 `task_run_sources`：模型成功读取资料原文时按轮次记录引用与本次读到的片段，同一轮同一版本与行号唯一。schema 12 撤销回答来源展示，删除 `task_run_sources`。
+schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`。schema 4 将回复专用草稿表收敛为新邮件与回复共用的 `mail_drafts` 和 `mail_draft_versions`。schema 5 增加 `task_timeline_items`。schema 6 移除邮件附件绑定。schema 7 增加日程内容表、`creating/created` 状态与日程时间线卡，并将执行结果统一保存为 JSON。schema 8 取消日程卡与待确认预览：时间线类型收回 `text`、`mail_draft`、`error`，删除历史日程卡条目，日程内容表改名为 `calendar_events` 和 `calendar_event_versions`，操作与执行记录保留。schema 9 增加 `memory_reviews`（周期与手动后台记忆回顾的状态机，部分唯一索引保证每任务至多一条未完成回顾）。schema 10 为时间线增加 `notice` 类型（程序生成的记忆提示：挂在触发它的消息轮上，无角色）。schema 11 增加 `task_run_sources`：模型成功读取资料原文时按轮次记录引用与本次读到的片段，同一轮同一版本与行号唯一。schema 12 撤销回答来源展示，删除 `task_run_sources`。schema 13 增加历史对话检索的派生索引：`history_items`（条目与全文行的对应，以及邮件草稿写入索引时的版本与状态）与 FTS5 表 `history_fts`，检索前从时间线增量同步，删除任务时一并清理。
 
 接受确认与后台开始发送分别原子处理，发送开始标记防止重复调用；保存发送结果和登记一次回传共用事务。Confirmation 依赖 sessions 的调用记录存取，不依赖 SDK 或 api 实现。Gateway 在转发 SSE 前先把用户文字、Agent 文字、草稿位置和错误写入应用时间线，事件携带持久化后的 `item_id` 与 `run_id`。网页只读取 `GET /tasks/{task_id}/timeline`；SDK 历史不作为展示接口，也不需要前端解析模型自然语言或拼接操作列表。
 
@@ -409,9 +410,10 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 - 认证与 HTTPS 未实现：服务当前只按本机与局域网测试使用，`PATCH /api/operations/{operation_id}/draft` 还不校验操作与任务的归属关系。这两项是阶段 6 的交付内容，公网暴露前必须完成。
 - 触发源插孔仍带邮件域名（`MailSource`、`accept_new_mail`、`create_app(mail_source=...)`），与“通用层不持有域措辞”的约定不一致；第二个触发源接入时改为域中立命名。
 - 联网查询的来源没有独立呈现：`agent/client.py` 的流只取 `TextBlock`，`WebSearch` 结果里的 `Links`（标题与 URL）和 `WebFetch` 实际抓取的 URL 都被丢弃，回答末尾的来源列表是模型自己写进正文的 Markdown。已实测出现复述与实际不一致（一轮抓取 6 个页面，正文只列出 5 个）。所需数据在流里已经具备，是否持久化与展示尚未决定（个人知识库已决定回答不展示来源）。
-- 生效 Skill 名单恒为空，Skills 尚无代码；Personal KB 已实现 Phase 1–4（资料的保存、读取、更新、历史版本，分节检索与按引用读取，删除、移动、恢复与改动跟随，管理界面与任务归档；回答不展示来源），主题页与导入尚未实现；Memory 已有两个长期记忆文件、每轮专用记忆判断、后台记忆回顾、逐轮加载与本地 Git 历史，管理页面、历史检索和恢复尚未实现。
+- 生效 Skill 名单恒为空，Skills 尚无代码；Personal KB 已实现 Phase 1–4（资料的保存、读取、更新、历史版本，分节检索与按引用读取，删除、移动、恢复与改动跟随，管理界面与任务归档；回答不展示来源），主题页与导入尚未实现；Memory 已有两个长期记忆文件、每轮专用记忆判断、后台记忆回顾、逐轮加载与本地 Git 历史，历史对话检索已实现；管理页面和恢复尚未实现。
 - 主题页、后台主题整理与外部笔记导入尚无代码。资料目录每轮都要纳入用户改动并解析全部资料的 frontmatter，资料数量很大时有额外开销；说明由模型填写，写得不好时 Agent 可能想不到去读对应资料。
 - 用户改动不是实时监听：直接改文件后，要等下一次资料库操作才纳入版本；每次操作都会先做一次 `git status`，资料库很大时有额外开销。删除、移动与恢复前需取得用户同意由工具说明约束模型遵守，程序只保证这三个工具只在用户对话轮可见。
+- 历史检索在第一次搜索时才把已有历史写进索引，历史很多时这次搜索会明显变慢；进行中的轮次搜不到。日期过滤按本机时区换算，服务与用户不在同一时区时自然日边界会有偏差。
 - 资料编辑页的“未保存离开”只拦截页面内的返回按钮与浏览器关闭或刷新；通过侧栏或底部 tab 跳走时不提示（当前路由不支持导航拦截）。资料管理接口与其他接口一样尚无认证。
 - 归档由模型自主判断，可能漏归档或在同一任务里重复归档；真实模型验收覆盖了“确认发送后归档一次”的主路径。
 - 真实账号验收（Gmail 发送、iCloud 读写、SDK 模型响应）尚未完成；本地测试通过不代表真实外部操作成功。

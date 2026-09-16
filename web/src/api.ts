@@ -213,6 +213,23 @@ export function subscribeEvents(
   return () => source.close();
 }
 
+/* ---------- 历史对话检索 ---------- */
+
+/** 说话方：user 用户、assistant 助理、notice 程序提示、mail_draft 邮件草稿。 */
+export type HistorySpeaker = "user" | "assistant" | "notice" | "mail_draft";
+
+export type HistoryHit = {
+  task_id: string;
+  task_title: string;
+  item_id: string;
+  speaker: HistorySpeaker;
+  created_at: string;
+  snippet: string;
+};
+
+export const searchHistory = (q: string) =>
+  request<{ query: string; results: HistoryHit[] }>(`/history/search?${new URLSearchParams({ q }).toString()}`);
+
 /* ---------- 资料管理 ---------- */
 
 /** 资料库列表项：`version` 是该资料当前的 Git 提交。 */

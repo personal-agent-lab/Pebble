@@ -120,3 +120,26 @@ test("调用进行中在消息流末尾留思考占位，结束后撤掉", () =>
   rerender(<TimelineFeed {...props} running={false} />);
   expect(container.querySelector(".thinking")).toBeNull();
 });
+
+test("从搜索结果跳进来时滚到命中条目并高亮，之后的新内容不再拽回底部", () => {
+  const items: TimelineItem[] = [
+    { item_id: "text-1", kind: "text", role: "user", run_id: "run-1", text: "预算怎么定", created_at: "2026-09-14T00:00:00Z" },
+    { item_id: "text-2", kind: "text", role: "assistant", run_id: "run-1", text: "提高一成", created_at: "2026-09-14T00:00:01Z" },
+    draft,
+  ];
+  const props = { taskId: "task-1", running: false, sendMessage: vi.fn(), onChanged: vi.fn() };
+  const { container, rerender } = render(<TimelineFeed {...props} items={items} focusItemId="text-2" />);
+
+  const target = container.querySelector("#item-text-2");
+  expect(target?.getAttribute("data-focus")).toBe("true");
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  expect(scrollIntoView.mock.contexts[0]).toBe(target);
+  // 邮件卡也有可定位的锚点
+  expect(container.querySelector("#item-card-1")).toBeTruthy();
+
+  rerender(<TimelineFeed {...props} focusItemId="text-2" items={[...items, {
+    item_id: "text-3", kind: "text", role: "assistant", run_id: "run-2",
+    text: "新回答", created_at: "2026-09-14T00:00:02Z",
+  }]} />);
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+});

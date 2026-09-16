@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError } from "../api";
 import AppShell from "../components/AppShell";
@@ -16,6 +16,8 @@ const SEND_ICON = <svg className="i" viewBox="0 0 24 24" fill="none" stroke="cur
 export default function TaskPage() {
   const { taskId = "" } = useParams();
   const navigate = useNavigate();
+  const { hash } = useLocation();
+  const focusItemId = hash.startsWith("#item-") ? decodeURIComponent(hash.slice("#item-".length)) : null;
   const detail = useTaskDetail(taskId);
   const tasks = useTasks();
   const [message, setMessage] = useState("");
@@ -61,7 +63,8 @@ export default function TaskPage() {
     </div>
 
     <div className="chat-main"><div className="feed">
-      <TimelineFeed taskId={taskId} items={detail.items} running={running}
+      <TimelineFeed key={`${taskId}:${focusItemId ?? ""}`} taskId={taskId} items={detail.items} running={running}
+        focusItemId={focusItemId}
         sendMessage={(text, target) => detail.send(text, target)} onChanged={onChanged} />
       {actionError !== null && <Notice tone={actionError.unavailable ? "muted" : "danger"}
         title={actionError.unavailable ? "功能暂未开放" : "操作失败"}>{actionError.message}</Notice>}
