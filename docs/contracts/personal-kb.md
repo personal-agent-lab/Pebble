@@ -2,9 +2,7 @@
 
 状态：**Phase 2 已实现**（`kb_list`/`kb_save`/`kb_read`/`kb_update`/`kb_history`/`kb_search`，含 SQLite FTS5 分节索引）。Phase 3–5 是约定，尚未实现。产品行为以 `docs/kb-spec.md` 为准；本文定义个人知识库（Personal KB）的存储形态、索引、工具字段与引用语义。实现与本文冲突时先改本文，不静默偏离。
 
-当前代码与本文的已知差异：代码仍保留 frontmatter 的 `source` 字段、`kb_save`/`kb_update` 的 `source` 参数与 `kb_search` 的 `source_kind` 筛选；按本文移除（资料不记录出处）。
-
-知识库保存“具体资料”，属于按需检索；Memory 保存“关于用户的精简背景、偏好与目标”，属于常驻上下文，见 `skills.md` 与 `memory-spec.md`。
+知识库保存“具体资料”，属于按需检索；Memory 保存“关于用户的精简背景、偏好与长期目标”，属于常驻上下文，见 `skills.md` 与 `memory-spec.md`。
 
 ## 0. 交付阶段
 

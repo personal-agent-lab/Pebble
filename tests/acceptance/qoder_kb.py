@@ -125,9 +125,6 @@ async def verify(root: Path) -> dict:
         rel = hits[0].relative_to(root).as_posix()
         if not any(rel in notice for notice in saved["notices"]):
             raise AssertionError(f"程序没有展示实际保存位置：{saved['notices']!r}")
-        saved_document = kb_store.read(path=rel)
-        if saved_document["source"] != {"kind": "task", "ref": "kb-acceptance"}:
-            raise AssertionError(f"资料没有记录实际来源任务：{saved_document['source']!r}")
 
         # 2. 全新会话只凭标题通过 kb_list 找到资料，再按原文读回。
         recalled = await run_turn(

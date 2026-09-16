@@ -53,10 +53,8 @@ def kb_save(
     body: str,
     path: str | None = None,
     tags: list[str] | None = None,
-    source: dict | None = None,
     *,
     kb_store: KbStore,
-    task_id: str,
 ) -> dict:
     """新建一份资料保存到个人资料库（Markdown 文件）：用户要留存的文档、笔记、会议纪要、
     参考内容、项目细节等需要按原文查回的内容。用户的稳定偏好与对助理的持续要求由程序
@@ -64,26 +62,17 @@ def kb_save(
 
     参数：title 资料标题；body 资料正文（Markdown 原文）；path 可选，资料在库内的
     相对路径（如 "课程/gse-lab1.md"），可按内容自选文件夹，省略时归入收件目录；
-    tags 可选标签；source 可选来源，形如 {"kind": "user"|"mail"|"calendar"|"kb"|"task",
-    "ref": 标识}。
+    tags 可选标签。
 
     保存成功后向用户说明这份资料保存到了哪里（用返回的 path，这是用户可直接打开的
     资料位置），不要只说"已保存"。返回 id、path、version 与 ref。
     """
-    actual_source = source or {"kind": "task", "ref": task_id}
-    return kb_store.save(
-        title=title,
-        body=body,
-        path=path,
-        tags=tags,
-        source=actual_source,
-    )
+    return kb_store.save(title=title, body=body, path=path, tags=tags)
 
 
 @tool(name="kb_search", side_effect=SideEffect.READONLY)
 def kb_search(
     query: str,
-    source_kind: str | None = None,
     tag: str | None = None,
     max_results: int | None = None,
     *,
@@ -93,15 +82,12 @@ def kb_search(
 
     涉及资料中的具体事实时先用本工具检索，再用 kb_read 读取原文确认；只有检索摘要不能
     作为回答依据。按内容找资料一律用本工具，不要靠列举全部资料代替检索。
-    query 可以是中文词组、英文单词或编号；可选 source_kind（mail|calendar|kb|user|task）
-    与 tag 限定范围；max_results 默认 10，上限 20。
+    query 可以是中文词组、英文单词或编号；可选 tag 限定范围；max_results 默认 10，上限 20。
 
     结果为空说明资料库里没有相关依据：如实告诉用户没有找到，不要凭印象作答。多份资料
-    互相冲突时，把相关几份都读出来，说明冲突及各自来源，不要自行挑一个当事实。
+    互相冲突时，把相关几份都读出来，说明冲突及各自的说法，不要自行挑一个当事实。
     """
-    return kb_store.search(
-        query=query, source_kind=source_kind, tag=tag, max_results=max_results
-    )
+    return kb_store.search(query=query, tag=tag, max_results=max_results)
 
 
 @tool(name="kb_list", side_effect=SideEffect.READONLY)
@@ -154,14 +140,13 @@ def kb_update(
     title: str | None = None,
     body: str | None = None,
     tags: list[str] | None = None,
-    source: dict | None = None,
     *,
     kb_store: KbStore,
 ) -> dict:
     """修改资料库中已有的一份资料，而不是新建副本；资料的稳定 id 保持不变。
 
     按 path 或 id 定位资料。expected_version 必填，取自最近一次 kb_read/kb_save/kb_update
-    返回的 version（即该资料当前的 commit）。只传需要改的字段：title、body、tags、source；
+    返回的 version（即该资料当前的 commit）。只传需要改的字段：title、body、tags；
     未传的字段保持原样。
 
     版本不匹配（version_conflict）说明资料自上次读取后已被改动——可能是用户直接编辑了
@@ -175,7 +160,6 @@ def kb_update(
         title=title,
         body=body,
         tags=tags,
-        source=source,
     )
 
 

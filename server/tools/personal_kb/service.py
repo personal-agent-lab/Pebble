@@ -40,7 +40,7 @@ INDEX_FILENAME = "kb-index.sqlite3"
 MAX_RESULTS_DEFAULT = 10
 MAX_RESULTS_LIMIT = 20
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n?(.*)\Z", re.DOTALL)
-FIELD_ORDER = ("id", "title", "tags", "source", "created_at", "updated_at")
+FIELD_ORDER = ("id", "title", "tags", "created_at", "updated_at")
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,6 @@ class KbStore:
         body: str,
         path: str | None = None,
         tags: list[str] | None = None,
-        source: dict | None = None,
     ) -> dict:
         """新建一份资料文件并提交；返回 id、相对路径、版本（commit）与引用。"""
         errors = []
@@ -85,7 +84,7 @@ class KbStore:
                     [{"field": "path", "message": "目标文件已存在，请改用 kb_update 修改"}]
                 )
             now = timestamp()
-            meta = self._build_meta(doc_id, title.strip(), now, now, tags, source)
+            meta = self._build_meta(doc_id, title.strip(), now, now, tags)
             tree_before = self._kb_tree()
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
@@ -127,7 +126,6 @@ class KbStore:
                 "id": doc_id,
                 "title": meta.get("title"),
                 "tags": meta.get("tags"),
-                "source": meta.get("source"),
                 "heading": None,
                 "lines": lines,
                 "commit": commit,
@@ -139,7 +137,6 @@ class KbStore:
         self,
         *,
         query: str,
-        source_kind: str | None = None,
         tag: str | None = None,
         max_results: int | None = None,
     ) -> dict:
@@ -165,9 +162,7 @@ class KbStore:
             except Exception as error:
                 # 索引跟不上资料时宁可说不可检索，也不拿可能过期的旧索引回答。
                 raise KbIndexUnavailableError("资料索引不可用，无法检索") from error
-            hits = self._index.search(
-                terms=terms, source_kind=source_kind, tag=tag, max_results=limit
-            )
+            hits = self._index.search(terms=terms, tag=tag, max_results=limit)
         return {"query": query, "results": [self._hit_payload(hit) for hit in hits]}
 
     def list(self, *, directory: str | None = None) -> dict:
@@ -222,7 +217,6 @@ class KbStore:
         title: str | None = None,
         body: str | None = None,
         tags: list[str] | None = None,
-        source: dict | None = None,
     ) -> dict:
         """修改已有资料而非新建副本；版本不匹配则拒绝，不静默覆盖。"""
         with self._lock:
@@ -244,11 +238,6 @@ class KbStore:
                     meta["tags"] = list(tags)
                 else:
                     meta.pop("tags", None)
-            if source is not None:
-                if source:
-                    meta["source"] = source
-                else:
-                    meta.pop("source", None)
             meta["updated_at"] = timestamp()
 
             target = self.data_dir / rel
@@ -430,13 +419,10 @@ class KbStore:
         created_at: str,
         updated_at: str,
         tags: list[str] | None,
-        source: dict | None,
     ) -> dict:
         meta: dict = {"id": doc_id, "title": title}
         if tags:
             meta["tags"] = list(tags)
-        if source:
-            meta["source"] = source
         meta["created_at"] = created_at
         meta["updated_at"] = updated_at
         return meta
@@ -581,7 +567,6 @@ class KbStore:
             "id": doc_id,
             "title": meta.get("title"),
             "tags": meta.get("tags"),
-            "source": meta.get("source"),
             "heading": heading,
             "lines": [start, end],
             "commit": commit,

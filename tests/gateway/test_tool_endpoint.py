@@ -123,7 +123,7 @@ def test_concurrent_turns_are_isolated(settings):
     asyncio.run(scenario())
 
 
-def test_kb_save_injects_task_source_and_emits_program_notice(settings):
+def test_kb_save_emits_program_notice_without_recording_source(settings):
     tools, tasks = build(settings)
     task_id = tasks.create_task("保存资料")["task_id"]
     server = ToolServer()
@@ -148,7 +148,8 @@ def test_kb_save_injects_task_source_and_emits_program_notice(settings):
         "text": f"已保存资料：会议纪要。位置：{payload['path']}",
     }
     store = KbStore(settings.data_dir)
-    assert store.read(path=payload["path"])["source"] == {"kind": "task", "ref": task_id}
+    assert "source" not in store.read(path=payload["path"])
+    assert "source:" not in (settings.data_dir / payload["path"]).read_text(encoding="utf-8")
 
 
 def test_targeted_turn_can_only_update_selected_draft(settings):

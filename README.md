@@ -25,7 +25,7 @@ Memory 的两个长期记忆文件、Agent 写入工具、逐轮加载与本地 
 
 - `docs/v1-spec.md`：需求范围、产品行为、验收标准。内容冲突时以此为准。
 - `docs/v1-design.md`：组件划分、交付阶段、验证要求、当前实现与已知偏差。
-- `docs/memory-spec.md`：记忆功能规格：短期上下文、长期记忆与进行中的目标、常驻上下文与按需检索、历史检索。
+- `docs/memory-spec.md`：记忆功能规格：短期上下文、长期记忆、常驻上下文与按需检索、历史检索。
 - `docs/kb-spec.md`：个人资料库功能规格：保存与主动保存、检索作答、删除与恢复、主题页、外部笔记导入。
 - `docs/contracts/mail.md`：Gmail 工具、同步触发、确认发送与核实的字段与语义（已实现）。
 - `docs/contracts/calendar.md`：iCloud Calendar 工具、直连创建与冲突处理的字段与语义（已实现）。

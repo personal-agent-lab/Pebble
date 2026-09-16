@@ -1,15 +1,14 @@
 # Memory 与 Skills 契约
 
-状态：**Memory 已实现（`GOALS.md` 与常驻上下文预算除外），Skills 尚未实现**。SDK 侧的 `skills` 配置插孔与每轮上下文装配已存在，生效名单当前为空。本文定义文件格式、存储布局、沉淀来源、审核与加载边界。实现与本文冲突时先改本文。
+状态：**Memory 已实现（资料主题目录注入除外），Skills 尚未实现**。SDK 侧的 `skills` 配置插孔与每轮上下文装配已存在，生效名单当前为空。本文定义文件格式、存储布局、沉淀来源、审核与加载边界。实现与本文冲突时先改本文。
 
-Memory 保存“关于用户的精简背景、偏好、约定与进行中的目标”，每轮常驻上下文；个人知识库保存“具体资料”，按需检索，两者分开，见 `personal-kb.md`。记忆条目不记录出处。
+Memory 保存“关于用户的精简背景、偏好、长期目标与约定”，每轮常驻上下文；个人知识库保存“具体资料”，按需检索，两者分开，见 `personal-kb.md`。记忆条目不记录出处。
 
 ## 1. 存储布局
 
 ```text
 <data_dir>/memory/USER.md   # 用户背景与偏好
 <data_dir>/memory/MEMORY.md # 跨会话持续适用的简短约定
-<data_dir>/memory/GOALS.md  # 进行中的目标（未实现）
 <data_dir>/skills/          # 生效 Skill，SDK 发现目录
 <data_dir>/skill_drafts/    # 待审核草稿，发现目录之外
 ```
@@ -26,9 +25,9 @@ Memory 保存“关于用户的精简背景、偏好、约定与进行中的目�
 内部会议默认 30 分钟；对外邀请按对方给出的时长。
 ```
 
-每条记忆以独立一行 `§` 分隔，条目本身可包含多行。`USER.md` 最多 1375 个 Unicode 字符，`MEMORY.md` 最多 2200 个，`GOALS.md` 最多 8 条、800 个；超限写入整体拒绝，不截断旧内容。
+每条记忆以独立一行 `§` 分隔，条目本身可包含多行。`USER.md` 最多 1375 个 Unicode 字符，`MEMORY.md` 最多 2200 个；超限写入整体拒绝，不截断旧内容。
 
-每轮上下文重新读取文件：`USER.md` 作为 `## 关于你`，`MEMORY.md` 作为 `## 事实与约定`，`GOALS.md` 作为 `## 进行中的目标`，资料库主题目录（`personal-kb.md` 第 7 节）作为 `## 资料主题`，放在本轮触发材料之前。空文件不生成材料块。这四块构成常驻上下文，总量受各自容量上限约束；历史对话、资料正文、邮件与日程不自动注入，由 Agent 按需检索。规则不得覆盖外部写确认约束：该约束由程序（每轮工具可见范围与 Confirmation）保证，不依赖规则文本或模型自律。
+每轮上下文重新读取文件：`USER.md` 作为 `## 关于你`，`MEMORY.md` 作为 `## 事实与约定`，资料库主题目录（未实现）（`personal-kb.md` 第 7 节）作为 `## 资料主题`，放在本轮触发材料之前。空文件不生成材料块。这三块构成常驻上下文，总量受各自容量上限约束；历史对话、资料正文、邮件与日程不自动注入，由 Agent 按需检索。规则不得覆盖外部写确认约束：该约束由程序（每轮工具可见范围与 Confirmation）保证，不依赖规则文本或模型自律。
 
 ## 3. Skill 文件格式
 
@@ -128,7 +127,7 @@ Memory 不向前台对话暴露工具，写入集中在两个独立的一次性�
 | 每轮记忆判断 | 每个用户消息轮与主回答并行 | `memory_add`、`memory_replace`、`memory_remove`、`memory_ask` |
 | 后台记忆回顾 | 每攒够若干个已完成消息轮，只找跨轮模式 | 仅 `memory_add` |
 
-`target` 取 `user`、`memory` 或 `goals`（`goals` 未实现；后台回顾不写 `goals`）。`memory_add` 输入 `target` 与非空 `content`；`memory_replace` 另要求 `old_text` 只匹配一个现有条目；`memory_remove` 只输入 `target` 与 `old_text`。完全相同的新增不重复写入，也不产生空提交。成功输出 `target`、`action`、`changed`、`entries`、`usage`、当前 `commit`，替换与删除另附原条目 `old`。`memory_ask` 输入一句确认问题，不做任何写入，问题由程序作为提示展示给用户。每轮判断的写入结果与追问由程序渲染成用户可见的提示（见 `memory-spec.md` §5.3），模型自述不作为事实来源；后台回顾不进入时间线，也不向用户发通知。
+`target` 取 `user` 或 `memory`。`memory_add` 输入 `target` 与非空 `content`；`memory_replace` 另要求 `old_text` 只匹配一个现有条目；`memory_remove` 只输入 `target` 与 `old_text`。完全相同的新增不重复写入，也不产生空提交。成功输出 `target`、`action`、`changed`、`entries`、`usage`、当前 `commit`，替换与删除另附原条目 `old`。`memory_ask` 输入一句确认问题，不做任何写入，问题由程序作为提示展示给用户。每轮判断的写入结果与追问由程序渲染成用户可见的提示（见 `memory-spec.md` §5.3），模型自述不作为事实来源；后台回顾不进入时间线，也不向用户发通知。
 
 ## 8. 错误
 

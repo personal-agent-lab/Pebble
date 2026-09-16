@@ -21,7 +21,7 @@ from pathlib import Path
 from server.db import session, write
 
 # 索引自身的结构版本：与前端契约无关，改动索引字段或分节规则时递增，旧索引随即被重建。
-INDEX_SCHEMA = 1
+INDEX_SCHEMA = 2
 
 # trigram 分词器按三字符建立索引：1–2 个字的词无法用 MATCH 命中，改用同一张表的包含匹配。
 FTS_MIN_TERM = 3
@@ -32,7 +32,7 @@ FENCE_RE = re.compile(r"^\s*(```|~~~)")
 CREATE_SECTIONS = (
     "CREATE TABLE IF NOT EXISTS kb_sections ("
     "row_id INTEGER PRIMARY KEY, doc_id TEXT NOT NULL, path TEXT NOT NULL, title TEXT, "
-    "source_kind TEXT, tags TEXT NOT NULL, heading TEXT NOT NULL, "
+    "tags TEXT NOT NULL, heading TEXT NOT NULL, "
     "start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, commit_sha TEXT NOT NULL, "
     "content_hash TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS kb_sections_path ON kb_sections(path)",
@@ -73,7 +73,6 @@ class Hit:
     doc_id: str
     path: str
     title: str | None
-    source_kind: str | None
     tags: list[str]
     heading: str
     start_line: int
@@ -209,20 +208,18 @@ class KbIndex:
     @staticmethod
     def _insert(conn: sqlite3.Connection, document: IndexDocument) -> None:
         meta = document.meta
-        source = meta.get("source") or {}
         title = meta.get("title")
         tags = meta.get("tags") or []
         tags_text = json.dumps(list(tags), ensure_ascii=False)
         for section in document.sections:
             cursor = conn.execute(
                 "INSERT INTO kb_sections "
-                "(doc_id, path, title, source_kind, tags, heading, start_line, end_line, "
-                "commit_sha, content_hash) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "(doc_id, path, title, tags, heading, start_line, end_line, "
+                "commit_sha, content_hash) VALUES (?,?,?,?,?,?,?,?,?)",
                 (
                     meta.get("id") or "",
                     document.path,
                     title,
-                    source.get("kind") if isinstance(source, dict) else None,
                     tags_text,
                     section.heading,
                     section.start_line,
@@ -256,7 +253,6 @@ class KbIndex:
         self,
         *,
         terms: list[str],
-        source_kind: str | None,
         tag: str | None,
         max_results: int,
     ) -> list[Hit]:
@@ -266,7 +262,7 @@ class KbIndex:
         否则最相关的结果可能被任意丢弃；正文只在截断后为最终命中取回。
         """
         with session(self.path) as conn:
-            rows = self._candidates(conn, terms=terms, source_kind=source_kind, tag=tag)
+            rows = self._candidates(conn, terms=terms, tag=tag)
             ranked = [(self._rank_key(row, terms), row) for row in rows]
             ranked.sort(key=lambda item: item[0])
             top = [row for _, row in ranked[:max_results]]
@@ -278,20 +274,16 @@ class KbIndex:
         conn: sqlite3.Connection,
         *,
         terms: list[str],
-        source_kind: str | None,
         tag: str | None,
     ) -> list[sqlite3.Row]:
         condition, params, score = _condition(terms)
         clauses = [condition]
-        if source_kind is not None:
-            clauses.append("kb_sections.source_kind = ?")
-            params.append(source_kind)
         if tag is not None:
             clauses.append("kb_sections.tags LIKE ? ESCAPE '\\'")
             params.append(f'%"{_escape_like(tag)}"%')
         sql = (
             "SELECT kb_sections.row_id, kb_sections.doc_id, kb_sections.path, "
-            "kb_sections.title, kb_sections.source_kind, kb_sections.tags, "
+            "kb_sections.title, kb_sections.tags, "
             "kb_sections.heading, kb_sections.start_line, kb_sections.end_line, "
             f"kb_sections.commit_sha, {score} AS score "
             "FROM kb_sections_fts JOIN kb_sections "
@@ -325,7 +317,6 @@ class KbIndex:
             doc_id=row["doc_id"],
             path=row["path"],
             title=row["title"],
-            source_kind=row["source_kind"],
             tags=tags,
             heading=row["heading"],
             start_line=row["start_line"],

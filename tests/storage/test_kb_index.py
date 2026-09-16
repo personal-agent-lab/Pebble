@@ -14,6 +14,7 @@ from server.errors import (
     KbValidationError,
     NotFoundError,
 )
+from server.tools.personal_kb.index import INDEX_SCHEMA
 from server.tools.personal_kb.service import KbStore
 
 TITLE = "验收纪要"
@@ -41,27 +42,21 @@ def test_search_matches_chinese_english_numbered_and_tagged_sections(settings):
         title="张老师",
         body="## 沟通偏好\n\n先给结论，再补充细节。",
         tags=["人物", "GSE"],
-        source={"kind": "user"},
     )
     kb.save(title=TITLE, body=BODY, tags=["课程"])
     kb.save(
         title="实验室设备清单",
         body="## 设备\n\n离心机 CO-7100 与移液器各两台。",
-        source={"kind": "mail", "ref": "msg_1"},
     )
 
     assert kb.search(query="沟通偏好")["results"][0]["ref"]["path"].startswith("kb/inbox/")
     assert kb.search(query="结论")["results"][0]["title"] == "张老师"
     assert kb.search(query="CORAL-7421")["results"][0]["title"] == TITLE
     assert kb.search(query="离心机")["results"][0]["title"] == "实验室设备清单"
-    # 标签、来源类型与较短的关键词都能单独限定
+    # 标签与较短的关键词都能单独限定
     assert [item["title"] for item in kb.search(query="GSE")["results"]] == ["张老师"]
     assert [item["title"] for item in kb.search(query="复验", tag="课程")["results"]] == [TITLE]
     assert kb.search(query="复验", tag="人物")["results"] == []
-    assert [item["title"] for item in kb.search(query="设备", source_kind="mail")["results"]] == [
-        "实验室设备清单"
-    ]
-    assert kb.search(query="复验", source_kind="mail")["results"] == []
     assert kb.search(query="先给结论")["results"][0]["title"] == "张老师"
 
 
@@ -184,7 +179,7 @@ def test_index_is_rebuilt_when_missing_corrupted_or_out_of_sync(settings):
 
     _set_meta(index_file, "schema", "999")
     assert kb.search(query="CORAL-7421")["results"]
-    assert _meta(index_file, "schema") == "1"
+    assert _meta(index_file, "schema") == str(INDEX_SCHEMA)
 
     _set_meta(index_file, "tree", "stale-tree")
     assert kb.search(query="CORAL-7421")["results"]

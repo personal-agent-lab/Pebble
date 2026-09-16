@@ -37,7 +37,6 @@ def test_save_writes_markdown_file_with_frontmatter_and_commits(settings):
         title="GSE lab1 要求",
         body="## 概要\n第一次实验的要求。",
         tags=["课程", "GSE"],
-        source={"kind": "user"},
     )
 
     path = settings.data_dir / saved["path"]
@@ -226,14 +225,15 @@ def test_kb_tools_are_registered_with_correct_schema_and_turn_exposure(settings)
     # 可选数组/对象参数生成正确的 JSON 类型（剥离 Optional 后映射）
     assert props["tags"]["type"] == "array"
     assert props["tags"]["items"] == {"type": "string"}
-    assert props["source"]["type"] == "object"
+    # 资料不记录出处：保存与检索都不接受来源参数
+    assert "source" not in props
     assert kb_save.parameters_schema["required"] == ["title", "body"]
 
     kb_search = default_registry.get_tool("kb_search")
     search_props = kb_search.parameters_schema["properties"]
     assert kb_search.parameters_schema["required"] == ["query"]
     assert search_props["max_results"] == {"type": "integer", "default": None}
-    assert search_props["source_kind"]["type"] == "string"
+    assert "source_kind" not in search_props
     assert search_props["tag"]["type"] == "string"
 
     kb_read = default_registry.get_tool("kb_read")
