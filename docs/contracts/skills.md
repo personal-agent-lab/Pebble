@@ -8,7 +8,7 @@ Memory 保存“用户的偏好与规则”，个人知识库保存“资料及�
 
 ```text
 <data_dir>/memory/USER.md   # 用户背景、长期目标与偏好
-<data_dir>/memory/MEMORY.md # 项目事实、环境信息、术语与稳定约定
+<data_dir>/memory/MEMORY.md # 跨会话持续适用的简短约定
 <data_dir>/skills/          # 生效 Skill，SDK 发现目录
 <data_dir>/skill_drafts/    # 待审核草稿，发现目录之外
 ```

@@ -158,6 +158,28 @@ async def test_user_request_saves_draft_without_sending(flow):
     assert flow.sender.calls == []
 
 
+async def test_program_notice_is_persisted_in_timeline(flow):
+    task = flow.tasks.create_task("保存资料")
+
+    def handler(turn):
+        async def events():
+            assert turn.task_id == task["task_id"]
+            yield {"type": "notice", "text": "已保存资料：会议纪要。位置：kb/inbox/note.md"}
+            yield {"type": "done"}
+
+        return events()
+
+    flow.gateway.handle("message", handler)
+    flow.service.submit_message(task["task_id"], "保存这份资料")
+    await drain(flow.service)
+
+    items = flow.service.get_timeline(task["task_id"])["items"]
+    notices = [item for item in items if item["kind"] == "notice"]
+    assert [item["text"] for item in notices] == [
+        "已保存资料：会议纪要。位置：kb/inbox/note.md"
+    ]
+
+
 async def test_timeline_preserves_text_draft_text_and_updates_card_in_place(flow):
     task = flow.tasks.create_task("写邮件")
 

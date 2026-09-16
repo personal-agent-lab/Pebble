@@ -43,6 +43,7 @@ def available_port() -> int:
 
 async def run_turn(gateway: QoderGateway, prompt: str, task_id: str = "kb-acceptance") -> dict:
     texts = []
+    notices = []
     session_id = None
     async for event in gateway.stream_turn(
         Turn(kind=TurnKind.MESSAGE, task_id=task_id, sdk_session_id=None, message=prompt)
@@ -51,11 +52,13 @@ async def run_turn(gateway: QoderGateway, prompt: str, task_id: str = "kb-accept
             session_id = event["sdk_session_id"]
         elif event["type"] == "text":
             texts.append(event["text"])
+        elif event["type"] == "notice":
+            notices.append(event["text"])
         elif event["type"] == "error":
             raise RuntimeError(event["message"])
     if session_id is None:
         raise RuntimeError("Qoder 未返回 session_id")
-    return {"session_id": session_id, "text": "".join(texts).strip()}
+    return {"session_id": session_id, "text": "".join(texts).strip(), "notices": notices}
 
 
 def git(data_dir: Path, *args: str) -> str:
@@ -113,38 +116,48 @@ async def verify(root: Path) -> dict:
         )
         hits = kb_files_with(root, CODE)
         if len(hits) != 1:
-            raise AssertionError(f"资料未唯一落盘到 kb/：{[str(p) for p in hits]}")
+            raise AssertionError(
+                f"资料未唯一落盘到 kb/：{[str(p) for p in hits]}；"
+                f"模型回复={saved['text']!r}；程序提示={saved['notices']!r}"
+            )
         if commit_count(root) != before + 1:
             raise AssertionError("保存资料没有产生且仅产生一个 Git 提交")
-        if "kb/" not in saved["text"]:
-            raise AssertionError(f"保存后的回答没有给出资料位置：{saved['text']!r}")
         rel = hits[0].relative_to(root).as_posix()
+        if not any(rel in notice for notice in saved["notices"]):
+            raise AssertionError(f"程序没有展示实际保存位置：{saved['notices']!r}")
+        saved_document = kb_store.read(path=rel)
+        if saved_document["source"] != {"kind": "task", "ref": "kb-acceptance"}:
+            raise AssertionError(f"资料没有记录实际来源任务：{saved_document['source']!r}")
 
-        # 2. 全新会话按原文读回同一份资料（验证持久化与跨会话读取）。
-        #    Phase 1 无内容检索，新会话无法只凭标题定位资料；保存时已把相对路径报告给
-        #    用户，故这里带上已知路径，模型用 kb_read 从磁盘/Git 读回，而非依赖上下文记忆。
+        # 2. 全新会话只凭标题通过 kb_list 找到资料，再按原文读回。
         recalled = await run_turn(
-            gateway,
-            f"资料库里有份纪要保存在 {rel}，它的验收代号是什么？只回复代号本身。",
+            gateway, f"资料库里《{TITLE}》那份纪要的验收代号是什么？只回复代号本身。"
         )
         if CODE not in recalled["text"]:
             raise AssertionError(f"全新会话没有读回资料原文：{recalled['text']!r}")
         if recalled["session_id"] == saved["session_id"]:
             raise AssertionError("读回验证错误地复用了保存时的 SDK 会话")
 
-        # 3. 版本历史与并发拒绝：用 KbStore 直接对真实 Git 校验，不经模型。
+        # 3. 通过对话修改原资料，再通过历史工具读取修改前版本。
         first = kb_store.read(path=rel)
         first_commit = first["ref"]["commit"]
-        updated = kb_store.update(
-            expected_version=first_commit, path=rel, body="本次验收代号 REVOKED，结论为不通过。"
+        changed = await run_turn(
+            gateway,
+            f"请修改资料库里的《{TITLE}》，把正文改为：本次验收代号 REVOKED，结论为不通过。",
         )
+        updated = kb_store.read(path=rel)
         if updated["id"] != first["id"]:
             raise AssertionError("更新改变了资料的稳定 id")
-        if kb_store.read(path=rel)["body"].find(CODE) != -1:
+        if CODE in updated["body"] or "REVOKED" not in updated["body"]:
             raise AssertionError("当前版本仍含旧正文")
-        history = kb_store.read(path=rel, version=first_commit)
-        if CODE not in history["body"]:
-            raise AssertionError(f"历史版本没有读回修改前正文：{history['body']!r}")
+        if not any(rel in notice and first_commit in notice for notice in changed["notices"]):
+            raise AssertionError(f"程序没有展示实际修改结果：{changed['notices']!r}")
+        historical = await run_turn(
+            gateway,
+            f"请查看资料库里《{TITLE}》修改前一个版本，原来的验收代号是什么？只回复代号。",
+        )
+        if CODE not in historical["text"]:
+            raise AssertionError(f"对话没有读回修改前正文：{historical['text']!r}")
         try:
             kb_store.update(expected_version=first_commit, path=rel, body="过期的并发写入")
         except VersionConflictError:
@@ -185,8 +198,9 @@ async def verify(root: Path) -> dict:
         return {
             "kb_save": "passed",
             "git_commit": "passed",
-            "saved_reply": saved["text"],
+            "saved_notice": saved["notices"],
             "fresh_session_read": recalled["text"],
+            "updated_notice": changed["notices"],
             "version_history": "passed",
             "stale_version_rejected": "passed",
             "memory_kb_boundary": "passed",

@@ -12,6 +12,7 @@ from server.memory.service import MemoryStore
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
 from server.tools.memory.tools import judge_registry, review_registry
+from server.tools.personal_kb.service import KbStore
 from tests.support.gmail_double import MockGmailClient
 from tests.support.mcp_http import mcp_session, tool_payload
 
@@ -27,7 +28,14 @@ DRAFT = {
 def build(settings):
     init_db()
     tasks = SessionStore()
-    tools = build_tools(ToolDeps(drafts=MailDraftStore(), tasks=tasks, gmail=MockGmailClient()))
+    tools = build_tools(
+        ToolDeps(
+            drafts=MailDraftStore(),
+            tasks=tasks,
+            gmail=MockGmailClient(),
+            kb_store=KbStore(settings.data_dir),
+        )
+    )
     return tools, tasks
 
 
@@ -113,6 +121,34 @@ def test_concurrent_turns_are_isolated(settings):
                 assert mail_queue.empty()
 
     asyncio.run(scenario())
+
+
+def test_kb_save_injects_task_source_and_emits_program_notice(settings):
+    tools, tasks = build(settings)
+    task_id = tasks.create_task("保存资料")["task_id"]
+    server = ToolServer()
+    visible = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
+    queued: asyncio.Queue = asyncio.Queue()
+
+    async def scenario():
+        async with (
+            server.serve(visible, task_id=task_id, queued=queued) as path,
+            mcp_session(server, f"{BASE_URL}{path}") as session,
+        ):
+            saved = await session.call_tool(
+                "kb_save", {"title": "会议纪要", "body": "结论为通过。"}
+            )
+            payload = tool_payload(saved)
+            notice = queued.get_nowait()
+            return payload, notice
+
+    payload, notice = asyncio.run(scenario())
+    assert notice == {
+        "type": "notice",
+        "text": f"已保存资料：会议纪要。位置：{payload['path']}",
+    }
+    store = KbStore(settings.data_dir)
+    assert store.read(path=payload["path"])["source"] == {"kind": "task", "ref": task_id}
 
 
 def test_targeted_turn_can_only_update_selected_draft(settings):

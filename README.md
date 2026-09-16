@@ -50,7 +50,7 @@ cp .env.example .env
 | `PEBBLE_DATA_DIR` | 实例数据目录，默认 `<仓库根>/.data` |
 | `PEBBLE_HOST`、`PEBBLE_PORT` | 监听地址与端口，默认 `127.0.0.1:8000` |
 | `QODERCN_PERSONAL_ACCESS_TOKEN` | Qoder CN 访问令牌，注意没有 `PEBBLE_` 前缀 |
-| `PEBBLE_QODER_MODEL` | 托管模型型号，取值由 CLI 按账号动态下发（`qodercli --list-models`） |
+| `PEBBLE_QODER_MODEL` | 托管模型型号，默认内置的 Qwen3.8-Max；其他取值由 CLI 按账号动态下发（`qodercli --list-models`） |
 | `PEBBLE_TITLE_MODEL` | 只给任务标题生成用的型号，默认沿用 `PEBBLE_QODER_MODEL` |
 | `PEBBLE_MODEL_PROVIDER`、`PEBBLE_MODEL_API_KEY`、`PEBBLE_MODEL_BASE_URL` | 自定义模型（BYOK）。供应商、密钥、型号必须同时给全，`BASE_URL` 可选；provider 必须匹配账号的 BYOK 目录 |
 | `PEBBLE_GMAIL_CREDENTIALS_PATH` | Gmail OAuth 桌面应用 JSON，默认 `<data_dir>/credentials.json` |
@@ -218,6 +218,7 @@ uv run --project server python -m tests.acceptance.qoder_context --compact
 
 ```bash
 uv run --project server python -m tests.acceptance.qoder_memory
+uv run --project server python -m tests.acceptance.qoder_kb
 ```
 
 最近一次结果见 `docs/validation/qoder-context-2026-09-15.md` 与

@@ -127,7 +127,7 @@ async def invoke(
     queued: asyncio.Queue,
     target_operation_id: str | None = None,
 ) -> CallToolResult:
-    """执行一次工具调用：业务失败按统一错误词汇交回模型，成功时把草稿事件入队。"""
+    """执行一次工具调用：业务失败按统一错误词汇交回模型，成功事件按工具声明入队。"""
     fields = dict(arguments)
     if target_operation_id is not None and (
         definition.name in NEW_OPERATION_TOOLS
@@ -158,6 +158,10 @@ async def invoke(
                 "operation_id": result["operation_id"],
                 "version": result["version"],
             }
+        )
+    if definition.notice_renderer is not None:
+        queued.put_nowait(
+            {"type": "notice", "text": definition.notice_renderer(result)}
         )
     if isinstance(result, ToolFileResult):
         metadata = {**result.metadata, "filename": result.filename, "mime_type": result.mime_type}

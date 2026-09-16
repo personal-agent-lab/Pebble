@@ -434,6 +434,11 @@ class GatewayRuntime:
                 published["item_id"] = timeline.ensure_mail_draft(
                     conn, row["task_id"], row["run_id"], event["operation_id"]
                 )
+        elif kind == "notice":
+            with session(self.path) as conn, write(conn):
+                published["item_id"] = timeline.insert_notice(
+                    conn, row["task_id"], row["run_id"], event["text"]
+                )
         elif kind == "done":
             self._finish(row["run_id"], "done", None)
             self._schedule_retitle(row)

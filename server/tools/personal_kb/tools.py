@@ -10,7 +10,22 @@ from server.tools.personal_kb.service import KbStore
 from server.tools.registry import SideEffect, tool
 
 
-@tool(name="kb_save", side_effect=SideEffect.LOCAL_WRITE)
+def _saved_notice(result: dict) -> str:
+    return f"已保存资料：{result['title']}。位置：{result['path']}"
+
+
+def _updated_notice(result: dict) -> str:
+    return (
+        f"已修改资料：{result['title']}。位置：{result['path']}。"
+        f"版本：{result['previous_version']} → {result['version']}"
+    )
+
+
+@tool(
+    name="kb_save",
+    side_effect=SideEffect.LOCAL_WRITE,
+    notice_renderer=_saved_notice,
+)
 def kb_save(
     title: str,
     body: str,
@@ -19,6 +34,7 @@ def kb_save(
     source: dict | None = None,
     *,
     kb_store: KbStore,
+    task_id: str,
 ) -> dict:
     """新建一份资料保存到个人资料库（Markdown 文件），用于用户想留存的具体资料。
 
@@ -35,7 +51,25 @@ def kb_save(
     保存成功后向用户说明这份资料保存到了哪里（用返回的 path，这是用户可直接打开的
     资料位置），不要只说"已保存"。返回 id、path、version 与 ref。
     """
-    return kb_store.save(title=title, body=body, path=path, tags=tags, source=source)
+    actual_source = source or {"kind": "task", "ref": task_id}
+    return kb_store.save(
+        title=title,
+        body=body,
+        path=path,
+        tags=tags,
+        source=actual_source,
+    )
+
+
+@tool(name="kb_list", side_effect=SideEffect.READONLY)
+def kb_list(directory: str | None = None, *, kb_store: KbStore) -> dict:
+    """列出个人资料库里的 Markdown 资料，用于尚不知道资料 path 或 id 时发现资料。
+
+    可选 directory 限定资料库内的目录；省略时列出整个资料库。返回每份资料的标题、
+    id、path、tags 和当前 version。它只列目录和元数据，不搜索或返回正文；确定目标后再用
+    kb_read 读取原文。用户只给出标题或大致文件位置时，先用本工具定位。
+    """
+    return kb_store.list(directory=directory)
 
 
 @tool(name="kb_read", side_effect=SideEffect.READONLY)
@@ -55,7 +89,11 @@ def kb_read(
     return kb_store.read(path=path, doc_id=id, version=version)
 
 
-@tool(name="kb_update", side_effect=SideEffect.LOCAL_WRITE)
+@tool(
+    name="kb_update",
+    side_effect=SideEffect.LOCAL_WRITE,
+    notice_renderer=_updated_notice,
+)
 def kb_update(
     expected_version: str,
     path: str | None = None,
@@ -86,3 +124,18 @@ def kb_update(
         tags=tags,
         source=source,
     )
+
+
+@tool(name="kb_history", side_effect=SideEffect.READONLY)
+def kb_history(
+    path: str | None = None,
+    id: str | None = None,
+    *,
+    kb_store: KbStore,
+) -> dict:
+    """列出一份资料的历史版本，按 path 或 id 定位，二者给其一即可。
+
+    返回从新到旧的版本号、修改时间和变更说明。用户要求查看修改前内容或比较版本时，
+    先调用本工具取得目标 version，再调用 kb_read 并传入该 version 读取当时原文。
+    """
+    return kb_store.history(path=path, doc_id=id)

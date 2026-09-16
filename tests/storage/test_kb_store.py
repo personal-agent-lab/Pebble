@@ -75,6 +75,20 @@ def test_read_returns_original_body_by_id_and_by_path(settings):
     assert by_path["id"] == saved["id"]
 
 
+def test_list_discovers_documents_without_knowing_path_or_id(settings):
+    store = KbStore(settings.data_dir)
+    first = store.save(title="验收会议纪要", body="第一份。")
+    store.save(title="课程资料", body="第二份。", path="课程/资料.md")
+
+    all_documents = store.list()["documents"]
+    course_documents = store.list(directory="课程")["documents"]
+
+    assert {item["title"] for item in all_documents} == {"验收会议纪要", "课程资料"}
+    found = next(item for item in all_documents if item["id"] == first["id"])
+    assert found["path"] == first["path"]
+    assert [item["title"] for item in course_documents] == ["课程资料"]
+
+
 def test_update_keeps_identity_and_modifies_same_file(settings):
     store = KbStore(settings.data_dir)
     saved = store.save(title="清单", body="原始正文。")
@@ -102,6 +116,23 @@ def test_read_historical_version_returns_old_content(settings):
 
     assert "第一版内容" in historical["body"]
     assert "第二版内容" in current["body"]
+
+
+def test_history_lists_versions_for_conversation_readback(settings):
+    store = KbStore(settings.data_dir)
+    saved = store.save(title="草稿", body="第一版内容。")
+    updated = store.update(
+        doc_id=saved["id"], expected_version=saved["version"], body="第二版内容。"
+    )
+
+    history = store.history(doc_id=saved["id"])
+
+    assert history["path"] == saved["path"]
+    assert [item["version"] for item in history["versions"]] == [
+        updated["version"],
+        saved["version"],
+    ]
+    assert updated["previous_version"] == saved["version"]
 
 
 def test_update_with_stale_version_is_rejected_without_writing(settings):
@@ -185,7 +216,7 @@ def test_kb_tools_are_registered_with_correct_schema_and_turn_exposure(settings)
     store = KbStore(settings.data_dir)
     tools = build_tools(ToolDeps(drafts=None, tasks=None, gmail=None, kb_store=store))
     kb_names = {t.name for t in tools if t.name.startswith("kb_")}
-    assert kb_names == {"kb_save", "kb_read", "kb_update"}
+    assert kb_names == {"kb_save", "kb_list", "kb_read", "kb_update", "kb_history"}
 
     on_message = {
         t.name
@@ -198,8 +229,8 @@ def test_kb_tools_are_registered_with_correct_schema_and_turn_exposure(settings)
         if t.name.startswith("kb_")
     }
     # 写工具只在用户发起的轮次可见，触发轮只读
-    assert on_message == {"kb_save", "kb_read", "kb_update"}
-    assert on_new_mail == {"kb_read"}
+    assert on_message == {"kb_save", "kb_list", "kb_read", "kb_update", "kb_history"}
+    assert on_new_mail == {"kb_list", "kb_read", "kb_history"}
 
 
 def test_kb_tools_are_skipped_when_store_unavailable(settings):

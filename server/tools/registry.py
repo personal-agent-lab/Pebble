@@ -59,6 +59,8 @@ class ToolDefinition:
     needs_task_id: bool = False
     # 保存成功后需要通知页面可读取草稿的工具；网关在调用成功后据此发 draft_saved 事件。
     emits_draft_saved: bool = False
+    # 工具成功后的用户可见提示由所属领域生成；通用工具边界只负责转发文本。
+    notice_renderer: Callable[[dict[str, Any]], str] | None = None
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.func(*args, **kwargs)
@@ -78,6 +80,7 @@ class ToolRegistry:
         description: str | None = None,
         side_effect: SideEffect = SideEffect.READONLY,
         emits_draft_saved: bool = False,
+        notice_renderer: Callable[[dict[str, Any]], str] | None = None,
     ) -> Any:
         """注册工具。可作为普通函数调用，也可作为装饰器使用。"""
 
@@ -99,6 +102,7 @@ class ToolRegistry:
                 parameters_schema=schema,
                 needs_task_id=needs_task_id,
                 emits_draft_saved=emits_draft_saved,
+                notice_renderer=notice_renderer,
             )
 
             self._tools[tool_name] = tool_def
@@ -193,6 +197,7 @@ def tool(
     description: str | None = None,
     side_effect: SideEffect = SideEffect.READONLY,
     emits_draft_saved: bool = False,
+    notice_renderer: Callable[[dict[str, Any]], str] | None = None,
 ) -> Any:
     """快捷 @tool 装饰器，向全局默认工具注册表注册。"""
     return default_registry.register(
@@ -201,4 +206,5 @@ def tool(
         description=description,
         side_effect=side_effect,
         emits_draft_saved=emits_draft_saved,
+        notice_renderer=notice_renderer,
     )

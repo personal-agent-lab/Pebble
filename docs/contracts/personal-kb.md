@@ -1,6 +1,6 @@
 # 个人知识库契约
 
-状态：**Phase 1 已实现**（`kb_save`/`kb_read`/`kb_update`）。`kb_search`/`kb_archive` 与 FTS5 索引留待后续阶段。本文定义个人知识库（Personal KB）的存储形态、索引、工具字段与引用语义。实现与本文冲突时先改本文，不静默偏离。
+状态：**Phase 1 已实现**（`kb_list`/`kb_save`/`kb_read`/`kb_update`/`kb_history`）。`kb_search`/`kb_archive` 与 FTS5 索引留待后续阶段。本文定义个人知识库（Personal KB）的存储形态、索引、工具字段与引用语义。实现与本文冲突时先改本文，不静默偏离。
 
 知识库保存“资料及原文证据”，与 Memory 保存“用户偏好与规则”分开，见 `skills.md`。
 
@@ -10,12 +10,12 @@
 
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
-| Phase 1 | `kb/` 文件存储 + 本地 Git 版本；`kb_save`/`kb_read`/`kb_update`；稳定 `id`、来源、版本历史；与长期记忆的边界 | 已实现 |
+| Phase 1 | `kb/` 文件存储 + 本地 Git 版本；资料列举、保存、读取、更新和历史读取；稳定 `id`、来源、版本历史；与长期记忆的边界 | 已实现 |
 | Phase 2 | 按内容检索：`kb_search` + SQLite FTS5 索引、增量更新与重建 | 未实现 |
 | Phase 3 | 自动跟随用户在文件系统里的改动：移动/重命名/删除的索引同步与“同一份资料”识别、并发编辑检测 | 未实现 |
 | Phase 4 | 资料管理界面、版本差异视图、读写记录面板；`kb_archive` 任务归档；逐条核对后迁移旧记忆 | 未实现 |
 
-Phase 1 只能按路径或 `id` 精确读取，不能按内容检索；Agent 写入即提交，但用户手动改动暂不自动纳入索引；不批量迁移已有长期记忆里的旧资料。下文各节中标注 Phase 的部分表示该能力的交付阶段，未标注者为 Phase 1 行为或全局约定。
+Phase 1 可列出资料，再按路径或 `id` 精确读取，不能按正文内容检索；Agent 写入即提交，但用户手动改动暂不自动纳入索引；不批量迁移已有长期记忆里的旧资料。下文各节中标注 Phase 的部分表示该能力的交付阶段，未标注者为 Phase 1 行为或全局约定。
 
 ## 1. 存储形态
 
@@ -76,9 +76,11 @@ Phase 1 无索引：`kb_read` 给 `path` 直接定位，给 `id` 时线性扫描
 
 | 工具 | 副作用 | 阶段 | 说明 |
 | --- | --- | --- | --- |
+| `kb_list` | 只读 | Phase 1 | 按目录列出资料及当前位置 |
 | `kb_read` | 只读 | Phase 1 | 读取原文，可指定历史版本 |
 | `kb_save` | 本地写 | Phase 1 | 新建资料文件 |
 | `kb_update` | 本地写 | Phase 1 | 修改已有资料文件 |
+| `kb_history` | 只读 | Phase 1 | 列出一份资料的历史版本 |
 | `kb_search` | 只读 | Phase 2 | 检索资料分节 |
 | `kb_archive` | 本地写 | Phase 4 | 归档一次任务的来源与逐项结果 |
 
@@ -95,17 +97,25 @@ Phase 1 无索引：`kb_read` 给 `path` 直接定位，给 `id` 时线性扫描
 
 输出 `results[]`，每项含 `id`、`path`、`title`、`heading`、`snippet`、`ref`（结构见第 5 节）。不返回整篇正文。
 
+### `kb_list`
+
+输入可选的资料库内 `directory`。输出该目录及子目录中每份资料的 `id`、`path`、`title`、`tags` 和当前 `version`，不返回正文。用户不知道路径或 `id` 时先用它定位资料。
+
 ### `kb_read`
 
 输入 `path` 或 `id`（二者之一）、可选 `version`（某次提交的 Git commit，读取历史版本）。输出 `id`、`title`、`tags`、`source`、`body`（Markdown 原文，不总结）、`ref`。Phase 1 不支持 `heading` 分节读取。
 
 ### `kb_save`
 
-输入 `title`、`body`、可选 `path`、可选 `tags[]`、可选 `source`。省略 `path` 时落到 `kb/inbox/`，文件名由 `title` 的 slug 加 `id` 后六位生成。输出 `id`、`path`、`version`、`ref`。目标文件已存在时拒绝（提示改用 `kb_update`）。
+输入 `title`、`body`、可选 `path`、可选 `tags[]`、可选 `source`。省略 `path` 时落到 `kb/inbox/`，文件名由 `title` 的 slug 加 `id` 后六位生成。没有显式来源时，程序以当前任务作为来源。输出 `id`、`path`、`title`、`version`、`ref`。目标文件已存在时拒绝（提示改用 `kb_update`）。成功结果由程序在时间线展示实际 `kb/` 路径，不依赖模型复述。
 
 ### `kb_update`
 
-输入 `expected_version`（该资料当前的 Git commit）、`id` 或 `path`、以及要写入的 `title`、`tags[]`、`body`、`source`（只传需要改的字段，未传的保持原样）。输出 `id`、`path`、新 `version`、`ref`。`expected_version` 与当前 commit 不匹配时拒绝并返回 `VersionConflictError`，不写入；`id` 跨修改保持不变，历史版本不改写。
+输入 `expected_version`（该资料当前的 Git commit）、`id` 或 `path`、以及要写入的 `title`、`tags[]`、`body`、`source`（只传需要改的字段，未传的保持原样）。输出 `id`、`path`、`title`、`previous_version`、新 `version`、`ref`。`expected_version` 与当前 commit 不匹配时拒绝并返回 `VersionConflictError`，不写入；`id` 跨修改保持不变，历史版本不改写。成功结果由程序在时间线展示资料位置与修改前后版本。
+
+### `kb_history`
+
+输入 `path` 或 `id`（二者之一）。输出该资料从新到旧的版本列表，每项含 Git commit 形式的 `version`、修改时间和变更说明；随后可把其中一个 `version` 交给 `kb_read` 读取当时原文。
 
 ### `kb_archive`（Phase 4）
 

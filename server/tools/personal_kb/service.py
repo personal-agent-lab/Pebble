@@ -106,6 +106,49 @@ class KbStore:
                 },
             }
 
+    def list(self, *, directory: str | None = None) -> dict:
+        """列出资料及其当前位置；用于尚不知道 path/id 时发现资料。"""
+        with self._lock:
+            prefix = self._normalize_directory(directory)
+            documents = []
+            for file in sorted((self.data_dir / prefix).rglob("*.md")):
+                try:
+                    meta, _ = self._parse(file.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, KbStoreUnavailableError):
+                    continue
+                rel = self._relative(file)
+                documents.append(
+                    {
+                        "id": meta.get("id"),
+                        "path": rel,
+                        "title": meta.get("title"),
+                        "tags": meta.get("tags"),
+                        "version": self._file_commit(rel),
+                    }
+                )
+            return {"directory": prefix, "documents": documents}
+
+    def history(self, *, path: str | None = None, doc_id: str | None = None) -> dict:
+        """列出一份资料的已有版本，供 `read(version=...)` 读取历史原文。"""
+        with self._lock:
+            rel = self._locate(path, doc_id)
+            meta, _ = self._parse(self._content_at(rel, None))
+            result = self._git(
+                "log", "--format=%H%x00%cI%x00%s", "--", rel
+            ).stdout.splitlines()
+            versions = []
+            for line in result:
+                commit, changed_at, summary = line.split("\0", 2)
+                versions.append(
+                    {"version": commit, "changed_at": changed_at, "summary": summary}
+                )
+            return {
+                "id": meta.get("id") or doc_id,
+                "path": rel,
+                "title": meta.get("title"),
+                "versions": versions,
+            }
+
     def update(
         self,
         *,
@@ -154,7 +197,13 @@ class KbStore:
                 if isinstance(error, KbStoreUnavailableError):
                     raise
                 raise KbStoreUnavailableError("资料修改失败，文件已恢复") from error
-            return self._result(meta.get("id") or doc_id, rel, meta, commit)
+            return self._result(
+                meta.get("id") or doc_id,
+                rel,
+                meta,
+                commit,
+                previous_version=current,
+            )
 
     # ------------------------------------------------------------------ 初始化
 
@@ -194,6 +243,19 @@ class KbStore:
             raise KbValidationError([{"field": "path", "message": "path 不能包含空目录段或 .."}])
         if not parts[-1].endswith(".md"):
             parts[-1] += ".md"
+        return "kb/" + "/".join(parts)
+
+    def _normalize_directory(self, directory: str | None) -> str:
+        if directory is None or not directory.strip() or directory.strip() == "kb":
+            return "kb"
+        cleaned = directory.strip().replace("\\", "/")
+        if cleaned.startswith("kb/"):
+            cleaned = cleaned[3:]
+        parts = cleaned.strip("/").split("/")
+        if any(part in ("", ".", "..") for part in parts):
+            raise KbValidationError(
+                [{"field": "directory", "message": "目录必须位于资料库内"}]
+            )
         return "kb/" + "/".join(parts)
 
     def _default_rel(self, title: str, doc_id: str) -> str:
@@ -277,10 +339,17 @@ class KbStore:
     # ------------------------------------------------------------------ 结果与版本
 
     @staticmethod
-    def _result(doc_id: str | None, rel: str, meta: dict, commit: str) -> dict:
-        return {
+    def _result(
+        doc_id: str | None,
+        rel: str,
+        meta: dict,
+        commit: str,
+        previous_version: str | None = None,
+    ) -> dict:
+        result = {
             "id": doc_id,
             "path": rel,
+            "title": meta.get("title"),
             "version": commit,
             "ref": {
                 "id": doc_id,
@@ -289,6 +358,9 @@ class KbStore:
                 "version": meta.get("updated_at"),
             },
         }
+        if previous_version is not None:
+            result["previous_version"] = previous_version
+        return result
 
     def _file_commit(self, rel: str) -> str:
         result = self._git_raw("log", "-1", "--format=%H", "--", rel)

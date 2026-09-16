@@ -2,7 +2,7 @@
 
 本文承接 `v1-spec.md`：规格定义做什么和验收标准，本文定义组件划分、执行约束的实现方式、代码结构、交付顺序与验证证据。两者冲突时以规格为准。
 
-各域的接口字段与语义单独成文，位于 `docs/contracts/`：`mail.md`、`calendar.md`（已实现），`personal-kb.md`（Phase 1 已实现：`kb_save`/`kb_read`/`kb_update`），`skills.md`（约定，尚未实现）。本文不重复契约字段。
+各域的接口字段与语义单独成文，位于 `docs/contracts/`：`mail.md`、`calendar.md`（已实现），`personal-kb.md`（Phase 1 已实现：资料列举、保存、读取、更新和历史读取），`skills.md`（约定，尚未实现）。本文不重复契约字段。
 
 第 1–6 节是设计，改动需要说明理由；第 7 节的阶段状态随实施推进更新；第 8–9 节是工作约定；第 10 节记录当前实现与已知偏差。
 
@@ -91,7 +91,7 @@ Pebble/
 │   │   │   ├── service.py    # 日程字段校验与不可变内容版本
 │   │   │   └── client.py     # iCloud 协议与认证
 │   │   └── personal_kb/
-│   │       ├── tools.py      # Phase 1：保存、读取（含历史版本）、更新
+│   │       ├── tools.py      # Phase 1：列举、保存、读取、更新、历史版本
 │   │       ├── service.py    # 文件与目录组织、Git 提交、引用生成
 │   │       └── index.py      # Phase 2：本地全文索引与增量更新
 │   ├── sessions/             # Session Store
@@ -267,7 +267,7 @@ Gateway 以 HTTP 提交操作、SSE 展示进度。Agent Loop 使用 `qodercn-ag
 
 ### 模型与 SDK 约束
 
-模型先采用一个明确配置的模型完成闭环。Qoder 托管模型从 `get_available_models()` 获取；使用自有 API Key 时通过 `resolve_model` 返回 `CustomModel`。BYOK 三项（供应商、密钥、型号）在装配期校验完整性，缺项直接报错，不静默退回托管模型；供应商标识经 `agent/client.py` 的登记表校验，未登记同样报错并在报错中列出可登记项，登记表的增补以 `list_byok_providers()` 目录为准，协议风格统一取 `openai`。不增加动态路由模块。[Python SDK 参考](https://docs.qoder.com/cli/sdk/references-python)
+模型先固定一个明确型号完成闭环：未配置型号时默认内置 Qwen3.8-Max，可用 `PEBBLE_QODER_MODEL` 覆盖，托管型号取值以 `get_available_models()` 目录为准；使用自有 API Key 时通过 `resolve_model` 返回 `CustomModel`。BYOK 三项（供应商、密钥、型号）在装配期校验完整性，缺项直接报错，不静默退回托管模型；供应商标识经 `agent/client.py` 的登记表校验，未登记同样报错并在报错中列出可登记项，登记表的增补以 `list_byok_providers()` 目录为准，协议风格统一取 `openai`。不增加动态路由模块。[Python SDK 参考](https://docs.qoder.com/cli/sdk/references-python)
 
 SDK 显式限定项目工具和必要的 Skill 能力，使用独立工作目录与配置目录，限制配置加载来源，禁用可绕过外部写授权或 Skill 审核的通用 Shell、任意文件写入及无关扩展；使用面向个人助理的系统提示。工具授权不使用权限绕过模式。[权限控制](https://docs.qoder.com/cli/sdk/permissions)
 
@@ -332,7 +332,7 @@ git 提交遵循 `AGENTS.md` 的约定：当前分支、英文 `[Module] Descrip
 
 ## 10. 当前实现
 
-已实现：Web、Gateway、Agent 装配、Gmail 域、Calendar 域、长期 Memory 文件与每轮专用记忆判断（主 Agent 不再持有记忆工具）、后台记忆回顾、Personal KB Phase 1（`kb_save`/`kb_read`/`kb_update`，资料为 `kb/` 下的 Markdown 文件，由与 Memory 同一个数据目录本地 Git 仓库做版本；模块在 `server/tools/personal_kb/`，经 `server/storage/datarepo.py` 与 Memory 共享进程内锁与 `.gitignore`；新增 `pyyaml` 依赖）、Session Store 与 Confirmation。SQLite schema 仍为 10（资料身份写在 frontmatter、版本走 Git，无 schema 变更）。未实现：Personal KB 检索与索引（Phase 2）、文件改动自动跟随（Phase 3）、资料管理界面（Phase 4）、Skills、Memory 管理页面与历史检索、认证与 HTTPS 远程访问。
+已实现：Web、Gateway、Agent 装配、Gmail 域、Calendar 域、长期 Memory 文件与每轮专用记忆判断（主 Agent 不再持有记忆工具）、后台记忆回顾、Personal KB Phase 1（`kb_list`/`kb_save`/`kb_read`/`kb_update`/`kb_history`，资料为 `kb/` 下的 Markdown 文件，由与 Memory 同一个数据目录本地 Git 仓库做版本；模块在 `server/tools/personal_kb/`，经 `server/storage/datarepo.py` 与 Memory 共享进程内锁与 `.gitignore`；新增 `pyyaml` 依赖）、Session Store 与 Confirmation。SQLite schema 仍为 10（资料身份写在 frontmatter、版本走 Git，无 schema 变更）。未实现：Personal KB 正文检索与索引（Phase 2）、文件改动自动跟随（Phase 3）、资料管理界面（Phase 4）、Skills、Memory 管理页面与历史检索、认证与 HTTPS 远程访问。
 
 ### Gateway 与触发源
 
@@ -358,7 +358,7 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 
 事件收敛规则：`include_partial_messages` 打开后按增量转发 text，整段消息仅在无增量时补发；工具成功后入队的 draft_saved 在该工具调用之后的模型下一条消息之前送出；Runtime 先持久化对应时间线项，再发布携带 `item_id` 的 SSE 事件，因此“文字 A → 草稿 → 文字 B”的位置在刷新前后相同；ResultMessage 收敛为 done 或 error，结束事件之后不得再有事件，流自然结束而未给出结束事件时补发 error。会话建立事件一轮只广播一次，同一标识重复上报不重复转发。
 
-模型与凭证只在这一层读取：托管模型直接给型号名；配置第三方提供方时三项必须齐全且供应商已登记，写错在装配期报错，不静默退回托管模型，随后转成 BYOK 的 `resolve_model` 回调；缺令牌时调用前抛 `DependencyUnavailableError`。标题生成另可指定托管型号名，未配置时沿用主对话型号，配置 BYOK 时不换型号。后台记忆回顾与每轮记忆判断是同层的另两个一次性调用（`review_memory`、`judge_memory`）：全新会话、系统提示即指令、MCP 端点只挂各自的记忆工具、无 resume，收尾与标题生成共用 ResultMessage 终态规则；判断额外把每次工具调用与真实结果按序记录返回，供程序渲染提示。
+模型与凭证只在这一层读取：托管模型直接给型号名，未配置时用内置默认型号 Qwen3.8-Max；配置第三方提供方时三项必须齐全且供应商已登记，写错在装配期报错，不静默退回托管模型，随后转成 BYOK 的 `resolve_model` 回调；缺令牌时调用前抛 `DependencyUnavailableError`。标题生成另可指定托管型号名，未配置时沿用主对话型号，配置 BYOK 时不换型号。后台记忆回顾与每轮记忆判断是同层的另两个一次性调用（`review_memory`、`judge_memory`）：全新会话、系统提示即指令、MCP 端点只挂各自的记忆工具、无 resume，收尾与标题生成共用 ResultMessage 终态规则；判断额外把每次工具调用与真实结果按序记录返回，供程序渲染提示。
 
 ### 工具装配
 
@@ -383,5 +383,5 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 - 认证与 HTTPS 未实现：服务当前只按本机与局域网测试使用，`PATCH /api/operations/{operation_id}/draft` 还不校验操作与任务的归属关系。这两项是阶段 6 的交付内容，公网暴露前必须完成。
 - 触发源插孔仍带邮件域名（`MailSource`、`accept_new_mail`、`create_app(mail_source=...)`），与“通用层不持有域措辞”的约定不一致；第二个触发源接入时改为域中立命名。
 - 联网查询的来源没有独立呈现：`agent/client.py` 的流只取 `TextBlock`，`WebSearch` 结果里的 `Links`（标题与 URL）和 `WebFetch` 实际抓取的 URL 都被丢弃，回答末尾的来源列表是模型自己写进正文的 Markdown。已实测出现复述与实际不一致（一轮抓取 6 个页面，正文只列出 5 个）。按真实来源渲染所需的数据在流里已经具备，但要新增来源的持久化与接口；决定与个人知识库的来源引用一起做，届时来源取自系统记录的检索与抓取，不解析正文措辞，并让模型不再自行写这一段。
-- 生效 Skill 名单恒为空，Skills 尚无代码；Personal KB 已实现 Phase 1（`kb_save`/`kb_read`/`kb_update`），检索与索引、文件改动自动跟随、资料管理界面尚未实现；Memory 已有两个长期记忆文件、每轮专用记忆判断、后台记忆回顾、逐轮加载与本地 Git 历史，管理页面、历史检索和恢复尚未实现。
+- 生效 Skill 名单恒为空，Skills 尚无代码；Personal KB 已实现 Phase 1（资料列举、保存、读取、更新和历史读取），正文检索与索引、文件改动自动跟随、资料管理界面尚未实现；Memory 已有两个长期记忆文件、每轮专用记忆判断、后台记忆回顾、逐轮加载与本地 Git 历史，管理页面、历史检索和恢复尚未实现。
 - 真实账号验收（Gmail 发送、iCloud 读写、SDK 模型响应）尚未完成；本地测试通过不代表真实外部操作成功。
