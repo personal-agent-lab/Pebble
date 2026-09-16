@@ -396,7 +396,7 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 
 发送结果为 unknown 时由 `Confirmation.verify_pending` 用 Gmail 的 `verify_message` 只读核实：输入是已确认版本的内容证据和用于重建确定 Message-ID 的操作标识，不重发。查不到不等于未发送，所以核实只把 unknown 升级为 sent，不下明确失败的结论；升级后的结果按核实专用去重键另登记一次回传，原结果的回传尚未结束时不再登记。核实由 `POST /operations/{operation_id}/verification` 显式发起，读接口不做外部调用。
 
-未接入 Agent、核实或外部执行依赖时，相关新工作在写入前拒绝。只读任务、草稿及执行查询仍可用。生产默认装配不使用替身；测试替换 SDK 子进程、Gmail 投递和 iCloud CalDAV 三个外部边界。生产工厂为三个用途各构造一个 Gmail 客户端（同步检测、模型工具、确认发送与核实），互不共享令牌刷新状态，并为查询与确认创建装配 iCloud Calendar 客户端。
+未接入 Agent、核实或外部执行依赖时，相关新工作在写入前拒绝。只读任务、草稿及执行查询仍可用。生产默认装配不使用替身；测试替换 SDK 子进程、Gmail 投递和 iCloud CalDAV 三个外部边界。生产工厂为三个用途各构造一个 Gmail 客户端（同步检测、模型工具、确认发送与核实），互不共享令牌刷新状态，并为查询与确认创建装配 iCloud Calendar 客户端。邮件与日历在生产装配里是可选服务：缺 Gmail 凭证时不构造客户端，模型拿不到任何 `gmail_` 工具（草稿存储不交给工具装配，HTTP 仍可查看已有草稿），不启动新邮件检测，确认执行的发送与核实为空；缺 iCloud 配置时同理关闭日历工具与日程创建。原因写入启动日志与 `/api/health` 的 `services`，状态为 `unconfigured`，不计为故障。
 
 ### Web
 

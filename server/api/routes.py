@@ -70,6 +70,8 @@ def health(request: Request) -> dict[str, object]:
     return {
         "status": "degraded" if mail_source_error else "ok",
         "mail_source_error": mail_source_error,
+        # 未配置的服务不算故障：状态仍为 ok，只在这里说明哪些功能关闭了。
+        "services": request.app.state.services,
         "data_dir": str(settings.data_dir),
         "schema_version": version,
         "journal_mode": journal_mode,

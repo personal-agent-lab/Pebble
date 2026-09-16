@@ -4,6 +4,7 @@
 来源未接入时，相关调用直接报错，不伪造行为。
 """
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -14,6 +15,7 @@ from server.api.errors import install_error_handlers
 from server.api.routes import router
 from server.approval.service import ConfirmationService
 from server.db import init_db
+from server.errors import DependencyUnavailableError
 from server.gateway.runtime import GatewayRuntime, MailSource
 from server.memory.review import MemoryReviewScheduler
 from server.memory.service import MemoryStore
@@ -21,6 +23,8 @@ from server.sessions.service import SessionStore
 from server.tools.calendar.service import CalendarEventStore
 from server.tools.gmail.service import MailDraftStore
 from server.tools.personal_kb.service import KbStore
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -83,19 +87,44 @@ def create_app(
     app.state.agent = agent
     app.state.mail_source = mail_source
     app.state.kb_store = kb_store
+    # 可选外部服务的接入状态，由生产装配填写；测试装配不声明时健康检查不列出。
+    app.state.services = {}
     install_error_handlers(app)
     app.include_router(router, prefix="/api")
     return app
 
 
+def _optional_gmail(settings):
+    """按凭证装配三个用途各自的 Gmail 客户端；未配置凭证时返回 None 与原因，不阻止启动。"""
+    from server.tools.gmail.client import create_gmail_client
+
+    try:
+        return (
+            create_gmail_client(settings),
+            create_gmail_client(settings),
+            create_gmail_client(settings),
+        ), None
+    except RuntimeError as error:
+        return None, str(error)
+
+
+def _optional_calendar(settings):
+    """装配 iCloud 日历客户端；账号、密码文件或日历地址不全时返回 None 与原因。"""
+    from server.tools.calendar.client import CalDAVCalendarClient
+
+    try:
+        return CalDAVCalendarClient(settings), None
+    except DependencyUnavailableError as error:
+        return None, str(error)
+
+
 def create_production_app() -> FastAPI:
+    """生产装配。邮件与日历是可选服务：缺凭证时关掉该服务的工具、检测与执行，其余照常启动。"""
     from functools import partial
 
     from server.agent.client import QoderGateway
     from server.agent.toolset import ToolDeps
     from server.config import get_settings
-    from server.tools.calendar.client import CalDAVCalendarClient
-    from server.tools.gmail.client import create_gmail_client
     from server.tools.gmail.sender import send_message, verify_message
     from server.tools.gmail.sync import GmailSource
 
@@ -106,34 +135,39 @@ def create_production_app() -> FastAPI:
     memory_store = MemoryStore(settings.data_dir)
     kb_store = KbStore(settings.data_dir)
     # 三处用途各自构造客户端：检测在自己的顺序轮询里，工具随模型并发调用，发送与核实同为
-    # Confirmation 串行调用故共用一个；不共享其余 HTTP 连接，凭证缺失在这里就失败。
-    tool_client = create_gmail_client(settings)
-    confirmation_client = create_gmail_client(settings)
-    calendar_client = CalDAVCalendarClient(settings)
+    # Confirmation 串行调用故共用一个；不共享其余 HTTP 连接。
+    gmail, gmail_reason = _optional_gmail(settings)
+    calendar_client, calendar_reason = _optional_calendar(settings)
+    for name, reason in (("Gmail", gmail_reason), ("iCloud 日历", calendar_reason)):
+        if reason is not None:
+            logger.warning("%s 未接入，相关功能关闭：%s", name, reason)
+    tool_client, confirmation_client, source_client = gmail or (None, None, None)
     tool_server = ToolServer()
     # 确认服务先于工具构造：日程直连创建工具在装配期就要绑定它。
     confirmations = ConfirmationService(
-        partial(send_message, client=confirmation_client),
-        partial(verify_message, client=confirmation_client),
-        create_event=calendar_client.create_event,
-        verify_event=calendar_client.verify_event,
+        partial(send_message, client=confirmation_client) if gmail else None,
+        partial(verify_message, client=confirmation_client) if gmail else None,
+        create_event=calendar_client.create_event if calendar_client else None,
+        verify_event=calendar_client.verify_event if calendar_client else None,
     )
-    return create_app(
+    app = create_app(
         gateway=QoderGateway(
             ToolDeps(
-                drafts=drafts,
+                # 邮件未接入时连草稿工具一起不给模型：起草出来的邮件永远发不出去。
+                # HTTP 仍用同一个草稿存储，已有草稿照常可以查看。
+                drafts=drafts if gmail else None,
                 tasks=tasks,
                 gmail=tool_client,
                 memory_store=memory_store,
                 kb_store=kb_store,
                 calendar=calendar_client,
-                calendar_events=calendar_events,
+                calendar_events=calendar_events if calendar_client else None,
                 confirmations=confirmations,
             ),
             tool_server,
             settings=settings,
         ),
-        mail_source=GmailSource(create_gmail_client(settings)),
+        mail_source=GmailSource(source_client) if gmail else None,
         tasks=tasks,
         drafts=drafts,
         tool_server=tool_server,
@@ -142,6 +176,17 @@ def create_production_app() -> FastAPI:
         memory_store=memory_store,
         kb_store=kb_store,
     )
+    app.state.services = {
+        "gmail": _service_state(gmail_reason),
+        "calendar": _service_state(calendar_reason),
+    }
+    return app
+
+
+def _service_state(reason: str | None) -> dict:
+    if reason is None:
+        return {"status": "ok", "detail": None}
+    return {"status": "unconfigured", "detail": reason}
 
 
 if __name__ == "__main__":

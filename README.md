@@ -69,7 +69,10 @@ cp .env.example .env
 Gmail 首次启动在浏览器授权读取和发送权限。Key 仅交给 SDK 的模型配置，不进入系统提示或工具结果。
 Qoder CN 与国际版的 SDK、Token 和配置目录不能混用。
 
-生产运行需要有效的 Qoder CN、Gmail 和 iCloud Calendar 凭证；仅测试使用不装配真实依赖的 `create_app()`。
+生产运行只要求 Qoder CN 模型配置。Gmail 与 iCloud Calendar 是可选服务：没配凭证时服务照常启动，
+对话、记忆与个人资料库都能用，只是该服务的工具、新邮件检测与确认执行一并关闭（草稿工具也不交给
+模型，免得起草出发不出去的邮件）；启动日志会说明哪项未接入，`/api/health` 的 `services` 也会列出
+`unconfigured` 与原因。补齐凭证后重启即可启用。仅测试使用不装配真实依赖的 `create_app()`。
 
 ## 启动
 
@@ -132,6 +135,8 @@ npm run dev
 ```bash
 curl http://127.0.0.1:8000/api/health
 ```
+
+返回里的 `services.gmail` 与 `services.calendar` 为 `ok` 表示已接入，`unconfigured` 表示缺凭证、相关功能已关闭。
 
 重启后端后确认数据文件仍在：
 
