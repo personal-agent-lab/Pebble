@@ -64,6 +64,7 @@ export default function TaskPage() {
 
     <div className="chat-main"><div className="feed">
       <TimelineFeed key={`${taskId}:${focusItemId ?? ""}`} taskId={taskId} items={detail.items} running={running}
+        activity={running ? detail.activity : null}
         focusItemId={focusItemId}
         sendMessage={(text, target) => detail.send(text, target)} onChanged={onChanged} />
       {actionError !== null && <Notice tone={actionError.unavailable ? "muted" : "danger"}

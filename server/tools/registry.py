@@ -65,6 +65,8 @@ class ToolDefinition:
     emits_draft_saved: bool = False
     # 工具成功后的用户可见提示由所属领域生成；通用工具边界只负责转发文本。
     notice_renderer: Callable[[dict[str, Any]], str] | None = None
+    # 模型发起调用时向用户说明“正在做什么”，输入是模型给出的参数；措辞由所属领域提供。
+    activity_renderer: Callable[[dict[str, Any]], str] | None = None
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.func(*args, **kwargs)
@@ -85,6 +87,7 @@ class ToolRegistry:
         side_effect: SideEffect = SideEffect.READONLY,
         emits_draft_saved: bool = False,
         notice_renderer: Callable[[dict[str, Any]], str] | None = None,
+        activity_renderer: Callable[[dict[str, Any]], str] | None = None,
         param_schemas: dict[str, dict[str, Any]] | None = None,
     ) -> Any:
         """注册工具。可作为普通函数调用，也可作为装饰器使用。
@@ -115,6 +118,7 @@ class ToolRegistry:
                 needs_task_id=needs_task_id,
                 emits_draft_saved=emits_draft_saved,
                 notice_renderer=notice_renderer,
+                activity_renderer=activity_renderer,
             )
 
             self._tools[tool_name] = tool_def
@@ -198,6 +202,20 @@ class ToolRegistry:
         }
 
 
+# 步骤说明里参数的最长显示长度：足够认出在查什么，又不把一行撑长。
+ACTIVITY_DETAIL_LIMIT = 40
+
+
+def activity(label: str, detail: object = None) -> str:
+    """拼一条步骤说明：“动作：对象”，对象取自模型参数，过长截断，缺省时只有动作。"""
+    text = " ".join(str(detail).split()) if isinstance(detail, (str, int, float)) else ""
+    if not text:
+        return label
+    if len(text) > ACTIVITY_DETAIL_LIMIT:
+        text = text[:ACTIVITY_DETAIL_LIMIT] + "…"
+    return f"{label}：{text}"
+
+
 # 全局默认注册表实例
 default_registry = ToolRegistry()
 
@@ -210,6 +228,7 @@ def tool(
     side_effect: SideEffect = SideEffect.READONLY,
     emits_draft_saved: bool = False,
     notice_renderer: Callable[[dict[str, Any]], str] | None = None,
+    activity_renderer: Callable[[dict[str, Any]], str] | None = None,
     param_schemas: dict[str, dict[str, Any]] | None = None,
 ) -> Any:
     """快捷 @tool 装饰器，向全局默认工具注册表注册。"""
@@ -220,5 +239,6 @@ def tool(
         side_effect=side_effect,
         emits_draft_saved=emits_draft_saved,
         notice_renderer=notice_renderer,
+        activity_renderer=activity_renderer,
         param_schemas=param_schemas,
     )

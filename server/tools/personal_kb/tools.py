@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from server.tools.personal_kb.service import KbStore
-from server.tools.registry import SideEffect, tool
+from server.tools.registry import SideEffect, activity, tool
 
 
 def _saved_notice(result: dict) -> str:
@@ -48,6 +48,15 @@ def _archived_notice(result: dict) -> str:
     return f"{action}：{result['title']}。位置：{result['path']}"
 
 
+def _document_target(args: dict) -> str | None:
+    """步骤说明里指代一份资料：优先用路径，其次引用里的路径；只有 id 时不展示内部标识。"""
+    ref = args.get("ref")
+    path = args.get("path") or (ref.get("path") if isinstance(ref, dict) else None)
+    if isinstance(path, str) and path:
+        return path[3:] if path.startswith("kb/") else path
+    return None
+
+
 def _stale(result: dict) -> bool:
     return result.get("index_status") == "stale"
 
@@ -70,6 +79,7 @@ REF_SCHEMA: dict[str, Any] = {
     name="kb_save",
     side_effect=SideEffect.LOCAL_WRITE_ALL_TURNS,
     notice_renderer=_saved_notice,
+    activity_renderer=lambda args: activity("正在保存资料", args.get("title")),
 )
 def kb_save(
     title: str,
@@ -100,7 +110,11 @@ def kb_save(
     return kb_store.save(title=title, body=body, path=path, tags=tags, summary=summary)
 
 
-@tool(name="kb_search", side_effect=SideEffect.READONLY)
+@tool(
+    name="kb_search",
+    side_effect=SideEffect.READONLY,
+    activity_renderer=lambda args: activity("正在检索资料", args.get("query")),
+)
 def kb_search(
     query: str,
     tag: str | None = None,
@@ -123,7 +137,14 @@ def kb_search(
     return kb_store.search(query=query, tag=tag, max_results=max_results)
 
 
-@tool(name="kb_list", side_effect=SideEffect.READONLY)
+@tool(
+    name="kb_list",
+    side_effect=SideEffect.READONLY,
+    activity_renderer=lambda args: activity(
+        "正在查看已删除的资料" if args.get("deleted") else "正在查看资料列表",
+        args.get("directory"),
+    ),
+)
 def kb_list(
     directory: str | None = None, deleted: bool | None = None, *, kb_store: KbStore
 ) -> dict:
@@ -145,6 +166,7 @@ def kb_list(
     name="kb_read",
     side_effect=SideEffect.READONLY,
     param_schemas={"ref": REF_SCHEMA},
+    activity_renderer=lambda args: activity("正在读取资料", _document_target(args)),
 )
 def kb_read(
     path: str | None = None,
@@ -171,6 +193,7 @@ def kb_read(
     name="kb_update",
     side_effect=SideEffect.LOCAL_WRITE_ALL_TURNS,
     notice_renderer=_updated_notice,
+    activity_renderer=lambda args: activity("正在修改资料", _document_target(args)),
 )
 def kb_update(
     expected_version: str,
@@ -204,7 +227,11 @@ def kb_update(
     )
 
 
-@tool(name="kb_history", side_effect=SideEffect.READONLY)
+@tool(
+    name="kb_history",
+    side_effect=SideEffect.READONLY,
+    activity_renderer=lambda args: activity("正在查看资料的历史版本", _document_target(args)),
+)
 def kb_history(
     path: str | None = None,
     id: str | None = None,
@@ -241,6 +268,7 @@ ARCHIVE_ITEM_SCHEMA: dict[str, Any] = {
     side_effect=SideEffect.LOCAL_WRITE,
     notice_renderer=_archived_notice,
     param_schemas={"items": ARCHIVE_ITEM_SCHEMA},
+    activity_renderer=lambda args: activity("正在归档任务", args.get("title")),
 )
 def kb_archive(title: str, items: list[dict], *, kb_store: KbStore) -> dict:
     """把一次跨工具任务的关键信息与逐项执行结果归档到个人资料库（archive 目录），便于以后
@@ -274,6 +302,7 @@ CONSENT_RULE = (
         "读取该资料得到的 version。删除后文件从资料库移除、不再被检索到，历史版本保留，"
         "可以用 kb_restore 找回。" + CONSENT_RULE
     ),
+    activity_renderer=lambda args: activity("正在删除资料", _document_target(args)),
 )
 def kb_delete(
     expected_version: str,
@@ -294,6 +323,7 @@ def kb_delete(
         "路径（如 \"课程/gse-lab1.md\"）。expected_version 必填，取自最近一次读取该资料得到的"
         " version。内容与 id 不变，历史版本随之保留；目标位置已有资料时拒绝。" + CONSENT_RULE
     ),
+    activity_renderer=lambda args: activity("正在移动资料", args.get("new_path")),
 )
 def kb_move(
     expected_version: str,
@@ -318,6 +348,7 @@ def kb_move(
         "该版本所在位置重建，位置已被占用时拒绝。恢复产生新版本，不改写历史。有多个可能的资料"
         "或版本时先向用户确认恢复哪一个。" + CONSENT_RULE
     ),
+    activity_renderer=lambda args: activity("正在恢复资料", _document_target(args)),
 )
 def kb_restore(
     version: str,

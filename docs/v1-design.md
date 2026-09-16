@@ -385,13 +385,15 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 
 事件收敛规则：`include_partial_messages` 打开后按增量转发 text，整段消息仅在无增量时补发；工具成功后入队的 draft_saved 在该工具调用之后的模型下一条消息之前送出。Runtime 先持久化对应时间线项，再发布携带 `item_id` 的 SSE 事件，因此“文字 A → 草稿 → 文字 B”的位置在刷新前后相同；ResultMessage 收敛为 done 或 error，结束事件之后不得再有事件，流自然结束而未给出结束事件时补发 error。会话建立事件一轮只广播一次，同一标识重复上报不重复转发。
 
+步骤说明：模型给出完整的工具调用（`AssistantMessage` 中的 `ToolUseBlock`）时、工具执行之前，`agent/client.py` 按该工具注册时声明的 `activity_renderer` 生成一句说明（如“正在检索资料：星云验收”），以 `activity` 事件转发；内置联网工具的说明在开放它们的 `client.py` 里给出，没有声明的工具不展示。`activity` 不写时间线：运行时在内存里按调用记住最后一步，供刷新后的 `GET /tasks/{id}` 在 `latest_run.activity` 读取；模型开始输出文字、调用结束或失败时清除。调用失败时，保存到时间线的失败说明末尾附“（最后一步：…）”。页面在“思考中”的点后显示当前步骤。
+
 模型与凭证只在这一层读取：托管模型直接给型号名；配置第三方提供方时三项必须齐全且供应商已登记，写错在装配期报错，不静默退回托管模型，随后转成 BYOK 的 `resolve_model` 回调；缺令牌时调用前抛 `DependencyUnavailableError`。标题生成另可指定托管型号名，未配置时沿用主对话型号，配置 BYOK 时不换型号。后台记忆回顾与每轮记忆判断是同层的另两个一次性调用（`review_memory`、`judge_memory`）：全新会话、系统提示即指令、MCP 端点只挂各自的记忆工具、无 resume，收尾与标题生成共用 ResultMessage 终态规则；判断额外把每次工具调用与真实结果按序记录返回，供程序渲染提示。
 
 ### 工具装配
 
 新邮件与回复草稿共用同一业务校验和 `MailDraftStore`，不设注入接口；测试需要控制校验时机或结果时替换模块属性。工具实现把 Gmail 客户端、草稿存储和任务存储声明为仅关键字参数，参数名与 `agent/toolset.py` 的 `ToolDeps` 字段一致，装配期按名字绑定，registry 不把仅关键字参数放进模型可见的 schema。进程内没有工具依赖的全局单例：`create_app` 接收已构造的存储，工具与 HTTP 共用同一实例，同一进程可并存互不影响的装配。Gmail 客户端是必需的装配参数，测试显式注入替身。
 
-工具清单与模型可见范围都由注册时的副作用声明决定，不是手写清单：`agent/toolset.py` 遍历注册表绑定依赖，声明了无法装配的依赖在装配期就失败；筛选只有 `exposed_tools` 一处，EXTERNAL_WRITE 不在任何一轮的允许集合内，DIRECT_EXTERNAL_WRITE 与 LOCAL_WRITE_USER_TURN 只在用户对话轮出现，新邮件轮只允许 READONLY 与 LOCAL_WRITE_ALL_TURNS。草稿业务校验只在 `MailDraftStore` 内做一次；回复草稿在按原邮件去重之后，符合邮件工具契约：复用已有操作时候选内容不参与校验。工具端点把已实现的契约错误按 `server/errors.py` 的名称与字段交回模型，与 HTTP 响应体同一套词汇；调用不在当轮清单里的工具按不存在处理，不解释原因。用户可见的程序提示由所属领域在注册时声明（`notice_renderer`），端点只按声明取值并入队事件，不认具体工具名；资料库的检索与写入共用同一把数据目录锁，索引更新与 Git 提交因而相互串行。定向修改轮次额外绑定目标 `operation_id`，禁止一切会新建操作的工具，并拒绝读取或更新其他草稿；直接编辑与 Agent 更新都通过 `MailDraftStore.update_draft` 使用同一版本冲突规则。
+工具清单与模型可见范围都由注册时的副作用声明决定，不是手写清单：`agent/toolset.py` 遍历注册表绑定依赖，声明了无法装配的依赖在装配期就失败；筛选只有 `exposed_tools` 一处，EXTERNAL_WRITE 不在任何一轮的允许集合内，DIRECT_EXTERNAL_WRITE 与 LOCAL_WRITE_USER_TURN 只在用户对话轮出现，新邮件轮只允许 READONLY 与 LOCAL_WRITE_ALL_TURNS。草稿业务校验只在 `MailDraftStore` 内做一次；回复草稿在按原邮件去重之后，符合邮件工具契约：复用已有操作时候选内容不参与校验。工具端点把已实现的契约错误按 `server/errors.py` 的名称与字段交回模型，与 HTTP 响应体同一套词汇；调用不在当轮清单里的工具按不存在处理，不解释原因。用户可见的程序提示与步骤说明都由所属领域在注册时声明（`notice_renderer`、`activity_renderer`），端点与网关只按声明取值，不认具体工具名；资料库的检索与写入共用同一把数据目录锁，索引更新与 Git 提交因而相互串行。定向修改轮次额外绑定目标 `operation_id`，禁止一切会新建操作的工具，并拒绝读取或更新其他草稿；直接编辑与 Agent 更新都通过 `MailDraftStore.update_draft` 使用同一版本冲突规则。
 
 日程直连创建工具在装配期绑定确认服务，未绑定时不注册。它先做与保存内容相同的字段校验，再用与执行时相同的时间窗查冲突：有冲突且未要求覆盖就原样返回撞车日程，不新建操作、不写内容版本、不发通知；无冲突或模型按用户明确要求带上覆盖参数时，新建操作与它的版本 1，经确认服务取得执行权并同步执行，结果就地返回模型，不登记回传轮，也不产生时间线条目。
 

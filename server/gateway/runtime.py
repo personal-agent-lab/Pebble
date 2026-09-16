@@ -117,6 +117,8 @@ class GatewayRuntime:
         self.memory_store = memory_store or MemoryStore(get_settings().data_dir)
         self.path = path
         self.events = EventHub()
+        # 每个进行中调用的当前步骤：只在内存里，供刷新后的页面读取和失败时说明停在哪一步。
+        self._activities: dict[str, str] = {}
         self._sessions = SessionStore(path)
         self._drafts = MailDraftStore(path)
         self._timeline = TimelineStore(path)
@@ -232,7 +234,9 @@ class GatewayRuntime:
     def latest_run(self, task_id: str) -> dict | None:
         with session(self.path) as conn:
             row = repo.latest(conn, task_id)
-        return repo.run_response(row) if row is not None else None
+        if row is None:
+            return None
+        return {**repo.run_response(row), "activity": self._activities.get(row["run_id"])}
 
     def get_timeline(self, task_id: str) -> dict:
         return self._timeline.list_items(task_id)
@@ -345,6 +349,7 @@ class GatewayRuntime:
             except Exception as error:
                 self._fail(row, f"Agent 调用失败：{error}")
         finally:
+            self._activities.pop(run_id, None)
             self._active.pop(row["task_id"], None)
             self.kick()
 
@@ -425,6 +430,8 @@ class GatewayRuntime:
         if kind == "session":
             self._bind_session(row["task_id"], event["sdk_session_id"])
         elif kind == "text":
+            # 模型开始说话，上一步已经结束：页面不再显示它，刷新后读到的也一致。
+            self._activities.pop(row["run_id"], None)
             with session(self.path) as conn, write(conn):
                 published["item_id"] = timeline.append_assistant_text(
                     conn, row["task_id"], row["run_id"], event["text"]
@@ -439,15 +446,20 @@ class GatewayRuntime:
                 published["item_id"] = timeline.insert_notice(
                     conn, row["task_id"], row["run_id"], event["text"]
                 )
+        elif kind == "activity":
+            self._activities[row["run_id"]] = event["text"]
         elif kind == "done":
+            self._activities.pop(row["run_id"], None)
             self._finish(row["run_id"], "done", None)
             self._schedule_retitle(row)
             self._schedule_memory_review(row)
         elif kind == "error":
+            message = self._with_last_step(row["run_id"], event["message"])
+            published["message"] = message
             with session(self.path) as conn, write(conn):
-                repo.finish(conn, row["run_id"], "error", event["message"], timestamp())
+                repo.finish(conn, row["run_id"], "error", message, timestamp())
                 published["item_id"] = timeline.insert_error(
-                    conn, row["task_id"], row["run_id"], event["message"]
+                    conn, row["task_id"], row["run_id"], message
                 )
         self.events.publish(row["task_id"], {"run_id": row["run_id"], **published})
 
@@ -529,7 +541,13 @@ class GatewayRuntime:
         with session(self.path) as conn, write(conn):
             repo.finish(conn, run_id, status, error, timestamp())
 
+    def _with_last_step(self, run_id: str, message: str) -> str:
+        """失败说明附上这一轮最后在做的步骤，看得出停在哪一步；步骤随之清除。"""
+        step = self._activities.pop(run_id, None)
+        return f"{message}（最后一步：{step}）" if step else message
+
     def _fail(self, row: dict, message: str) -> None:
+        message = self._with_last_step(row["run_id"], message)
         with session(self.path) as conn, write(conn):
             repo.finish(conn, row["run_id"], "error", message, timestamp())
             item_id = timeline.insert_error(conn, row["task_id"], row["run_id"], message)

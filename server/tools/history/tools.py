@@ -7,10 +7,14 @@
 from __future__ import annotations
 
 from server.sessions.history import HistoryStore
-from server.tools.registry import SideEffect, tool
+from server.tools.registry import SideEffect, activity, tool
 
 
-@tool(name="history_search", side_effect=SideEffect.READONLY)
+@tool(
+    name="history_search",
+    side_effect=SideEffect.READONLY,
+    activity_renderer=lambda args: activity("正在检索过去的对话", args.get("query")),
+)
 def history_search(
     query: str,
     after: str | None = None,
@@ -39,7 +43,11 @@ def history_search(
     )
 
 
-@tool(name="history_read", side_effect=SideEffect.READONLY)
+@tool(
+    name="history_read",
+    side_effect=SideEffect.READONLY,
+    activity_renderer=lambda args: activity("正在查看过去的对话"),
+)
 def history_read(
     task_id: str,
     item_id: str,

@@ -416,6 +416,11 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   animation: thinking 1.3s ease-in-out infinite;
 }
 .thinking .dot + .dot { animation-delay: 0.16s; }
+/* 当前步骤跟在点后面：说清这一轮正在做什么，一行放不下就截断，完整内容等结果出来再看。 */
+.thinking-text {
+  margin-left: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--text-sm); color: var(--color-muted);
+}
 .thinking .dot + .dot + .dot { animation-delay: 0.32s; }
 /* 紧跟在回答后面时收紧间距：占位属于这段回答的延续，不是消息流里的新一条。 */
 .msg.agent + .thinking { margin-top: calc(var(--spacing-lg) * -0.6); }

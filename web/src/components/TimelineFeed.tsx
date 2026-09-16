@@ -56,13 +56,17 @@ type Props = {
   taskId: string;
   items: TimelineItem[];
   running: boolean;
+  /** 进行中的当前步骤说明；没有时只显示跳动的点。 */
+  activity?: string | null;
   /** 从历史搜索跳转过来时要定位的条目：滚到它并短暂高亮，不再自动贴底。 */
   focusItemId?: string | null;
   sendMessage: (message: string, target: MessageTarget) => Promise<ApiError | null>;
   onChanged: () => Promise<void>;
 };
 
-export default function TimelineFeed({ taskId, items, running, focusItemId = null, sendMessage, onChanged }: Props) {
+export default function TimelineFeed({
+  taskId, items, running, activity = null, focusItemId = null, sendMessage, onChanged,
+}: Props) {
   const anchor = useRef<HTMLDivElement>(null);
   const stick = useRef(focusItemId === null);
   const focused = useRef<string | null>(null);
@@ -141,8 +145,9 @@ export default function TimelineFeed({ taskId, items, running, focusItemId = nul
       </div>;
     })}
     {running && <div className="thinking" role="status">
-      <span className="sr-only">Agent 正在处理</span>
-      <span className="dot" /><span className="dot" /><span className="dot" />
+      {activity === null && <span className="sr-only">Agent 正在处理</span>}
+      <span className="dot" aria-hidden /><span className="dot" aria-hidden /><span className="dot" aria-hidden />
+      {activity !== null && <span className="thinking-text">{activity}</span>}
     </div>}
     <div ref={anchor} />
   </>;

@@ -12,6 +12,8 @@ export type Run = {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  /** 进行中调用的当前步骤说明（如“正在检索资料：星云验收”）；只在任务详情里给出。 */
+  activity?: string | null;
 };
 
 /** 会话是谁开的头：`mail` 是收到新邮件自动开始，`user` 是用户自己发起。 */
@@ -106,7 +108,8 @@ export type AgentEvent =
     }
   | { type: "done"; run_id: string }
   | { type: "error"; run_id: string; item_id: string; message: string }
-  | { type: "notice"; run_id: string; item_id: string; text: string };
+  | { type: "notice"; run_id: string; item_id: string; text: string }
+  | { type: "activity"; run_id: string; text: string };
 
 export class ApiError extends Error {
   readonly name = "ApiError";
@@ -193,7 +196,7 @@ export const confirmOperation = (taskId: string, operationId: string, version: n
 export const verifyExecution = (operationId: string) =>
   request<Execution>(`/operations/${operationId}/verification`, { method: "POST" });
 
-const EVENT_TYPES = ["session", "text", "draft_saved", "done", "error", "notice"] as const;
+const EVENT_TYPES = ["session", "text", "draft_saved", "done", "error", "notice", "activity"] as const;
 export function subscribeEvents(
   taskId: string,
   onEvent: (event: AgentEvent) => void,

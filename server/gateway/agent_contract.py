@@ -26,7 +26,10 @@ class Turn:
 
 
 class AgentEvent(TypedDict, total=False):
-    """Agent 事件；type 取 session、text、notice、draft_saved、source、done、error。"""
+    """Agent 事件；type 取 session、text、notice、activity、draft_saved、done、error。
+
+    activity 是一轮进行中的当前步骤说明，只实时转发、不进时间线。
+    """
 
     type: str
     sdk_session_id: str
@@ -56,7 +59,7 @@ def checked_event(event: object) -> AgentEvent:
     if not isinstance(event, dict) or not isinstance(event.get("type"), str):
         raise AgentProtocolError(f"事件缺少类型：{event!r}")
     kind = event["type"]
-    if kind not in {"session", "text", "notice", "draft_saved", "done", "error"}:
+    if kind not in {"session", "text", "notice", "activity", "draft_saved", "done", "error"}:
         raise AgentProtocolError(f"未知事件类型：{kind}")
     if kind == "session" and not isinstance(event.get("sdk_session_id"), str):
         raise AgentProtocolError(f"session 事件缺少会话标识：{event!r}")
@@ -64,6 +67,8 @@ def checked_event(event: object) -> AgentEvent:
         raise AgentProtocolError(f"text 事件缺少文本：{event!r}")
     if kind == "notice" and not isinstance(event.get("text"), str):
         raise AgentProtocolError(f"notice 事件缺少文本：{event!r}")
+    if kind == "activity" and not isinstance(event.get("text"), str):
+        raise AgentProtocolError(f"activity 事件缺少文本：{event!r}")
     if kind == "draft_saved" and not (
         isinstance(event.get("operation_id"), str) and isinstance(event.get("version"), int)
     ):

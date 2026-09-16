@@ -180,6 +180,87 @@ async def test_program_notice_is_persisted_in_timeline(flow):
     ]
 
 
+async def test_current_step_is_published_readable_and_cleared_without_entering_timeline(flow):
+    task = flow.tasks.create_task("查资料")
+    reached = asyncio.Event()
+    proceed = asyncio.Event()
+
+    def handler(turn):
+        async def events():
+            yield {"type": "activity", "text": "正在检索资料：星云验收"}
+            reached.set()
+            await proceed.wait()
+            yield {"type": "text", "text": "找到了。"}
+            yield {"type": "done"}
+
+        return events()
+
+    flow.gateway.handle("message", handler)
+    subscription = flow.service.events.subscribe(task["task_id"])
+    flow.service.submit_message(task["task_id"], "星云项目验收代号是什么")
+    async with asyncio.timeout(5):
+        await reached.wait()
+
+    # 刷新后的页面从最新调用读到当前步骤
+    assert flow.service.latest_run(task["task_id"])["activity"] == "正在检索资料：星云验收"
+    proceed.set()
+    await drain(flow.service)
+
+    published = []
+    while not subscription.empty():
+        published.append(subscription.get_nowait())
+    assert {"type": "activity", "text": "正在检索资料：星云验收"}.items() <= published[0].items()
+    assert flow.service.latest_run(task["task_id"])["activity"] is None
+    kinds = [item["kind"] for item in flow.service.get_timeline(task["task_id"])["items"]]
+    assert kinds == ["text", "text"]
+
+
+async def test_failure_names_the_last_step(flow):
+    task = flow.tasks.create_task("查日程")
+
+    def handler(turn):
+        async def events():
+            yield {"type": "activity", "text": "正在查询日程：2026-09-17 00:00 至 2026-09-18 00:00"}
+            yield {"type": "error", "message": "iCloud 连接超时"}
+
+        return events()
+
+    flow.gateway.handle("message", handler)
+    flow.service.submit_message(task["task_id"], "明天有什么安排")
+    await drain(flow.service)
+
+    items = flow.service.get_timeline(task["task_id"])["items"]
+    errors = [item for item in items if item["kind"] == "error"]
+    assert [item["text"] for item in errors] == [
+        "iCloud 连接超时（最后一步：正在查询日程：2026-09-17 00:00 至 2026-09-18 00:00）"
+    ]
+    assert flow.service.latest_run(task["task_id"])["error"] == errors[0]["text"]
+
+
+async def test_step_is_cleared_when_the_agent_starts_writing(flow):
+    task = flow.tasks.create_task("查资料")
+    wrote = asyncio.Event()
+    proceed = asyncio.Event()
+
+    def handler(turn):
+        async def events():
+            yield {"type": "activity", "text": "正在读取资料：项目/验收.md"}
+            yield {"type": "text", "text": "读完了，"}
+            wrote.set()
+            await proceed.wait()
+            yield {"type": "done"}
+
+        return events()
+
+    flow.gateway.handle("message", handler)
+    flow.service.submit_message(task["task_id"], "看看验收纪要")
+    async with asyncio.timeout(5):
+        await wrote.wait()
+    assert flow.service.latest_run(task["task_id"])["activity"] is None
+    proceed.set()
+    await drain(flow.service)
+
+
 async def test_timeline_preserves_text_draft_text_and_updates_card_in_place(flow):
     task = flow.tasks.create_task("写邮件")
 

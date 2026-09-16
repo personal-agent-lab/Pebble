@@ -30,6 +30,7 @@ from qodercn_agent_sdk import (
     StreamEvent,
     SystemMessage,
     TextBlock,
+    ToolUseBlock,
     access_token,
 )
 
@@ -49,7 +50,7 @@ from server.gateway.agent_contract import AgentEvent, AgentProtocolError, Turn
 from server.memory.service import MemoryStore
 from server.tools.memory.tools import judge_registry, review_registry
 from server.tools.personal_kb.catalog import CATALOG_TITLE
-from server.tools.registry import ToolDefinition
+from server.tools.registry import ToolDefinition, activity
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,13 @@ COMPACTION_ERROR_MESSAGE = "短期上下文压缩失败"
 # 轮次暴露。触发轮与结果回传轮的输入来自外部内容，不能让其指令驱动网络请求把内容
 # 带出实例；WebFetch 是对指定页面的只读抓取，与 WebSearch 合起来才是完整的查资料能力。
 WEB_TOOLS = ("WebSearch", "WebFetch")
+
+
+# 内置联网工具不经本进程注册表，步骤说明在开放它们的这一层给出。
+WEB_TOOL_ACTIVITIES = {
+    "WebSearch": ("正在联网搜索", "query"),
+    "WebFetch": ("正在读取网页", "url"),
+}
 
 
 async def authorize_web_tool(tool_name: str, _input: dict, _context: Any):
@@ -264,9 +272,35 @@ class QoderGateway:
                                 if isinstance(block, TextBlock) and block.text.strip():
                                     yield {"type": "text", "text": block.text}
                         streamed = False
+                        # 模型给出完整的工具调用时、执行开始之前告诉页面这一步在做什么。
+                        for block in message.content:
+                            if isinstance(block, ToolUseBlock):
+                                text = self._activity_text(block, visible)
+                                if text:
+                                    yield {"type": "activity", "text": text}
         while not queued.empty():
             yield queued.get_nowait()
         yield {"type": "error", "message": NO_TERMINAL_MESSAGE}
+
+    @staticmethod
+    def _activity_text(block: ToolUseBlock, visible: list[ToolDefinition]) -> str | None:
+        """把一次工具调用换成用户能读懂的步骤说明；没有声明说明的工具不展示。"""
+        arguments = block.input if isinstance(block.input, dict) else {}
+        prefix = f"mcp__{TOOL_SERVER_NAME}__"
+        if block.name.startswith(prefix):
+            name = block.name[len(prefix) :]
+            definition = next((tool for tool in visible if tool.name == name), None)
+            if definition is None or definition.activity_renderer is None:
+                return None
+            try:
+                return definition.activity_renderer(arguments)
+            except Exception:
+                logger.exception("工具 %s 的步骤说明生成失败", name)
+                return None
+        if block.name in WEB_TOOL_ACTIVITIES:
+            label, field = WEB_TOOL_ACTIVITIES[block.name]
+            return activity(label, arguments.get(field))
+        return None
 
     async def _compact_if_needed(self, client: QoderSDKClient) -> None:
         """运行时未启用自动压缩时，在达到其阈值后先完成手动压缩。"""
