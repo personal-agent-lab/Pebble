@@ -61,9 +61,8 @@ const SKILL_ICON = (
   </svg>
 );
 
-// 资料、规则与 Skill 属于后续阶段，服务端尚无接口：入口保留但明确置灰，不做占位页面。
+// 规则与 Skill 属于后续阶段，服务端尚无接口：入口保留但明确置灰，不做占位页面。
 const PLACEHOLDERS = [
-  { label: "资料", icon: KB_ICON },
   { label: "规则", icon: MEMORY_ICON },
   { label: "Skill", icon: SKILL_ICON },
 ];
@@ -97,6 +96,16 @@ function TasksLink({ unread }: { unread: number }) {
       {TASKS_ICON}
       任务
       {unread > 0 && <span className="nav-count">{unread} 待确认</span>}
+    </NavLink>
+  );
+}
+
+/** 资料入口：资料列表与每份资料的页面都算在内。 */
+function KbLink() {
+  return (
+    <NavLink to="/kb" className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
+      {KB_ICON}
+      资料
     </NavLink>
   );
 }
@@ -358,6 +367,7 @@ export default function AppShell({ serviceError, children }: Props) {
         </div>
         <nav className="sidebar-nav">
           <SidebarTasks />
+          <KbLink />
           <Placeholders />
         </nav>
         {offline && (
@@ -373,6 +383,7 @@ export default function AppShell({ serviceError, children }: Props) {
 
       <nav className="tabbar">
         <TasksLink unread={unread} />
+        <KbLink />
         <Placeholders />
       </nav>
     </div>

@@ -43,6 +43,11 @@ def _restored_notice(result: dict) -> str:
     )
 
 
+def _archived_notice(result: dict) -> str:
+    action = "任务已归档，但当前不可检索" if _stale(result) else "已归档任务"
+    return f"{action}：{result['title']}。位置：{result['path']}"
+
+
 def _stale(result: dict) -> bool:
     return result.get("index_status") == "stale"
 
@@ -207,6 +212,43 @@ def kb_history(
     把 version 交给 kb_restore。
     """
     return kb_store.history(path=path, doc_id=id)
+
+
+ARCHIVE_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": ["original", "summary"]},
+            "heading": {"type": "string"},
+            "text": {"type": "string"},
+        },
+        "required": ["kind", "text"],
+        "additionalProperties": False,
+    },
+}
+
+
+@tool(
+    name="kb_archive",
+    side_effect=SideEffect.LOCAL_WRITE,
+    notice_renderer=_archived_notice,
+    param_schemas={"items": ARCHIVE_ITEM_SCHEMA},
+)
+def kb_archive(title: str, items: list[dict], *, kb_store: KbStore) -> dict:
+    """把一次跨工具任务的关键信息与逐项执行结果归档到个人资料库（archive 目录），便于以后
+    查回“当时依据什么、做了什么、结果如何”。
+
+    何时归档：任务里的外部操作有了实际结果之后（邮件已发送或发送失败、日程已创建等），
+    例如收到执行结果回传时。纯问答、闲聊、只起草未确认的任务不归档；同一任务已经归档过、
+    又有新结果时，用 kb_update 修改那份归档，不要重复新建。
+
+    参数：title 归档标题（如 "与张老师约定课程讨论时间"）；items 逐项内容，每项含
+    kind（original 表示邮件、日程等原始内容的摘录，summary 表示你的总结或逐项执行结果）、
+    可选 heading 小标题与 text 正文。原始内容照录，不改写；总结与原文分开写。执行结果以工具
+    返回和系统回传为准：没有发送成功的邮件不能写成“已发送”，结果不确定就写明不确定。
+    """
+    return kb_store.archive(title=title, items=items)
 
 
 CONSENT_RULE = (

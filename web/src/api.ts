@@ -1,4 +1,4 @@
-/** 后端 Interface：统一时间线、邮件草稿版本与确认执行。 */
+/** 后端 Interface：统一时间线、邮件草稿版本、确认执行与资料管理。 */
 
 export type RunStatus = "pending" | "running" | "done" | "error" | "interrupted";
 export type OperationStatus = "pending" | "sending" | "sent" | "creating" | "created" | "failed" | "unknown";
@@ -114,7 +114,7 @@ export class ApiError extends Error {
     readonly code: string,
     message: string,
     readonly httpStatus: number,
-    readonly currentVersion?: number,
+    readonly currentVersion?: number | string,
     readonly operationStatus?: string,
     readonly fieldErrors?: FieldError[],
   ) {
@@ -127,7 +127,7 @@ export class ApiError extends Error {
 type ErrorBody = {
   error?: string;
   message?: string;
-  current_version?: number;
+  current_version?: number | string;
   status?: string;
   errors?: FieldError[];
   detail?: unknown;
@@ -212,3 +212,74 @@ export function subscribeEvents(
   }
   return () => source.close();
 }
+
+/* ---------- 资料管理 ---------- */
+
+/** 资料库列表项：`version` 是该资料当前的 Git 提交。 */
+export type KbListItem = {
+  id: string | null;
+  path: string;
+  title: string | null;
+  tags: string[] | null;
+  version: string;
+};
+
+export type KbDocument = {
+  id: string;
+  path: string;
+  title: string;
+  tags: string[];
+  created_at: string | null;
+  updated_at: string | null;
+  version: string;
+  body: string;
+};
+
+export type KbHit = {
+  id: string;
+  path: string;
+  title: string | null;
+  heading: string;
+  snippet: string;
+};
+
+export type KbWriteResult = {
+  id: string;
+  path: string;
+  title: string;
+  version: string;
+  index_status?: "ok" | "stale";
+};
+
+const query = (params: Record<string, string | undefined>) => {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) if (value !== undefined) search.set(key, value);
+  return search.toString();
+};
+
+export const listKbDocuments = () =>
+  request<{ directory: string; documents: KbListItem[] }>("/kb/documents");
+export const getKbDocument = (path: string) =>
+  request<KbDocument>(`/kb/document?${query({ path })}`);
+export const searchKb = (q: string) =>
+  request<{ query: string; results: KbHit[] }>(`/kb/search?${query({ q })}`);
+export const createKbDocument = (fields: { title: string; body: string; path?: string; tags: string[] }) =>
+  request<KbWriteResult>("/kb/documents", { method: "POST", body: JSON.stringify(fields) });
+export const updateKbDocument = (
+  path: string,
+  expectedVersion: string,
+  fields: { title: string; body: string; tags: string[] },
+) => request<KbWriteResult>("/kb/document/update", {
+  method: "POST",
+  body: JSON.stringify({ path, expected_version: expectedVersion, ...fields }),
+});
+export const moveKbDocument = (path: string, expectedVersion: string, newPath: string) =>
+  request<KbWriteResult & { previous_path: string }>("/kb/document/move", {
+    method: "POST",
+    body: JSON.stringify({ path, expected_version: expectedVersion, new_path: newPath }),
+  });
+export const deleteKbDocument = (path: string, expectedVersion: string) =>
+  request<{ path: string }>("/kb/document/delete", {
+    method: "POST",
+    body: JSON.stringify({ path, expected_version: expectedVersion }),
+  });

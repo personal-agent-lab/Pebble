@@ -1,6 +1,6 @@
 # 个人知识库契约
 
-状态：**Phase 3 已实现**（`kb_list`/`kb_save`/`kb_read`/`kb_update`/`kb_history`/`kb_search`/`kb_delete`/`kb_move`/`kb_restore`，含 SQLite FTS5 分节索引与用户改动的自动跟随）。Phase 4–5 是约定，尚未实现。产品行为以 `docs/kb-spec.md` 为准；本文定义个人知识库（Personal KB）的存储形态、索引、工具字段与引用语义。实现与本文冲突时先改本文，不静默偏离。
+状态：**Phase 4 已实现**（`kb_list`/`kb_save`/`kb_read`/`kb_update`/`kb_history`/`kb_search`/`kb_delete`/`kb_move`/`kb_restore`/`kb_archive`，含 SQLite FTS5 分节索引、用户改动的自动跟随与资料管理 HTTP 接口，见第 9 节）。Phase 5 是约定，尚未实现。产品行为以 `docs/kb-spec.md` 为准；本文定义个人知识库（Personal KB）的存储形态、索引、工具字段与引用语义。实现与本文冲突时先改本文，不静默偏离。
 
 知识库保存“具体资料”，属于按需检索；Memory 保存“关于用户的精简背景、偏好与长期目标”，属于常驻上下文，见 `skills.md` 与 `memory-spec.md`。
 
@@ -11,7 +11,7 @@
 | Phase 1 | `kb/` 文件存储 + 本地 Git 版本；资料列举、保存、读取、更新和历史读取；稳定 `id`、版本历史；与长期记忆的边界 | 已实现 |
 | Phase 2 | 按内容检索：`kb_search` + SQLite FTS5 分节索引、增量替换与重建；按路径、`id` 或引用读取原文；回答不向用户展示来源 | 已实现 |
 | Phase 3 | 自动跟随用户在文件系统里的改动（自动纳入版本、识别移动与重命名、为无标识文件补标识）；`kb_delete`/`kb_move`/`kb_restore`；触发轮开放资料新建与修改 | 已实现 |
-| Phase 4 | 资料管理界面（浏览、搜索、编辑）；`kb_archive` 任务归档 | 未实现 |
+| Phase 4 | 资料管理界面（浏览、搜索、编辑）；`kb_archive` 任务归档 | 已实现 |
 | Phase 5 | 主题页、主题目录常驻上下文与后台主题整理；外部笔记导入（首个来源熊掌记） | 未实现 |
 
 索引只收录内容与其 Git 版本一致的文件；Phase 3 起用户在文件系统里的改动在每次资料库操作前自动纳入版本（第 3 节），因此改完即可在下一次检索中命中。程序不监听文件变化，改动在下一次任何资料库操作时才纳入。
@@ -126,7 +126,7 @@ updated_at: 2026-09-14T10:22:31+08:00
 
 输入 `path` 或 `id`（二者之一）、可选 `version`（某次提交的 Git commit，读取历史版本），或 `ref`（按引用读取）。`ref` 必须原样取自 `kb_search`、`kb_read` 或 `kb_save` 的返回：`path`、`commit`、`lines` 必填（模型可见 schema 已声明）。给 `ref` 时按 `commit + path + lines` 读取该版本的原文片段，并校验资料身份、路径与行号：commit 不存在或路径在该版本下不存在返回 `not_found`；`id` 不匹配、行号越界，或行号区间与资料的某个分节/整篇正文区间不对应返回 `invalid_kb`，不返回任何内容——拼接出来的区间不算引用。
 
-输出 `id`、`title`、`tags`、`heading`、`lines`、`commit`、`body`（Markdown 原文，不总结）和同一个规范化 `ref`。按 `path`/`id` 读取整篇时 `heading` 为空、`lines` 覆盖正文区间（不含 frontmatter），与返回正文严格对应。模型按哪种方式读取由它自行判断，读取方式不影响回答。规范化包括：commit 展开为完整 sha，`id` 取自该版本的 frontmatter，行号区间与分节完全一致时 `heading` 重新取自该分节，否则（整篇区间）`heading` 为空。
+输出 `id`、`path`、`title`、`tags`、`created_at`、`updated_at`、`heading`、`lines`、`commit`、`body`（Markdown 原文，不总结）和同一个规范化 `ref`（按 `ref` 读取时不含 `path`、`created_at`、`updated_at`，路径见 `ref`）。按 `path`/`id` 读取整篇时 `heading` 为空、`lines` 覆盖正文区间（不含 frontmatter），与返回正文严格对应。模型按哪种方式读取由它自行判断，读取方式不影响回答。规范化包括：commit 展开为完整 sha，`id` 取自该版本的 frontmatter，行号区间与分节完全一致时 `heading` 重新取自该分节，否则（整篇区间）`heading` 为空。
 
 ### `kb_save`
 
@@ -154,7 +154,9 @@ updated_at: 2026-09-14T10:22:31+08:00
 
 ### `kb_archive`（Phase 4）
 
-输入 `task_id`、`items[]`。每项含 `kind: "original" | "summary"` 与 `text`：`original` 为邮件、日程等原始内容的摘录，`summary` 为模型总结或逐项执行结果。输出归档文件的 `id`、`path`、`ref`。归档文件写入 `archive/`，原始内容与总结分节保存；执行结果以实际执行记录为准。
+输入 `title` 与非空 `items[]`。每项含 `kind: "original" | "summary"`、可选 `heading` 与非空 `text`：`original` 为邮件、日程等原始内容的摘录，`summary` 为模型总结或逐项执行结果。归档文件写入 `kb/archive/<日期>-<标题 slug>-<随机后缀>.md`，正文先列全部原始内容再列总结，每项一节，节标题为 `原始内容：<heading>` 或 `总结与执行结果：<heading>`（无 `heading` 时省去冒号部分）。输出与 `kb_save` 相同，程序在时间线展示“已归档任务：标题。位置：…”。字段不合法返回 `invalid_kb`，不写入。
+
+归档时机由模型判断，写在工具说明里：任务中的外部操作有了实际结果之后归档（典型是执行结果回传轮）；纯问答、闲聊、只起草未确认的任务不归档；同一任务再有新结果时用 `kb_update` 修改已有归档。执行结果以工具返回与系统回传为准。归档不记录任务标识或出处。
 
 知识库工具都不产生外部副作用，因此不经过 Confirmation；但每次写入都留下可读文件与 Git 提交，用户可直接查看和修改。
 
@@ -204,6 +206,28 @@ updated_at: 2026-09-14T10:22:31+08:00
 - 一次导入的全部写入合并为一个 Git 提交，提交后统一更新索引。
 - 输出 `created`、`updated`、`skipped[]`、`conflicts[]`、`failed[]`，后三者每项含标题与原因。
 
-## 9. 错误
+## 9. 资料管理 HTTP 接口（Phase 4）
+
+界面操作由用户本人发起，等同于直接改文件（认证随交付阶段 6 接入）：不经过 Agent，不需要对话中的同意，也不产生时间线提示。接口复用 `KbStore` 的同一套校验、版本与索引规则；错误体与第 10 节相同，`invalid_kb` 为 422，`not_found` 为 404，`version_conflict` 为 409（附 `current_version`），资料库或索引不可用为 503，资料库未装配时返回 `unavailable`（503）。
+
+| 方法与路径 | 输入 | 输出 |
+| --- | --- | --- |
+| `GET /api/kb/documents` | 可选 `directory` | 与 `kb_list` 相同 |
+| `GET /api/kb/document` | `path` | `id`、`path`、`title`、`tags`（无标签为空列表）、`created_at`、`updated_at`、`version`、`body` |
+| `GET /api/kb/search` | `q`、可选 `tag` | 与 `kb_search` 相同，最多 20 条 |
+| `POST /api/kb/documents` | `title`、`body`、可选 `path`、`tags[]` | 201，与 `kb_save` 相同 |
+| `POST /api/kb/document/update` | `path`、`expected_version`，以及要写入的 `title`、`body`、`tags[]` | 与 `kb_update` 相同 |
+| `POST /api/kb/document/move` | `path`、`expected_version`、`new_path` | 与 `kb_move` 相同 |
+| `POST /api/kb/document/delete` | `path`、`expected_version` | 与 `kb_delete` 相同 |
+
+界面约定：
+
+- 标题与标签是表单字段，`id` 与时间只显示不修改；正文用所见即所得的 Markdown 编辑器（CommonMark + GFM）。
+- 编辑器会把原文重新排版（例如表格对齐）。只有正文实际被编辑时才提交编辑器输出的 Markdown；只改标题或标签时提交原文，打开不编辑不产生写入。
+- 保存、移动与删除都带读取时的 `version`；冲突时提示资料已被修改，用户选择重新载入，不覆盖。
+- 原文中的 HTML 按纯文本显示，不在页面中执行。
+- 不提供历史版本、差异与恢复入口，不展示 Agent 的读取记录。
+
+## 10. 错误
 
 复用 `server/errors.py` 的词汇与字段形状：`NotFoundError`、`VersionConflictError`（附 `current_version`，取 Git commit sha）。资料校验失败返回 `KbValidationError`（`invalid_kb`），附 `errors[]`，每项含 `field` 与 `message`，不保存数据，按引用读取失败时也不返回内容。资料文件或本地版本仓库不可用时返回 `KbStoreUnavailableError`（`kb_store_unavailable`）；索引缺失、损坏或无法重建时返回 `KbIndexUnavailableError`（`kb_index_unavailable`），此时不返回旧索引结果。后台整理写入 `kb/topics/` 之外的路径返回 `invalid_kb`。

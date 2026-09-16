@@ -1,4 +1,4 @@
-"""HTTP 路由与请求结构：健康检查、任务、对话、SSE 和确认。"""
+"""HTTP 路由与请求结构：健康检查、任务、对话、SSE、确认与资料管理。"""
 
 import asyncio
 import json
@@ -11,9 +11,11 @@ from pydantic import BaseModel, Field
 from server.approval.service import ConfirmationService
 from server.config import get_settings
 from server.db import schema_version, session
+from server.errors import DependencyUnavailableError
 from server.gateway.runtime import GatewayRuntime
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
+from server.tools.personal_kb.service import KbStore
 
 
 def get_tasks(request: Request) -> SessionStore:
@@ -32,6 +34,13 @@ def get_confirmations(request: Request) -> ConfirmationService:
     return request.app.state.confirmations
 
 
+def get_kb(request: Request) -> KbStore:
+    kb_store = request.app.state.kb_store
+    if kb_store is None:
+        raise DependencyUnavailableError("资料库未接入")
+    return kb_store
+
+
 Tasks = Annotated[SessionStore, Depends(get_tasks)]
 
 
@@ -42,6 +51,9 @@ Drafts = Annotated[MailDraftStore, Depends(get_drafts)]
 
 
 Confirmations = Annotated[ConfirmationService, Depends(get_confirmations)]
+
+
+Kb = Annotated[KbStore, Depends(get_kb)]
 
 
 router = APIRouter()
@@ -219,3 +231,86 @@ def verify(operation_id: str, confirmations: Confirmations, agent: Agent) -> dic
     view = confirmations.verify_pending(operation_id)
     agent.kick()
     return view
+
+
+# ---------- 资料管理 ----------
+#
+# 界面操作由用户本人发起，等同于直接改文件：不经过 Agent，也不需要对话中的同意；
+# 写入沿用资料库自身的版本校验，保存、移动与删除都要带上读取时的 version。
+
+
+class KbDocumentCreate(BaseModel):
+    title: str
+    body: str
+    path: str | None = None
+    tags: list[str] | None = None
+
+
+class KbDocumentUpdate(BaseModel):
+    path: str
+    expected_version: str = Field(min_length=1)
+    title: str | None = None
+    body: str | None = None
+    tags: list[str] | None = None
+
+
+class KbDocumentMove(BaseModel):
+    path: str
+    expected_version: str = Field(min_length=1)
+    new_path: str
+
+
+class KbDocumentDelete(BaseModel):
+    path: str
+    expected_version: str = Field(min_length=1)
+
+
+@router.get("/kb/documents", tags=["kb"])
+def kb_documents(kb: Kb, directory: str | None = None) -> dict:
+    return kb.list(directory=directory)
+
+
+@router.get("/kb/document", tags=["kb"])
+def kb_document(kb: Kb, path: str) -> dict:
+    document = kb.read(path=path)
+    return {
+        "id": document["id"],
+        "path": document["path"],
+        "title": document["title"],
+        "tags": document["tags"] or [],
+        "created_at": document["created_at"],
+        "updated_at": document["updated_at"],
+        "version": document["commit"],
+        "body": document["body"],
+    }
+
+
+@router.get("/kb/search", tags=["kb"])
+def kb_search(kb: Kb, q: str, tag: str | None = None) -> dict:
+    return kb.search(query=q, tag=tag, max_results=20)
+
+
+@router.post("/kb/documents", status_code=201, tags=["kb"])
+def kb_create(body: KbDocumentCreate, kb: Kb) -> dict:
+    return kb.save(title=body.title, body=body.body, path=body.path, tags=body.tags)
+
+
+@router.post("/kb/document/update", tags=["kb"])
+def kb_update(body: KbDocumentUpdate, kb: Kb) -> dict:
+    return kb.update(
+        expected_version=body.expected_version,
+        path=body.path,
+        title=body.title,
+        body=body.body,
+        tags=body.tags,
+    )
+
+
+@router.post("/kb/document/move", tags=["kb"])
+def kb_move(body: KbDocumentMove, kb: Kb) -> dict:
+    return kb.move(expected_version=body.expected_version, path=body.path, new_path=body.new_path)
+
+
+@router.post("/kb/document/delete", tags=["kb"])
+def kb_delete(body: KbDocumentDelete, kb: Kb) -> dict:
+    return kb.delete(expected_version=body.expected_version, path=body.path)

@@ -35,6 +35,7 @@ def create_app(
     confirmations: ConfirmationService | None = None,
     reviews: MemoryReviewScheduler | None = None,
     memory_store: MemoryStore | None = None,
+    kb_store: KbStore | None = None,
     create_event=None,
     verify_event=None,
 ) -> FastAPI:
@@ -81,6 +82,7 @@ def create_app(
     app.state.confirmations = confirmations
     app.state.agent = agent
     app.state.mail_source = mail_source
+    app.state.kb_store = kb_store
     install_error_handlers(app)
     app.include_router(router, prefix="/api")
     return app
@@ -138,6 +140,7 @@ def create_production_app() -> FastAPI:
         confirmations=confirmations,
         reviews=MemoryReviewScheduler(memory_store=memory_store),
         memory_store=memory_store,
+        kb_store=kb_store,
     )
 
 

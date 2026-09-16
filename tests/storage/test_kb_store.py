@@ -256,10 +256,11 @@ def test_kb_tools_are_registered_with_correct_schema_and_turn_exposure(settings)
     readonly = {"kb_list", "kb_read", "kb_history", "kb_search"}
     everyday = readonly | {"kb_save", "kb_update"}
     destructive = {"kb_delete", "kb_move", "kb_restore"}
-    # 删除、移动与恢复只在用户亲自发起的轮次可见；新建与修改在触发轮与回传轮同样可用
-    assert visible[TurnKind.MESSAGE] == everyday | destructive
+    # 删除、移动与恢复只在用户亲自发起的轮次可见；新建与修改在触发轮与回传轮同样可用；
+    # 归档不在触发轮出现，执行结果回传轮正是归档的时机
+    assert visible[TurnKind.MESSAGE] == everyday | destructive | {"kb_archive"}
     assert visible[TurnKind.NEW_MAIL] == everyday
-    assert visible[TurnKind.EXECUTION_RESULT] == everyday
+    assert visible[TurnKind.EXECUTION_RESULT] == everyday | {"kb_archive"}
 
 
 def test_kb_tools_are_skipped_when_store_unavailable(settings):

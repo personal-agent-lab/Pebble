@@ -39,6 +39,7 @@ from server.tools.personal_kb.index import (
 
 ID_PREFIX = "kb_"
 DEFAULT_DIR = "inbox"
+ARCHIVE_DIR = "archive"
 INDEX_FILENAME = "kb-index.sqlite3"
 MAX_RESULTS_DEFAULT = 10
 MAX_RESULTS_LIMIT = 20
@@ -134,8 +135,11 @@ class KbStore:
             lines = self._body_lines(meta.get("title") or "", raw)
             return {
                 "id": doc_id,
+                "path": rel,
                 "title": meta.get("title"),
                 "tags": meta.get("tags"),
+                "created_at": meta.get("created_at"),
+                "updated_at": meta.get("updated_at"),
                 "heading": None,
                 "lines": lines,
                 "commit": commit,
@@ -278,6 +282,43 @@ class KbStore:
                 previous_version=current,
                 index_status=index_status,
             )
+
+    def archive(self, *, title: str, items: list[dict]) -> dict:
+        """把一次任务的关键信息与逐项结果归档到 `kb/archive/`：原始内容与总结分节保存。"""
+        errors = []
+        if not (title or "").strip():
+            errors.append({"field": "title", "message": "归档标题不能为空"})
+        if not isinstance(items, list) or not items:
+            errors.append({"field": "items", "message": "归档至少需要一项内容"})
+            items = []
+        sections = {"original": [], "summary": []}
+        for position, item in enumerate(items):
+            kind = item.get("kind") if isinstance(item, dict) else None
+            text = item.get("text") if isinstance(item, dict) else None
+            if kind not in sections:
+                errors.append(
+                    {
+                        "field": f"items[{position}].kind",
+                        "message": "kind 必须是 original 或 summary",
+                    }
+                )
+                continue
+            if not isinstance(text, str) or not text.strip():
+                errors.append({"field": f"items[{position}].text", "message": "内容不能为空"})
+                continue
+            heading = item.get("heading")
+            label = heading.strip() if isinstance(heading, str) and heading.strip() else None
+            sections[kind].append((label, text.strip()))
+        if errors:
+            raise KbValidationError(errors)
+        parts = []
+        for kind, name in (("original", "原始内容"), ("summary", "总结与执行结果")):
+            for label, text in sections[kind]:
+                parts.append(f"## {name}：{label}\n\n{text}" if label else f"## {name}\n\n{text}")
+        doc_id_hint = uuid4().hex[-6:]
+        date = timestamp()[:10]
+        path = f"{ARCHIVE_DIR}/{date}-{self._slug(title)}-{doc_id_hint}.md"
+        return self.save(title=title.strip(), body="\n\n".join(parts), path=path)
 
     def delete(
         self,
