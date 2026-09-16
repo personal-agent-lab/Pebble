@@ -102,6 +102,74 @@ def insert_notice(conn: sqlite3.Connection, task_id: str, run_id: str, text: str
     return item_id
 
 
+def insert_source(
+    conn: sqlite3.Connection,
+    task_id: str,
+    run_id: str,
+    source: dict,
+) -> str:
+    """记录一次资料读取的来源；同一轮同一版本与行号只记一次。"""
+    ref = source["ref"]
+    start_line, end_line = ref["lines"]
+    existing = conn.execute(
+        "SELECT source_id FROM task_run_sources "
+        "WHERE run_id = ? AND commit_sha = ? AND path = ? AND start_line = ? AND end_line = ?",
+        (run_id, ref["commit"], ref["path"], start_line, end_line),
+    ).fetchone()
+    if existing is not None:
+        return existing["source_id"]
+    sequence = conn.execute(
+        "SELECT COALESCE(MAX(sequence), 0) + 1 AS next FROM task_run_sources WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()["next"]
+    source_id = str(uuid4())
+    conn.execute(
+        "INSERT INTO task_run_sources "
+        "(source_id, task_id, run_id, sequence, doc_id, path, title, heading, "
+        "start_line, end_line, commit_sha, excerpt, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            source_id,
+            task_id,
+            run_id,
+            sequence,
+            ref.get("id") or "",
+            ref["path"],
+            source.get("title"),
+            ref.get("heading"),
+            start_line,
+            end_line,
+            ref["commit"],
+            source.get("excerpt") or "",
+            timestamp(),
+        ),
+    )
+    return source_id
+
+
+def run_sources(conn: sqlite3.Connection, task_id: str) -> dict[str, list[dict]]:
+    """按轮次分组的来源记录，按读取顺序排列。"""
+    grouped: dict[str, list[dict]] = {}
+    for row in conn.execute(
+        "SELECT * FROM task_run_sources WHERE task_id = ? ORDER BY rowid", (task_id,)
+    ):
+        grouped.setdefault(row["run_id"], []).append(
+            {
+                "source_id": row["source_id"],
+                "title": row["title"],
+                "excerpt": row["excerpt"],
+                "ref": {
+                    "id": row["doc_id"],
+                    "path": row["path"],
+                    "heading": row["heading"],
+                    "lines": [row["start_line"], row["end_line"]],
+                    "commit": row["commit_sha"],
+                },
+            }
+        )
+    return grouped
+
+
 class TimelineStore:
     def __init__(self, path: Path | None = None):
         self.path = path
@@ -109,10 +177,17 @@ class TimelineStore:
     def list_items(self, task_id: str) -> dict:
         with session(self.path) as conn:
             record = tasks.task(conn, task_id)
+            rows = list(
+                conn.execute(
+                    "SELECT * FROM task_timeline_items WHERE task_id = ? ORDER BY rowid",
+                    (task_id,),
+                )
+            )
+            sources = run_sources(conn, task_id)
+            # 来源挂在该轮最后一段回答上：一轮里模型可能先答、再读资料、再补答。
+            anchors = _answer_anchors(rows)
             items = []
-            for row in conn.execute(
-                "SELECT * FROM task_timeline_items WHERE task_id = ? ORDER BY rowid", (task_id,)
-            ):
+            for row in rows:
                 item = dict(row)
                 base = {
                     "item_id": item["item_id"],
@@ -121,13 +196,15 @@ class TimelineStore:
                     "created_at": item["created_at"],
                 }
                 if item["kind"] == "text":
-                    items.append(
-                        {
-                            **base,
-                            "role": item["role"],
-                            "text": item["text"],
-                        }
-                    )
+                    payload = {
+                        **base,
+                        "role": item["role"],
+                        "text": item["text"],
+                    }
+                    citations = sources.get(item["run_id"], [])
+                    if citations and anchors.get(item["run_id"]) == item["item_id"]:
+                        payload["sources"] = citations
+                    items.append(payload)
                 elif item["kind"] in ("error", "notice"):
                     items.append({**base, "text": item["text"]})
                 elif item["kind"] == "mail_draft":
@@ -145,3 +222,12 @@ class TimelineStore:
                 "sdk_session_id": record["sdk_session_id"],
                 "items": items,
             }
+
+
+def _answer_anchors(rows: list[sqlite3.Row]) -> dict[str, str]:
+    """每轮最后一段 Agent 回答的条目标识；来源只挂在这里。"""
+    anchors: dict[str, str] = {}
+    for row in rows:
+        if row["kind"] == "text" and row["role"] == "assistant":
+            anchors[row["run_id"]] = row["item_id"]
+    return anchors

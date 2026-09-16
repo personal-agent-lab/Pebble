@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -216,6 +216,20 @@ SCHEMA_V10 = (
     "WHERE kind='mail_draft'",
 )
 
+# 回答的来源：模型成功读取资料原文时按轮次记录引用与本次实际读到的片段，供时间线在
+# 该轮最后一段回答下展示。同一轮重复读取同一版本与行号只记一次；摘要不作为来源。
+SCHEMA_V11 = (
+    "CREATE TABLE task_run_sources (source_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "run_id TEXT NOT NULL REFERENCES agent_runs(run_id), "
+    "sequence INTEGER NOT NULL CHECK(sequence >= 1), "
+    "doc_id TEXT NOT NULL, path TEXT NOT NULL, title TEXT, heading TEXT, "
+    "start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, commit_sha TEXT NOT NULL, "
+    "excerpt TEXT NOT NULL, created_at TEXT NOT NULL)",
+    "CREATE UNIQUE INDEX task_run_sources_ref "
+    "ON task_run_sources(run_id, commit_sha, path, start_line, end_line)",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -227,6 +241,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     8: SCHEMA_V8,
     9: SCHEMA_V9,
     10: SCHEMA_V10,
+    11: SCHEMA_V11,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

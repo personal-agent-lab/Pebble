@@ -79,6 +79,10 @@ class KbStoreUnavailableError(Exception):
     """资料文件或本地版本仓库当前不可用。"""
 
 
+class KbIndexUnavailableError(Exception):
+    """资料索引缺失、损坏或无法重建；此时不返回可能过期的旧索引结果。"""
+
+
 def error_details(error: Exception) -> dict | None:
     """已知业务异常的名称与附带字段；其他异常返回 None，由调用方按未预期错误处理。"""
     if isinstance(error, DependencyUnavailableError):
@@ -119,4 +123,6 @@ def error_details(error: Exception) -> dict | None:
         return {"error": "invalid_kb", "message": "资料库操作未通过校验", "errors": error.errors}
     if isinstance(error, KbStoreUnavailableError):
         return {"error": "kb_store_unavailable", "message": str(error)}
+    if isinstance(error, KbIndexUnavailableError):
+        return {"error": "kb_index_unavailable", "message": str(error)}
     return None

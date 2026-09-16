@@ -8,15 +8,18 @@
 确认操作；任务不依赖始终开启的浏览器页面。新邮件是首版的系统触发源，收到即自动开始处理，
 但邮件只是它能做的事之一。
 
-当前状态：对话链、任务时间线、Gateway 与 Qoder CN/Gmail/iCloud Calendar 生产装配已接通，SQLite schema 为 8。
+当前状态：对话链、任务时间线、Gateway 与 Qoder CN/Gmail/iCloud Calendar 生产装配已接通，SQLite schema 为 11。
 Gmail 支持搜索、单封与完整往来读取、入站附件读取、回复与主动新写邮件；两者共用内嵌草稿卡、
 草稿编辑、最终版本确认、去重发送和结果核实。外发邮件只支持纯文字正文。
 iCloud Calendar 支持查询、详情、冲突检查与创建单次日程：对话里给出标题和起止时间就直接创建，
 缺信息先追问补齐，目标时间已有日程则不创建、在对话里说明冲突，你明确要求照建才覆盖创建；
 日程不渲染卡片，结果只在对话文字里汇报。不邀请参与人。
 Memory 的两个长期记忆文件、Agent 写入工具、逐轮加载与本地 Git 历史已实现；管理页面与历史
-对话检索尚未实现。个人知识库、Skills、认证与 HTTPS 远程访问尚未实现，
-目前只能本机和同局域网访问。真实账号验收仍在进行，本地测试通过不代表真实邮件或日程操作成功。
+对话检索尚未实现。个人知识库已实现前两个阶段：Markdown 资料保存在实例数据目录的 `kb/` 下，
+由同一数据目录的本地 Git 管理版本；可以保存、读取、更新、按历史版本读取，也能按关键词检索
+分节、按引用读回原文，回答下会展示程序记录的来源与实际读到的原文片段；资料管理界面、文件
+改动的自动跟随、Skills、认证与 HTTPS 远程访问尚未实现，目前只能本机和同局域网访问。
+真实账号验收仍在进行，本地测试通过不代表真实邮件或日程操作成功。
 
 ## 文档
 
@@ -25,7 +28,7 @@ Memory 的两个长期记忆文件、Agent 写入工具、逐轮加载与本地 
 - `docs/contracts/mail.md`：Gmail 工具、同步触发、确认发送与核实的字段与语义（已实现）。
 - `docs/contracts/calendar.md`：iCloud Calendar 工具、直连创建与冲突处理的字段与语义（已实现）。
 - `docs/contracts/skills.md`：Memory 已实现，Skills 仍为约定。
-- `docs/contracts/personal-kb.md`：个人知识库约定，尚未实现。
+- `docs/contracts/personal-kb.md`：个人知识库的工具、存储与引用语义（Phase 1 与 Phase 2 已实现）。
 
 设计文档第 2 节的组件表与代码结构是目标结构，第 10 节记录已实现部分与已知偏差。
 
@@ -50,7 +53,7 @@ cp .env.example .env
 | `PEBBLE_DATA_DIR` | 实例数据目录，默认 `<仓库根>/.data` |
 | `PEBBLE_HOST`、`PEBBLE_PORT` | 监听地址与端口，默认 `127.0.0.1:8000` |
 | `QODERCN_PERSONAL_ACCESS_TOKEN` | Qoder CN 访问令牌，注意没有 `PEBBLE_` 前缀 |
-| `PEBBLE_QODER_MODEL` | 托管模型型号，默认内置的 Qwen3.8-Max；其他取值由 CLI 按账号动态下发（`qodercli --list-models`） |
+| `PEBBLE_QODER_MODEL` | 托管模型型号，取值由 CLI 按账号动态下发（`qodercli --list-models`） |
 | `PEBBLE_TITLE_MODEL` | 只给任务标题生成用的型号，默认沿用 `PEBBLE_QODER_MODEL` |
 | `PEBBLE_MODEL_PROVIDER`、`PEBBLE_MODEL_API_KEY`、`PEBBLE_MODEL_BASE_URL` | 自定义模型（BYOK）。供应商、密钥、型号必须同时给全，`BASE_URL` 可选；provider 必须匹配账号的 BYOK 目录 |
 | `PEBBLE_GMAIL_CREDENTIALS_PATH` | Gmail OAuth 桌面应用 JSON，默认 `<data_dir>/credentials.json` |
@@ -114,7 +117,8 @@ npm run dev
 任务列表没有列表级事件流，按 5 秒轮询刷新（页面不可见时暂停），新邮件自动触发的任务无需手动刷新；
 任务详情用 SSE，确认后的执行在后台进行，事件流不携带执行状态，页面对执行结果按 1.5 秒轮询直到
 草稿卡状态离开 `sending`，SSE 重连后整体重读时间线对账。
-界面只呈现接口能支撑的内容：来源引用面板与搜索框对应的接口尚未提供，暂不渲染。
+界面只呈现接口能支撑的内容：来源引用面板与搜索框对应的接口尚未提供，暂不渲染；回答下的
+资料来源卡来自程序记录的读取结果，不解析回答措辞。
 
 ## 验证
 
@@ -146,6 +150,22 @@ ls .data/pebble.db
 事实、环境信息、术语与稳定约定，上限 2200 个字符。条目以独立一行 `§` 分隔，可直接编辑。
 下一轮 Agent 调用会重新读取文件；Agent 有效修改会提交到 `<PEBBLE_DATA_DIR>` 内的独立本地 Git
 仓库，数据库、凭证和 SDK 会话不进入该仓库。
+
+## 个人资料库
+
+资料是实例数据目录里的 Markdown 文件，目录结构由 Agent 按内容组织，你可以直接阅读、修改和
+重组：
+
+```text
+<PEBBLE_DATA_DIR>/kb/**/*.md       # 资料本体，frontmatter 里带稳定 id 与来源
+<PEBBLE_DATA_DIR>/kb-index.sqlite3 # 检索索引，派生数据，不进 Git，可随时重建
+```
+
+`kb/` 与 `memory/` 属于同一个本地 Git 仓库，每次写入即一次提交，可用 Git 查看历史与差异。
+检索索引按二级标题分节，写入后自动增量更新；索引缺失、损坏或与已提交内容不一致时会在下一次
+检索前整体重建。索引只收录与 Git 版本一致的文件，所以你在编辑器里改完还没提交的内容不会被
+当成已同步资料检索到（自动跟随属于后续阶段）。回答下的资料来源卡展示的是程序记录的读取结果：
+标题、路径、分节、行号、提交短标识与实际读到的原文片段。
 
 ## 检查命令
 
@@ -219,10 +239,11 @@ uv run --project server python -m tests.acceptance.qoder_context --compact
 ```bash
 uv run --project server python -m tests.acceptance.qoder_memory
 uv run --project server python -m tests.acceptance.qoder_kb
+uv run --project server python -m tests.acceptance.qoder_kb_search
 ```
 
-最近一次结果见 `docs/validation/qoder-context-2026-09-15.md` 与
-`docs/validation/qoder-memory-2026-09-15.md`。
+最近一次结果见 `docs/validation/qoder-context-2026-09-15.md`、
+`docs/validation/qoder-memory-2026-09-15.md` 与 `docs/validation/qoder-kb-phase2-2026-09-16.md`。
 
 触发源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/runtime.py` 的 `MailSource`
 （`start` / `stop` / `error`）。真实 Gmail 检测由 `server/tools/gmail/sync.py` 实现同一接口，

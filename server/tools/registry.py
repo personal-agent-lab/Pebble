@@ -61,6 +61,9 @@ class ToolDefinition:
     emits_draft_saved: bool = False
     # 工具成功后的用户可见提示由所属领域生成；通用工具边界只负责转发文本。
     notice_renderer: Callable[[dict[str, Any]], str] | None = None
+    # 声明了“来源结果”的工具：成功后由所属领域把返回值提取成来源记录（引用的原文），
+    # 通用边界只负责把它变成来源事件，不认具体工具名。
+    source_extractor: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.func(*args, **kwargs)
@@ -81,6 +84,7 @@ class ToolRegistry:
         side_effect: SideEffect = SideEffect.READONLY,
         emits_draft_saved: bool = False,
         notice_renderer: Callable[[dict[str, Any]], str] | None = None,
+        source_extractor: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
     ) -> Any:
         """注册工具。可作为普通函数调用，也可作为装饰器使用。"""
 
@@ -103,6 +107,7 @@ class ToolRegistry:
                 needs_task_id=needs_task_id,
                 emits_draft_saved=emits_draft_saved,
                 notice_renderer=notice_renderer,
+                source_extractor=source_extractor,
             )
 
             self._tools[tool_name] = tool_def
@@ -198,6 +203,7 @@ def tool(
     side_effect: SideEffect = SideEffect.READONLY,
     emits_draft_saved: bool = False,
     notice_renderer: Callable[[dict[str, Any]], str] | None = None,
+    source_extractor: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
 ) -> Any:
     """快捷 @tool 装饰器，向全局默认工具注册表注册。"""
     return default_registry.register(
@@ -207,4 +213,5 @@ def tool(
         side_effect=side_effect,
         emits_draft_saved=emits_draft_saved,
         notice_renderer=notice_renderer,
+        source_extractor=source_extractor,
     )

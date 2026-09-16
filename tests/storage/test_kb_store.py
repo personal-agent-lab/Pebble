@@ -213,10 +213,23 @@ def test_kb_tools_are_registered_with_correct_schema_and_turn_exposure(settings)
     assert props["source"]["type"] == "object"
     assert kb_save.parameters_schema["required"] == ["title", "body"]
 
+    kb_search = default_registry.get_tool("kb_search")
+    search_props = kb_search.parameters_schema["properties"]
+    assert kb_search.parameters_schema["required"] == ["query"]
+    assert search_props["max_results"] == {"type": "integer", "default": None}
+    assert search_props["source_kind"]["type"] == "string"
+    assert search_props["tag"]["type"] == "string"
+
+    kb_read = default_registry.get_tool("kb_read")
+    assert kb_read.parameters_schema["properties"]["ref"]["type"] == "object"
+    # 读取成功的来源由领域声明的提取器产出，通用层不认工具名。
+    assert kb_read.source_extractor is not None
+    assert default_registry.get_tool("kb_search").source_extractor is None
+
     store = KbStore(settings.data_dir)
     tools = build_tools(ToolDeps(drafts=None, tasks=None, gmail=None, kb_store=store))
     kb_names = {t.name for t in tools if t.name.startswith("kb_")}
-    assert kb_names == {"kb_save", "kb_list", "kb_read", "kb_update", "kb_history"}
+    assert kb_names == {"kb_save", "kb_list", "kb_read", "kb_update", "kb_history", "kb_search"}
 
     on_message = {
         t.name
@@ -228,9 +241,16 @@ def test_kb_tools_are_registered_with_correct_schema_and_turn_exposure(settings)
         for t in exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.NEW_MAIL])
         if t.name.startswith("kb_")
     }
-    # 写工具只在用户发起的轮次可见，触发轮只读
-    assert on_message == {"kb_save", "kb_list", "kb_read", "kb_update", "kb_history"}
-    assert on_new_mail == {"kb_list", "kb_read", "kb_history"}
+    # 写工具只在用户发起的轮次可见，触发轮与结果回传轮只读
+    assert on_message == {
+        "kb_save",
+        "kb_list",
+        "kb_read",
+        "kb_update",
+        "kb_history",
+        "kb_search",
+    }
+    assert on_new_mail == {"kb_list", "kb_read", "kb_history", "kb_search"}
 
 
 def test_kb_tools_are_skipped_when_store_unavailable(settings):
