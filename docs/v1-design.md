@@ -2,7 +2,7 @@
 
 本文承接 `v1-spec.md`：规格定义做什么和验收标准，本文定义组件划分、执行约束的实现方式、代码结构、交付顺序与验证证据。两者冲突时以规格为准。
 
-各域的接口字段与语义单独成文，位于 `docs/contracts/`：`mail.md`、`calendar.md`（已实现），`personal-kb.md`、`skills.md`（约定，尚未实现）。本文不重复契约字段。
+各域的接口字段与语义单独成文，位于 `docs/contracts/`：`mail.md`、`calendar.md`（已实现），`personal-kb.md`（Phase 1 已实现：`kb_save`/`kb_read`/`kb_update`），`skills.md`（约定，尚未实现）。本文不重复契约字段。
 
 第 1–6 节是设计，改动需要说明理由；第 7 节的阶段状态随实施推进更新；第 8–9 节是工作约定；第 10 节记录当前实现与已知偏差。
 
@@ -75,6 +75,8 @@ Pebble/
 │   │   ├── toolset.py        # 按装配依赖绑定业务工具，按轮次筛选模型可见范围
 │   │   ├── context.py        # 每轮系统提示、生效规则与技能名单组装
 │   │   └── prompt.py         # 面向个人助理的系统提示
+│   ├── storage/              # 实例数据目录的共享基础设施
+│   │   └── datarepo.py       # 数据目录 Git 仓库的进程内锁、.gitignore 与初始化，供 memory 与 personal_kb 复用
 │   ├── tools/                # 统一注册 + 按服务分目录实现
 │   │   ├── registry.py       # 工具定义、副作用声明与统一注册
 │   │   ├── gmail/
@@ -89,9 +91,9 @@ Pebble/
 │   │   │   ├── service.py    # 日程字段校验与不可变内容版本
 │   │   │   └── client.py     # iCloud 协议与认证
 │   │   └── personal_kb/
-│   │       ├── tools.py      # 检索、读取、保存、更新与归档
+│   │       ├── tools.py      # Phase 1：保存、读取（含历史版本）、更新
 │   │       ├── service.py    # 文件与目录组织、Git 提交、引用生成
-│   │       └── index.py      # 本地全文索引与增量更新
+│   │       └── index.py      # Phase 2：本地全文索引与增量更新
 │   ├── sessions/             # Session Store
 │   │   ├── service.py        # 会话关联、运行状态、待确认内容与逐项结果
 │   │   ├── repository.py     # 任务与操作 SQL
@@ -119,7 +121,7 @@ Pebble/
     └── contracts/            # 按域的接口字段与语义
 ```
 
-这是起始结构，按实际代码规模合并或拆分文件。目录按职责组织，文件数量以职责边界为准，不为凑数增加转发层。HTTP 路由集中在 `api/routes.py`；后台调用与事件订阅归属 `gateway/`，使触发源入口无需依赖 HTTP 模块。Idempotency 不设独立子系统，由 `approval/`、`sessions/` 和具体工具的唯一约束与状态检查共同实现；Git 版本操作由 `memory/`、`skills/`、`personal_kb/` 内的小函数承担。
+这是起始结构，按实际代码规模合并或拆分文件。目录按职责组织，文件数量以职责边界为准，不为凑数增加转发层。HTTP 路由集中在 `api/routes.py`；后台调用与事件订阅归属 `gateway/`，使触发源入口无需依赖 HTTP 模块。Idempotency 不设独立子系统，由 `approval/`、`sessions/` 和具体工具的唯一约束与状态检查共同实现；数据目录 Git 仓库的初始化、进程内共享锁与 `.gitignore` 收敛在 `storage/datarepo.py`，各域（`memory/`、`skills/`、`personal_kb/`）保留自己的 git 提交与原子写小函数。
 
 直接接入 Qoder Agent SDK 带来的取舍：
 
@@ -277,7 +279,7 @@ SDK 显式限定项目工具和必要的 Skill 能力，使用独立工作目录
 
 ## 7. 交付阶段
 
-按 `v1-spec.md` 第 5 节的两个验收场景逐步交付完整链路。本节状态随实施更新；阶段 2 已完成代码接入，阶段 3 进行中：Calendar 与长期 Memory 最小闭环已接入，Memory 管理页面、历史检索与 Personal KB 尚未实现；自动化测试使用外部边界替身，真实账号验收尚未完成。
+按 `v1-spec.md` 第 5 节的两个验收场景逐步交付完整链路。本节状态随实施更新；阶段 2 已完成代码接入，阶段 3 进行中：Calendar、长期 Memory 最小闭环与 Personal KB Phase 1（Markdown 文件 + Git 版本的保存/读取/更新）已接入，KB 检索与索引、资料管理界面、Memory 管理页面与历史检索尚未实现；自动化测试使用外部边界替身，真实账号验收尚未完成。
 
 | 阶段 | 交付物 | 通过条件 |
 | --- | --- | --- |
@@ -330,7 +332,7 @@ git 提交遵循 `AGENTS.md` 的约定：当前分支、英文 `[Module] Descrip
 
 ## 10. 当前实现
 
-已实现：Web、Gateway、Agent 装配、Gmail 域、Calendar 域、长期 Memory 文件与每轮专用记忆判断（主 Agent 不再持有记忆工具）、后台记忆回顾、Session Store 与 Confirmation。SQLite schema 为 10。未实现：Personal KB、Skills、Memory 管理页面与历史检索、认证与 HTTPS 远程访问。
+已实现：Web、Gateway、Agent 装配、Gmail 域、Calendar 域、长期 Memory 文件与每轮专用记忆判断（主 Agent 不再持有记忆工具）、后台记忆回顾、Personal KB Phase 1（`kb_save`/`kb_read`/`kb_update`，资料为 `kb/` 下的 Markdown 文件，由与 Memory 同一个数据目录本地 Git 仓库做版本；模块在 `server/tools/personal_kb/`，经 `server/storage/datarepo.py` 与 Memory 共享进程内锁与 `.gitignore`；新增 `pyyaml` 依赖）、Session Store 与 Confirmation。SQLite schema 仍为 10（资料身份写在 frontmatter、版本走 Git，无 schema 变更）。未实现：Personal KB 检索与索引（Phase 2）、文件改动自动跟随（Phase 3）、资料管理界面（Phase 4）、Skills、Memory 管理页面与历史检索、认证与 HTTPS 远程访问。
 
 ### Gateway 与触发源
 
@@ -381,5 +383,5 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 - 认证与 HTTPS 未实现：服务当前只按本机与局域网测试使用，`PATCH /api/operations/{operation_id}/draft` 还不校验操作与任务的归属关系。这两项是阶段 6 的交付内容，公网暴露前必须完成。
 - 触发源插孔仍带邮件域名（`MailSource`、`accept_new_mail`、`create_app(mail_source=...)`），与“通用层不持有域措辞”的约定不一致；第二个触发源接入时改为域中立命名。
 - 联网查询的来源没有独立呈现：`agent/client.py` 的流只取 `TextBlock`，`WebSearch` 结果里的 `Links`（标题与 URL）和 `WebFetch` 实际抓取的 URL 都被丢弃，回答末尾的来源列表是模型自己写进正文的 Markdown。已实测出现复述与实际不一致（一轮抓取 6 个页面，正文只列出 5 个）。按真实来源渲染所需的数据在流里已经具备，但要新增来源的持久化与接口；决定与个人知识库的来源引用一起做，届时来源取自系统记录的检索与抓取，不解析正文措辞，并让模型不再自行写这一段。
-- 生效 Skill 名单恒为空，Skills 与 Personal KB 尚无代码；Memory 已有两个长期记忆文件、每轮专用记忆判断、后台记忆回顾、逐轮加载与本地 Git 历史，管理页面、历史检索和恢复尚未实现。
+- 生效 Skill 名单恒为空，Skills 尚无代码；Personal KB 已实现 Phase 1（`kb_save`/`kb_read`/`kb_update`），检索与索引、文件改动自动跟随、资料管理界面尚未实现；Memory 已有两个长期记忆文件、每轮专用记忆判断、后台记忆回顾、逐轮加载与本地 Git 历史，管理页面、历史检索和恢复尚未实现。
 - 真实账号验收（Gmail 发送、iCloud 读写、SDK 模型响应）尚未完成；本地测试通过不代表真实外部操作成功。
