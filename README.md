@@ -25,10 +25,12 @@ Memory 的两个长期记忆文件、Agent 写入工具、逐轮加载与本地 
 
 - `docs/v1-spec.md`：需求范围、产品行为、验收标准。内容冲突时以此为准。
 - `docs/v1-design.md`：组件划分、交付阶段、验证要求、当前实现与已知偏差。
+- `docs/memory-spec.md`：记忆功能规格：短期上下文、长期记忆与进行中的目标、常驻上下文与按需检索、历史检索。
+- `docs/kb-spec.md`：个人资料库功能规格：保存与主动保存、检索作答、删除与恢复、主题页、外部笔记导入。
 - `docs/contracts/mail.md`：Gmail 工具、同步触发、确认发送与核实的字段与语义（已实现）。
 - `docs/contracts/calendar.md`：iCloud Calendar 工具、直连创建与冲突处理的字段与语义（已实现）。
 - `docs/contracts/skills.md`：Memory 已实现，Skills 仍为约定。
-- `docs/contracts/personal-kb.md`：个人知识库的工具、存储与引用语义（Phase 1 与 Phase 2 已实现）。
+- `docs/contracts/personal-kb.md`：个人知识库的工具、存储与引用语义（Phase 1 与 Phase 2 已实现，Phase 3–5 为约定）。
 
 设计文档第 2 节的组件表与代码结构是目标结构，第 10 节记录已实现部分与已知偏差。
 
@@ -156,7 +158,7 @@ ls .data/pebble.db
 重组：
 
 ```text
-<PEBBLE_DATA_DIR>/kb/**/*.md       # 资料本体，frontmatter 里带稳定 id 与来源
+<PEBBLE_DATA_DIR>/kb/**/*.md       # 资料本体，frontmatter 里带稳定 id
 <PEBBLE_DATA_DIR>/kb-index.sqlite3 # 检索索引，派生数据，不进 Git，可随时重建
 ```
 
