@@ -14,8 +14,8 @@ Gmail 支持搜索、单封与完整往来读取、入站附件读取、回复�
 iCloud Calendar 支持查询、详情、冲突检查与创建单次日程：对话里给出标题和起止时间就直接创建，
 缺信息先追问补齐，目标时间已有日程则不创建、在对话里说明冲突，你明确要求照建才覆盖创建；
 日程不渲染卡片，结果只在对话文字里汇报。不邀请参与人。
-Memory 的两个长期记忆文件、Agent 写入工具、逐轮加载与本地 Git 历史已实现；历史对话可以跨任务
-检索（侧栏搜索按钮，Agent 也能在新任务里回忆过去的讨论与执行结果）；记忆管理页面尚未实现。个人知识库已实现前四个阶段：Markdown 资料保存在实例数据目录的 `kb/` 下，
+长期记忆已实现：两份记忆文档由每轮记忆判断与后台回顾维护，侧栏“记忆”页可以直接编辑；历史对话
+可以跨任务检索（侧栏搜索按钮，Agent 也能在新任务里回忆过去的讨论与执行结果）。个人知识库已实现前四个阶段：Markdown 资料保存在实例数据目录的 `kb/` 下，
 由同一数据目录的本地 Git 管理版本；可以保存、读取、更新、删除、移动、按历史版本读取与恢复，
 也能按关键词检索分节、按引用读回原文，Agent 查到资料后直接作答，不展示来源；你直接改动的
 文件会自动纳入版本；侧栏“资料”页可以浏览、搜索和用所见即所得编辑器编辑资料；邮件发送等操作
@@ -153,8 +153,9 @@ ls .data/pebble.db
 <PEBBLE_DATA_DIR>/memory/MEMORY.md
 ```
 
-`USER.md` 保存用户背景、长期目标与偏好，上限 1375 个 Unicode 字符；`MEMORY.md` 保存需要每轮
-生效的环境事实与稳定约定，上限 2200 个字符。可以查的项目信息与术语资料放个人资料库。每个文件是一份完整的 Markdown 文档，可直接编辑。
+`USER.md` 记用户本人：背景、长期目标与偏好，上限 1375 个 Unicode 字符；`MEMORY.md` 记用户以外、
+跨任务都成立的事实与约定，上限 2200 个字符。可以查的项目信息与术语资料放个人资料库。每个文件是
+一份完整的 Markdown 文档，可直接编辑。
 下一轮 Agent 调用会重新读取文件。记忆不做版本管理：每轮记忆判断与后台回顾负责新增、合并与
 清理，改动以提示显示在对话里；也可以在网页的“记忆”页面查看容量，并在渲染后的内容上直接编辑。
 
@@ -246,17 +247,14 @@ uv run --project server python -m tests.acceptance.qoder_context
 uv run --project server python -m tests.acceptance.qoder_context --compact
 ```
 
-长期记忆的真实验收同样不会随 pytest 运行。它使用临时实例目录和真实 Qoder 模型，验证模型
-实际写入文件、产生 Git 提交，并在全新的 SDK 会话中读回记忆：
+长期记忆与资料库的真实验收同样不会随 pytest 运行。记忆验收使用临时实例目录和真实 Qoder 模型，
+验证每轮记忆判断的写入、分区与提示，并在全新的 SDK 会话中读回记忆：
 
 ```bash
 uv run --project server python -m tests.acceptance.qoder_memory
 uv run --project server python -m tests.acceptance.qoder_kb
 uv run --project server python -m tests.acceptance.qoder_kb_search
 ```
-
-最近一次结果见 `docs/validation/qoder-context-2026-09-15.md`、
-`docs/validation/qoder-memory-2026-09-15.md` 与 `docs/validation/qoder-kb-phase2-2026-09-16.md`。
 
 触发源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/runtime.py` 的 `MailSource`
 （`start` / `stop` / `error`）。真实 Gmail 检测由 `server/tools/gmail/sync.py` 实现同一接口，
