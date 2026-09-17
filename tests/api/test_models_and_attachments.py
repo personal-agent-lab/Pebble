@@ -1,12 +1,15 @@
 """模型固定与附件 multipart 链路的 HTTP 验收。"""
 
 import asyncio
+import json
 import time
 
 from fastapi.testclient import TestClient
 
 from server.agent.models import ModelEntry
+from server.db import session, write
 from server.errors import ModelValidationError
+from server.gateway.runtime import INTERRUPTED_REASON
 from server.main import create_app
 from tests.support.agent_double import FakeAgentGateway
 
@@ -170,3 +173,43 @@ def test_message_limits_and_model_disappearing_fail_the_run(settings):
         assert wait_done(client, task_id)["status"] == "error"
         timeline = client.get(f"/api/tasks/{task_id}/timeline").json()["items"]
         assert any("模型当前不可用：custom-id" in item.get("text", "") for item in timeline)
+
+
+def test_retry_endpoint_only_restarts_the_latest_interrupted_user_message(settings):
+    gateway = FakeAgentGateway()
+    app = create_app(gateway=gateway, model_catalog=StaticCatalog())
+    with TestClient(app) as client:
+        task = app.state.tasks.create_task("重试中断消息", model="model-a")
+        with session() as conn, write(conn):
+            conn.execute(
+                "INSERT INTO agent_runs (run_id, task_id, kind, input, status, error, "
+                "created_at, started_at, finished_at) "
+                "VALUES (?, ?, 'message', ?, 'interrupted', ?, ?, ?, ?)",
+                (
+                    "run-http-retry",
+                    task["task_id"],
+                    json.dumps({"message": "继续回答", "target": None, "attachment_ids": []}),
+                    INTERRUPTED_REASON,
+                    "2026-09-17T00:00:00+00:00",
+                    "2026-09-17T00:00:01+00:00",
+                    "2026-09-17T00:00:02+00:00",
+                ),
+            )
+            conn.execute(
+                "INSERT INTO task_timeline_items VALUES "
+                "('user-http-retry', ?, 'run-http-retry', 'text', 'user', "
+                "'继续回答', NULL, ?)",
+                (task["task_id"], "2026-09-17T00:00:00+00:00"),
+            )
+
+        response = client.post(f"/api/tasks/{task['task_id']}/retry")
+        assert response.status_code == 202, response.text
+        assert response.json()["run_id"] == "run-http-retry"
+        assert wait_done(client, task["task_id"])["status"] == "done"
+        latest = client.get(f"/api/tasks/{task['task_id']}").json()["latest_run"]
+        assert latest["retryable"] is False
+        assert len(gateway.calls_of("message")) == 1
+        assert gateway.calls_of("message")[0]["message"] == "继续回答"
+        repeated = client.post(f"/api/tasks/{task['task_id']}/retry")
+        assert repeated.status_code == 409
+        assert repeated.json()["error"] == "retry_unavailable"

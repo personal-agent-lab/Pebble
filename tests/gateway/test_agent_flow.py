@@ -10,7 +10,7 @@ import pytest
 
 from server.approval.service import ConfirmationService
 from server.db import init_db, session, write
-from server.errors import NotFoundError
+from server.errors import NotFoundError, RetryUnavailableError
 from server.gateway.runtime import INTERRUPTED_REASON, GatewayRuntime
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
@@ -545,6 +545,115 @@ async def test_resume_interrupts_running_and_executes_pending(flow):
     assert old["error"] == INTERRUPTED_REASON
     assert flow.service.get_run("run-new")["status"] == "done"
     assert [call["message"] for call in flow.gateway.calls_of("message")] == ["新"]
+
+
+async def test_retry_reuses_latest_interrupted_message_and_replaces_partial_answer(flow):
+    task = flow.tasks.create_task("重试中断消息")
+    with session() as conn, write(conn):
+        conn.execute(
+            "INSERT INTO agent_runs (run_id, task_id, kind, input, status, error, created_at, "
+            "started_at, finished_at) VALUES (?, ?, 'message', ?, 'interrupted', ?, ?, ?, ?)",
+            (
+                "run-retry",
+                task["task_id"],
+                json.dumps({"message": "原问题", "target": None, "attachment_ids": []}),
+                INTERRUPTED_REASON,
+                "2026-09-17T00:00:00+00:00",
+                "2026-09-17T00:00:01+00:00",
+                "2026-09-17T00:00:02+00:00",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO task_timeline_items VALUES "
+            "('user-retry', ?, 'run-retry', 'text', 'user', '原问题', NULL, ?), "
+            "('partial-retry', ?, 'run-retry', 'text', 'assistant', '半截回答', NULL, ?)",
+            (
+                task["task_id"],
+                "2026-09-17T00:00:00+00:00",
+                task["task_id"],
+                "2026-09-17T00:00:01+00:00",
+            ),
+        )
+
+    def handler(turn):
+        async def events():
+            assert turn.message == "原问题"
+            yield {"type": "text", "text": "完整回答"}
+            yield {"type": "done"}
+
+        return events()
+
+    flow.gateway.handle("message", handler)
+    retried = flow.service.retry_last_message(task["task_id"])
+    assert retried["run_id"] == "run-retry"
+    assert retried["status"] == "pending"
+    await drain(flow.service)
+
+    assert len(flow.service.list_runs(task["task_id"])) == 1
+    items = flow.service.get_timeline(task["task_id"])["items"]
+    assert [(item.get("role"), item.get("text")) for item in items] == [
+        ("user", "原问题"),
+        ("assistant", "完整回答"),
+    ]
+    with pytest.raises(RetryUnavailableError):
+        flow.service.retry_last_message(task["task_id"])
+
+
+async def test_retry_rejects_an_older_interrupted_message(flow):
+    task = flow.tasks.create_task("只重试最后一轮")
+    with session() as conn, write(conn):
+        for run_id, status, created_at in (
+            ("run-old", "interrupted", "2026-09-17T00:00:00+00:00"),
+            ("run-latest", "done", "2026-09-17T00:00:01+00:00"),
+        ):
+            conn.execute(
+                "INSERT INTO agent_runs (run_id, task_id, kind, input, status, error, "
+                "created_at, started_at, finished_at) VALUES (?, ?, 'message', ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    task["task_id"],
+                    json.dumps({"message": run_id, "target": None, "attachment_ids": []}),
+                    status,
+                    INTERRUPTED_REASON if status == "interrupted" else None,
+                    created_at,
+                    created_at,
+                    created_at,
+                ),
+            )
+
+    with pytest.raises(RetryUnavailableError):
+        flow.service.retry_last_message(task["task_id"])
+
+
+async def test_retry_rejects_interrupted_turn_that_already_created_an_operation(flow):
+    task = flow.tasks.create_task("已有操作不整体重试")
+    with session() as conn, write(conn):
+        conn.execute(
+            "INSERT INTO agent_runs (run_id, task_id, kind, input, status, error, created_at, "
+            "started_at, finished_at) VALUES (?, ?, 'message', ?, 'interrupted', ?, ?, ?, ?)",
+            (
+                "run-with-operation",
+                task["task_id"],
+                json.dumps({"message": "创建日程", "target": None, "attachment_ids": []}),
+                INTERRUPTED_REASON,
+                "2026-09-17T00:00:00+00:00",
+                "2026-09-17T00:00:01+00:00",
+                "2026-09-17T00:00:03+00:00",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO operations VALUES "
+            "('op-during-run', 'calendar', ?, 1, 'created', ?, ?)",
+            (
+                task["task_id"],
+                "2026-09-17T00:00:02+00:00",
+                "2026-09-17T00:00:02+00:00",
+            ),
+        )
+
+    assert flow.service.latest_run(task["task_id"])["retryable"] is False
+    with pytest.raises(RetryUnavailableError):
+        flow.service.retry_last_message(task["task_id"])
 
 
 async def test_confirmed_result_waits_for_session_then_delivers(flow):

@@ -60,6 +60,8 @@ export default function TaskPage() {
       <TimelineFeed key={`${taskId}:${focusItemId ?? ""}`} taskId={taskId} items={detail.items} running={running}
         activity={running ? detail.activity : null}
         focusItemId={focusItemId}
+        retryRunId={latest?.retryable === true ? latest.run_id : null}
+        retrying={detail.retrying} retryMessage={detail.retry}
         sendMessage={(text, target) => detail.send(text, target)} onChanged={onChanged} />
     </div></div>
 

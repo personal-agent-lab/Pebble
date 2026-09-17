@@ -49,6 +49,13 @@ class TaskActiveError(Exception):
         super().__init__(f"任务仍在运行：{task_id}")
 
 
+class RetryUnavailableError(Exception):
+    """最后一轮不是可重试的已中断用户消息。"""
+
+    def __init__(self):
+        super().__init__("只有最后一轮已中断的用户消息可以重试")
+
+
 class DraftValidationError(Exception):
     """待确认内容校验未通过；`errors` 为字段与原因列表。"""
 
@@ -135,6 +142,8 @@ def error_details(error: Exception) -> dict | None:
         return {"error": "session_conflict", "message": "任务已关联不同会话"}
     if isinstance(error, TaskActiveError):
         return {"error": "task_active", "message": "任务正在运行，结束后才能删除"}
+    if isinstance(error, RetryUnavailableError):
+        return {"error": "retry_unavailable", "message": str(error)}
     if isinstance(error, DraftValidationError):
         return {"error": "invalid_draft", "message": "待确认内容未通过校验", "errors": error.errors}
     if isinstance(error, MemoryValidationError):

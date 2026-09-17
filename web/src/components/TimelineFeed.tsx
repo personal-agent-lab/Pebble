@@ -83,17 +83,23 @@ type Props = {
   activity?: string | null;
   /** 从历史搜索跳转过来时要定位的条目：滚到它并短暂高亮，不再自动贴底。 */
   focusItemId?: string | null;
+  /** 只有任务最后一轮是已中断的用户消息时才有值。 */
+  retryRunId?: string | null;
+  retrying?: boolean;
+  retryMessage?: () => Promise<ApiError | null>;
   sendMessage: (message: string, target: MessageTarget) => Promise<ApiError | null>;
   onChanged: () => Promise<void>;
 };
 
 export default function TimelineFeed({
-  taskId, items, running, activity = null, focusItemId = null, sendMessage, onChanged,
+  taskId, items, running, activity = null, focusItemId = null, retryRunId = null,
+  retrying = false, retryMessage, sendMessage, onChanged,
 }: Props) {
   const anchor = useRef<HTMLDivElement>(null);
   const stick = useRef(focusItemId === null);
   const focused = useRef<string | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
   useEffect(() => {
     let scroller = scrollParent(anchor.current);
     let target = scrollEventTarget(scroller);
@@ -160,11 +166,25 @@ export default function TimelineFeed({
       // 否则复制到的是半截文字，时间也还不是这段回答的时间。
       const last = index === items.length - 1;
       const ended = !(next?.kind === "text" && next.role === "assistant") && !(last && running);
+      const canRetry = !agent && item.run_id === retryRunId && retryMessage !== undefined;
       return <div className={`msg ${agent ? "agent" : "user"}${grouped ? " cont" : ""}`} key={item.item_id}
         {...mark(item.item_id)}>
         <div className="msg-body"><span className="sr-only">{agent ? "Agent 说：" : "我说："}</span>
           {item.text && <div className="bubble">{agent ? <Markdown text={item.text} /> : item.text}</div>}
           {!agent && <MessageAttachments items={item.attachments ?? []} />}
+          {canRetry && <div className="user-message-actions">
+            <button type="button" className="retry-message" disabled={retrying} onClick={() => {
+              setRetryError(null);
+              void retryMessage().then((error) => setRetryError(error?.message ?? null));
+            }} aria-label="重试这条消息">
+              <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"
+                strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M20 11a8 8 0 1 0-2.34 5.66" /><polyline points="20 4 20 11 13 11" />
+              </svg>
+              {retrying ? "重试中…" : "重试"}
+            </button>
+            {retryError !== null && <span className="retry-error" role="status">{retryError}</span>}
+          </div>}
           {agent && ended && <MessageActions text={answerText(items, index)}
             createdAt={item.created_at} pinned={last} />}
         </div>

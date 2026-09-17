@@ -15,6 +15,7 @@ import {
   listOperations,
   listTasks,
   sendMessage,
+  retryLastMessage,
   subscribeEvents,
 } from "./api";
 
@@ -72,6 +73,7 @@ export function useTaskDetail(taskId: string) {
   const [items, setItems] = useState<TimelineItem[]>([]);
   const [error, setError] = useState<ApiError | null>(null);
   const [sending, setSending] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   // 当前步骤只来自实时事件与重读时服务端记住的那一步，不进时间线。
   const [activity, setActivity] = useState<string | null>(null);
 
@@ -141,5 +143,15 @@ export function useTaskDetail(taskId: string) {
     finally { setSending(false); }
   }, [taskId, reload]);
 
-  return { task, operations, items, activity, error, sending, send, reload };
+  const retry = useCallback(async () => {
+    setRetrying(true);
+    try {
+      await retryLastMessage(taskId);
+      await reload();
+      return null;
+    } catch (failure) { return toApiError(failure); }
+    finally { setRetrying(false); }
+  }, [taskId, reload]);
+
+  return { task, operations, items, activity, error, sending, retrying, send, retry, reload };
 }

@@ -227,6 +227,15 @@ class GatewayRuntime:
         self.kick()
         return repo.run_response(row)
 
+    def retry_last_message(self, task_id: str) -> dict:
+        """重试最后一轮已中断的用户消息；复用原输入、附件与时间线位置。"""
+        self.require_gateway()
+        with session(self.path) as conn, write(conn):
+            operations.task(conn, task_id)
+            row = repo.retry_latest_message(conn, task_id)
+        self.kick()
+        return repo.run_response(row)
+
     def _insert_message(
         self,
         conn: sqlite3.Connection,
@@ -293,9 +302,14 @@ class GatewayRuntime:
     def latest_run(self, task_id: str) -> dict | None:
         with session(self.path) as conn:
             row = repo.latest(conn, task_id)
+            can_retry = row is not None and repo.retryable(conn, row)
         if row is None:
             return None
-        return {**repo.run_response(row), "activity": self._activities.get(row["run_id"])}
+        return {
+            **repo.run_response(row),
+            "activity": self._activities.get(row["run_id"]),
+            "retryable": can_retry,
+        }
 
     def get_timeline(self, task_id: str) -> dict:
         return self._timeline.list_items(task_id)

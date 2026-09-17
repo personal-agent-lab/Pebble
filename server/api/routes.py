@@ -193,6 +193,12 @@ async def submit_message(
     )
 
 
+@router.post("/tasks/{task_id}/retry", status_code=202, tags=["chat"])
+async def retry_last_message(task_id: str, agent: Agent) -> dict:
+    """只重试任务最后一轮已中断的用户消息，不新增时间线消息。"""
+    return agent.retry_last_message(task_id)
+
+
 @router.get("/tasks/{task_id}/attachments/{file_id}", tags=["chat"])
 def read_attachment(task_id: str, file_id: str, attachments: Attachments) -> FileResponse:
     with session() as conn:

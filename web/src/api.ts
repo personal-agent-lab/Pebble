@@ -14,6 +14,8 @@ export type Run = {
   finished_at: string | null;
   /** 进行中调用的当前步骤说明（如“正在检索资料：星云验收”）；只在任务详情里给出。 */
   activity?: string | null;
+  /** 仅任务详情提供：最后一轮中断且未产生操作记录时可由用户重试。 */
+  retryable?: boolean;
 };
 
 /** 会话是谁开的头：`mail` 是收到新邮件自动开始，`user` 是用户自己发起。 */
@@ -238,6 +240,9 @@ export const sendMessage = (
   method: "POST",
   body: messageForm(message, files, target),
 });
+
+export const retryLastMessage = (taskId: string) =>
+  request<Run>(`/tasks/${taskId}/retry`, { method: "POST" });
 
 export const editDraft = (
   operationId: string,

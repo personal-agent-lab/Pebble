@@ -372,6 +372,8 @@ git 提交遵循 `AGENTS.md` 的约定：当前分支、英文 `[Module] Descrip
 
 `gateway/runtime.py` 使用 FastAPI lifespan 所在事件循环管理异步任务，保留任务引用；每个任务按 `agent_runs` 的插入顺序启动就绪输入，不同任务独立执行。尚无会话的结果回传等待会话建立。HTTP/SSE 断开不取消工作，只取消订阅。同步发送通过 `asyncio.to_thread`，正常关闭先等待发送落盘，再取消仍在运行的 Agent 调用；下次启动将运行中调用记为 interrupted，不自动重放。待处理输入继续运行；已有确认但进程遗留未完成的发送不自动重发：已经调用过发送函数的记 unknown 等待核实，`started_at` 仍为空即从未进入执行阶段，是明确未发送，记 failed。
 
+`POST /api/tasks/{id}/retry` 只接受该任务最后一条 `interrupted`、且运行期间没有创建或更新操作记录的用户消息轮。它把原 `agent_runs` 记录恢复为 `pending`，复用原输入与附件并清掉该轮中断前未完成的助手文字，因此时间线仍只有一个用户气泡。服务不自动触发重试，只有用户点击最后一条消息右下方的“重试”才执行；并发或重复点击由状态条件拒绝。若该轮已经产生邮件或日程操作记录，页面不提供整体重试，避免重复执行有副作用的工具。
+
 任务创建时以触发文案或用户首句作为目标；首个调用成功结束后，运行时把该轮对话文本交给一次性的无工具模型调用生成不超过 12 字的短标题，改写任务目标。生成失败或为空时保留原目标；该调用不接续任务会话，也不进入对话历史。
 
 schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`。schema 4 将回复专用草稿表收敛为新邮件与回复共用的 `mail_drafts` 和 `mail_draft_versions`。schema 5 增加 `task_timeline_items`。schema 6 移除邮件附件绑定。schema 7 增加日程内容表、`creating/created` 状态与日程时间线卡，并将执行结果统一保存为 JSON。schema 8 取消日程卡与待确认预览：时间线类型收回 `text`、`mail_draft`、`error`，删除历史日程卡条目，日程内容表改名为 `calendar_events` 和 `calendar_event_versions`，操作与执行记录保留。schema 9 增加 `memory_reviews`（周期与手动后台记忆回顾的状态机，部分唯一索引保证每任务至多一条未完成回顾）。schema 10 为时间线增加 `notice` 类型（程序生成的记忆提示：挂在触发它的消息轮上，无角色）。schema 11 增加 `task_run_sources`：模型成功读取资料原文时按轮次记录引用与本次读到的片段，同一轮同一版本与行号唯一。schema 12 撤销回答来源展示，删除 `task_run_sources`。schema 13 增加历史对话检索的派生索引：`history_items`（条目与全文行的对应，以及邮件草稿写入索引时的版本与状态）与 FTS5 表 `history_fts`，检索前从时间线增量同步，删除任务时一并清理。schema 14 为任务增加非空固定模型，新增 `uploaded_files` 与 `timeline_item_attachments`，升级时把旧任务固化为当下服务端模型。

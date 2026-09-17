@@ -109,6 +109,37 @@ test("用户消息与邮件卡不挂落款", () => {
   expect(screen.queryByRole("button", { name: "复制回答" })).toBeNull();
 });
 
+test("只在最后一轮已中断的用户消息右下方显示重试", async () => {
+  const retryMessage = vi.fn(async () => null);
+  const items: TimelineItem[] = [
+    { item_id: "old", kind: "text", role: "user", run_id: "run-old", text: "旧问题", created_at: "2026-09-14T00:00:00Z" },
+    { item_id: "latest", kind: "text", role: "user", run_id: "run-latest", text: "最后问题", created_at: "2026-09-14T00:00:01Z" },
+  ];
+  render(<TimelineFeed taskId="task-1" items={items} running={false} retryRunId="run-latest"
+    retryMessage={retryMessage} sendMessage={vi.fn()} onChanged={vi.fn()} />);
+
+  const retry = screen.getByRole("button", { name: "重试这条消息" });
+  expect(screen.getAllByText("重试")).toHaveLength(1);
+  expect(retry.closest(".msg")?.textContent).toContain("最后问题");
+  await userEvent.click(retry);
+  expect(retryMessage).toHaveBeenCalledTimes(1);
+});
+
+test("重试进行中禁用按钮且不在非中断消息上显示", () => {
+  const item: TimelineItem = {
+    item_id: "latest", kind: "text", role: "user", run_id: "run-latest",
+    text: "最后问题", created_at: "2026-09-14T00:00:01Z",
+  };
+  const props = { taskId: "task-1", items: [item], running: false,
+    retryMessage: vi.fn(async () => null), sendMessage: vi.fn(), onChanged: vi.fn() };
+  const { rerender } = render(<TimelineFeed {...props} retryRunId="run-latest" retrying />);
+  expect(screen.getByRole("button", { name: "重试这条消息" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByText("重试中…")).toBeTruthy();
+
+  rerender(<TimelineFeed {...props} retryRunId={null} />);
+  expect(screen.queryByRole("button", { name: "重试这条消息" })).toBeNull();
+});
+
 test("附件单独消息刷新后仍按顺序显示图片与下载文件", () => {
   const items: TimelineItem[] = [{
     item_id: "ask", kind: "text", role: "user", run_id: "run-1", text: "",
