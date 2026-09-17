@@ -86,7 +86,7 @@ Pebble/
 │   │   ├── context.py        # 每轮系统提示、常驻材料（记忆、资料目录）与技能名单组装
 │   │   └── prompt.py         # 面向个人助理的系统提示
 │   ├── storage/              # 实例数据目录的共享基础设施
-│   │   └── datarepo.py       # 数据目录 Git 仓库的进程内锁、.gitignore 与初始化，供 memory 与 personal_kb 复用
+│   │   └── datarepo.py       # 数据目录的进程内锁与 Git 仓库 .gitignore，供 memory 与 personal_kb 复用
 │   ├── tools/                # 统一注册 + 按服务分目录实现
 │   │   ├── registry.py       # 工具定义、副作用声明与统一注册
 │   │   ├── gmail/
@@ -119,6 +119,7 @@ Pebble/
 │   ├── memory/               # Memory
 │   │   ├── service.py        # 规则的文件存取与 Git 历史
 │   │   ├── judge.py          # 每轮专用记忆判断：提示词与输入组装
+│   │   ├── notices.py        # 记忆材料（带容量）与按真实工具结果生成的提示
 │   │   └── review.py         # 后台记忆回顾：登记、执行与重启恢复
 │   └── skills/               # Skills
 │       ├── service.py        # 两条来源、草稿、审核与版本管理（文件 + Git）
@@ -135,7 +136,7 @@ Pebble/
     └── contracts/            # 按域的接口字段与语义
 ```
 
-这是起始结构，按实际代码规模合并或拆分文件。目录按职责组织，文件数量以职责边界为准，不为凑数增加转发层。HTTP 路由集中在 `api/routes.py`；后台调用与事件订阅归属 `gateway/`，使触发源入口无需依赖 HTTP 模块。Idempotency 不设独立子系统，由 `approval/`、`sessions/` 和具体工具的唯一约束与状态检查共同实现；数据目录 Git 仓库的初始化、进程内共享锁与 `.gitignore` 收敛在 `storage/datarepo.py`，各域（`memory/`、`skills/`、`personal_kb/`）保留自己的 git 提交与原子写小函数。
+这是起始结构，按实际代码规模合并或拆分文件。目录按职责组织，文件数量以职责边界为准，不为凑数增加转发层。HTTP 路由集中在 `api/routes.py`；后台调用与事件订阅归属 `gateway/`，使触发源入口无需依赖 HTTP 模块。Idempotency 不设独立子系统，由 `approval/`、`sessions/` 和具体工具的唯一约束与状态检查共同实现；数据目录的进程内共享锁与 Git 仓库 `.gitignore` 收敛在 `storage/datarepo.py`，各域（`skills/`、`personal_kb/`）保留自己的 git 提交与原子写小函数；`memory/` 不做版本管理，只保留原子写。
 
 直接接入 Qoder Agent SDK 带来的取舍：
 
@@ -157,7 +158,7 @@ Gmail、Calendar、Personal KB、Memory 与 Skills 都通过相同入口注册�
 - 直接外部写工具由模型在用户亲自发起的轮次调用，自己完成保存内容、取得执行权、调用外部服务与保存结果。日程创建属于这一类，边界见 `contracts/calendar.md`。
 - 永不暴露的外部写工具只向模型注册准备草稿和读取已确认内容的方法，原始写入方法不注册给模型；执行函数由 Confirmation 在用户确认最终版本后调用。邮件发送属于这一类。
 
-首版使用 Python 函数和静态注册，由应用进程自己的 MCP 端点按轮次暴露：每轮登记一个一次性路径，模型只看到当轮允许的工具，不另建常驻 MCP 服务。注册表按用途隔离为三个：前台对话工具（默认注册表）、后台记忆回顾专用的 `memory_add`（只新增，无 action 参数，结构上无法表达替换或删除）、每轮记忆判断专用的 `judge_registry`（`memory_add`/`memory_replace`/`memory_remove`/`memory_ask`）；后两个只在各自的一次性会话中出现。[工具接入](https://docs.qoder.com/cli/sdk/tools)
+首版使用 Python 函数和静态注册，由应用进程自己的 MCP 端点按轮次暴露：每轮登记一个一次性路径，模型只看到当轮允许的工具，不另建常驻 MCP 服务。注册表按用途隔离为三个：前台对话工具（默认注册表）、后台记忆回顾专用的 `review_registry`（`memory_add`/`memory_replace`/`memory_remove`）、每轮记忆判断专用的 `judge_registry`（另加 `memory_ask`）；后两个只在各自的一次性会话中出现。[工具接入](https://docs.qoder.com/cli/sdk/tools)
 
 模型每轮可见范围由注册时声明的副作用与轮次类型共同决定：触发轮允许只读与 `LOCAL_WRITE_ALL_TURNS`（只有资料库的新建与修改）；用户对话轮允许全部本地写（`LOCAL_WRITE`、`LOCAL_WRITE_ALL_TURNS`、`LOCAL_WRITE_USER_TURN`）与直接外部写；执行结果回传轮允许只读、`LOCAL_WRITE` 与 `LOCAL_WRITE_ALL_TURNS`；`LOCAL_WRITE_USER_TURN`（资料删除、移动、恢复）只在用户对话轮出现；永不暴露的外部写在任何一轮都不出现。因此纯触发轮不会在用户未参与时产生待确认内容、写入外部服务、沉淀 Skill 草稿或删除资料；它能做的本地写只是保存或更新资料，结果有提示、有版本、可恢复。结果回传轮的输入同样来自系统而非用户亲自开口，也拿不到直接外部写，邮件与资料内容中的指令无法据此驱动外部写入。
 
@@ -237,13 +238,13 @@ Gmail、Calendar、Personal KB、Memory 与 Skills 都通过相同入口注册�
 
 ### 后台记忆回顾与每轮记忆判断
 
-长期记忆有两条发现路径：`memory/judge.py` 的每轮即时判断负责单轮明确表达的事实与偏好；`memory/review.py` 的后台回顾补齐跨轮模式——任务内每完成 5 个用户消息轮（`agent_runs` 中 `kind='message'` 且 `status='done'`，自上次已完成回顾起算），自动登记并执行一次回顾。
+长期记忆有两条发现路径：`memory/judge.py` 的每轮即时判断负责单轮明确表达的事实与偏好；`memory/review.py` 的后台回顾补齐跨轮模式并整理记忆——任务内每完成 5 个用户消息轮（`agent_runs` 中 `kind='message'` 且 `status='done'`，自上次已完成回顾起算），自动登记并执行一次回顾。
 
-判断是一次性 SDK 会话（与标题生成同级的产品能力，非新 TurnKind）：每个用户消息轮认领后与主回答并行启动，临时 MCP 端点只暴露 `judge_registry` 的 `memory_add`/`memory_replace`/`memory_remove`/`memory_ask`，输入是刚发的消息、近期对话（含此前的记忆提示）与当前记忆快照。程序按记录到的真实工具调用与结果渲染用户可见提示（"已记住/已修改/已停止使用/想确认/保存失败"），以 `notice` 类型写入时间线（挂在触发它的消息轮上）并经 SSE 推送；模型自述不作为事实来源。判断无状态：不写 `agent_runs`，不占任务运行槽，进程重启即丢弃，失败只记日志、不影响本轮回答。
+判断是一次性 SDK 会话（与标题生成同级的产品能力，非新 TurnKind）：每个用户消息轮认领后与主回答并行启动，临时 MCP 端点只暴露 `judge_registry` 的 `memory_add`/`memory_replace`/`memory_remove`/`memory_ask`，输入是刚发的消息、近期对话（含此前的记忆提示）与当前记忆快照（标题附已用与上限字数，放不下时先整理再保存）。程序按记录到的真实工具调用与结果渲染用户可见提示（"已记住/已修改/已删除/想确认/保存失败"，由 `memory/notices.py` 生成），以 `notice` 类型写入时间线（挂在触发它的消息轮上）并经 SSE 推送；模型自述不作为事实来源。判断无状态：不写 `agent_runs`，不占任务运行槽，进程重启即丢弃，失败只记日志、不影响本轮回答。
 
-回顾是一次性 SDK 会话：临时 MCP 端点只暴露只新增的 `memory_add` 工具，输入是窗口内对话文本与当前记忆快照，输出只落库不外发。登记时冻结窗口上下界（`from_rowid`/`through_rowid`），执行期新消息不进窗口。
+回顾是一次性 SDK 会话：临时 MCP 端点暴露 `review_registry` 的 `memory_add`/`memory_replace`/`memory_remove`，输入是窗口内对话文本与当前记忆快照；网关按记录到的工具结果返回，实际生效的替换与删除渲染为“整理记忆：…”提示，与回顾结束状态同一事务写入时间线（挂在窗口内最后一个调用上），再经 SSE 推送；新增不提示。登记时冻结窗口上下界（`from_rowid`/`through_rowid`），执行期新消息不进窗口。
 
-调度复用 kick 模式：复盘任务在独立的协程表中运行，不占任务运行槽，仅在任务空闲时启动；用户消息永远不等回顾。重启时运行中的回顾标记为 interrupted，计数不推进，下一条消息完成后自动重新触发。手动入口 `POST /api/tasks/{id}/memory-review` 覆盖全任务历史，不受间隔与开关限制。回顾不写任务时间线、不发 SSE、不出现在任务列表；每条新增即一个记忆 Git 提交，与其他写入路径共用同一存储与锁。
+调度复用 kick 模式：复盘任务在独立的协程表中运行，不占任务运行槽，仅在任务空闲时启动；用户消息永远不等回顾。重启时运行中的回顾标记为 interrupted，计数不推进，下一条消息完成后自动重新触发。手动入口 `POST /api/tasks/{id}/memory-review` 覆盖全任务历史，不受间隔与开关限制。回顾不写 `agent_runs`、不出现在任务列表；与其他写入路径共用同一存储与锁。
 
 ### Idempotency
 
@@ -253,7 +254,7 @@ Gmail、Calendar、Personal KB、Memory 与 Skills 都通过相同入口注册�
 
 ## 5. Memory、Skills 与个人知识库
 
-三者的内容都是实例数据目录内的文件，由一个独立的本地 Git 仓库管理（不是代码仓库），写入即提交，不推送远端。用户可以直接阅读和修改文件，并通过 Git 查看变化和回退。格式与字段见 `contracts/skills.md` 与 `contracts/personal-kb.md`。
+三者的内容都是实例数据目录内的文件，用户可以直接阅读和修改。Skill 与知识库由一个独立的本地 Git 仓库管理（不是代码仓库），写入即提交，不推送远端，可通过 Git 查看变化和回退。Memory 不做版本管理：条目简短、由模型持续整理，变化体现在对话里的记忆提示中；旧实例中曾被跟踪的 `memory/` 在启动时以一次单独提交移出仓库（临时索引构造，不带上其他暂存改动）。格式与字段见 `contracts/skills.md` 与 `contracts/personal-kb.md`。
 
 用户纠正可以由模型或用户主动沉淀为可读、可编辑的 Memory，每轮上下文装配时作为一个固定标题的材料块加载当前生效规则。规则不能覆盖代码中的外部写授权约束：该约束由每轮工具可见范围与 Confirmation 保证，不依赖规则文本或模型自律。
 
@@ -302,7 +303,7 @@ SDK 显式限定项目工具和必要的 Skill 能力，使用独立工作目录
 
 ## 7. 交付阶段
 
-按 `v1-spec.md` 第 5 节的两个验收场景逐步交付完整链路。本节状态随实施更新；阶段 2 已完成代码接入，阶段 3 进行中：Calendar、长期 Memory 最小闭环与 Personal KB Phase 1–3（Markdown 文件 + Git 版本的保存/读取/更新，SQLite FTS5 分节索引、按引用读取原文，删除、移动、恢复与用户改动的自动跟随；回答不展示来源）已接入；资料管理界面与任务归档已接入；主题页与导入，历史对话检索已接入；Memory 管理页面尚未实现；自动化测试使用外部边界替身，真实账号验收尚未完成。
+按 `v1-spec.md` 第 5 节的两个验收场景逐步交付完整链路。本节状态随实施更新；阶段 2 已完成代码接入，阶段 3 进行中：Calendar、长期 Memory 最小闭环与 Personal KB Phase 1–3（Markdown 文件 + Git 版本的保存/读取/更新，SQLite FTS5 分节索引、按引用读取原文，删除、移动、恢复与用户改动的自动跟随；回答不展示来源）已接入；资料管理界面与任务归档已接入；历史对话检索与 Memory 管理页面已接入，主题页与导入尚未接入；自动化测试使用外部边界替身，真实账号验收尚未完成。
 
 | 阶段 | 交付物 | 通过条件 |
 | --- | --- | --- |
@@ -310,7 +311,7 @@ SDK 显式限定项目工具和必要的 Skill 能力，使用独立工作目录
 | 2. 对话与邮件完整链 | Web → Gateway → Agent → Gmail → 预览编辑 → 确认发送 → 结果 | 纯对话轮次可用且不触发工具；PC 与手机均可完成；刷新保留草稿与时间线顺序；旧确认、重复确认及重复准备不能重复发送 |
 | 3. 跨工具任务 | Memory、Calendar、Personal KB 接入 | 规格两个场景都能组合工具、追问、按第 4 节取得授权、准确报告部分结果；归档关键信息与结果，原始内容与总结分开 |
 | 4. 触发源与后台运行 | Gmail 增量检测持续运行 | 关闭 Web 仍自动处理新邮件；重复检查不重复处理；等待用户不阻塞其他任务 |
-| 5. 能力成长 | Memory 编辑、Skill 两条来源、草稿审核、Git 历史 | 用户自建 Skill 即生效；至少一个 Agent 总结的草稿经审核后生效；未审核草稿不执行；纠正在新会话生效 |
+| 5. 能力成长 | Memory 编辑、Skill 两条来源、草稿审核、Skill 的 Git 历史 | 用户自建 Skill 即生效；至少一个 Agent 总结的草稿经审核后生效；未审核草稿不执行；纠正在新会话生效 |
 | 6. 远程控制与认证 | HTTPS、单用户认证、来源校验、部署说明 | 手机在外网完成规格两个场景；未认证请求不能读取内容或触发外部写操作 |
 | 7. 部署验收 | 常驻服务、配置样例、部署说明和验收记录 | 结合真实 Gmail、iCloud 完成规格中的全部场景，并按第 9 节区分验收结论 |
 
@@ -359,7 +360,7 @@ git 提交遵循 `AGENTS.md` 的约定：当前分支、英文 `[Module] Descrip
 
 ## 10. 当前实现
 
-已实现：Web、Gateway、Agent 装配、Gmail 域、Calendar 域、长期 Memory 文件与每轮专用记忆判断（主 Agent 不再持有记忆工具）、后台记忆回顾、Personal KB Phase 1–4（`kb_list`/`kb_save`/`kb_read`/`kb_update`/`kb_history`/`kb_search`/`kb_delete`/`kb_move`/`kb_restore`/`kb_archive`，资料为 `kb/` 下的 Markdown 文件，由与 Memory 同一个数据目录本地 Git 仓库做版本；`kb-index.sqlite3` 是数据目录内的派生 FTS5 索引，按二级标题分节、写入后增量替换、以 `kb/` 的 Git tree 标识判断是否需要重建；引用带完整 commit 与行号区间，可按引用读回该版本原文，回答不展示来源；每次操作前把用户在文件系统里的改动纳入版本，移动按 frontmatter 的 `id` 识别；删除保留历史，`kb_list` 可列出已删除资料供恢复；每份资料可带一句话说明 `summary`，`catalog.py` 据此每轮现算资料目录，经 `agent/client.py` 排在长期记忆之后注入；资料管理界面为 `web/src/pages/KbPage.tsx`（浏览与搜索）与 `KbDocumentPage.tsx`（Milkdown 所见即所得编辑，按需懒加载），接口在 `api/routes.py` 的 `/api/kb/*`；模块在 `server/tools/personal_kb/`，经 `server/storage/datarepo.py` 与 Memory 共享进程内锁与 `.gitignore`；新增 `pyyaml` 依赖）、Session Store 与 Confirmation。SQLite schema 为 13（schema 13 新增历史检索的派生索引表 `history_items` 与 `history_fts`；资料身份写在 frontmatter、版本走 Git；schema 11 曾新增回答来源表，schema 12 随撤销来源展示将其删除）。未实现：主题页与导入（Phase 5）、Skills、Memory 管理页面与历史检索、认证与 HTTPS 远程访问。
+已实现：Web、Gateway、Agent 装配、Gmail 域、Calendar 域、长期 Memory 文件与每轮专用记忆判断（主 Agent 不再持有记忆工具）、后台记忆回顾、Personal KB Phase 1–4（`kb_list`/`kb_save`/`kb_read`/`kb_update`/`kb_history`/`kb_search`/`kb_delete`/`kb_move`/`kb_restore`/`kb_archive`，资料为 `kb/` 下的 Markdown 文件，由数据目录内的本地 Git 仓库做版本；`kb-index.sqlite3` 是数据目录内的派生 FTS5 索引，按二级标题分节、写入后增量替换、以 `kb/` 的 Git tree 标识判断是否需要重建；引用带完整 commit 与行号区间，可按引用读回该版本原文，回答不展示来源；每次操作前把用户在文件系统里的改动纳入版本，移动按 frontmatter 的 `id` 识别；删除保留历史，`kb_list` 可列出已删除资料供恢复；每份资料可带一句话说明 `summary`，`catalog.py` 据此每轮现算资料目录，经 `agent/client.py` 排在长期记忆之后注入；资料管理界面为 `web/src/pages/KbPage.tsx`（浏览与搜索）与 `KbDocumentPage.tsx`（Milkdown 所见即所得编辑，按需懒加载），接口在 `api/routes.py` 的 `/api/kb/*`；模块在 `server/tools/personal_kb/`，经 `server/storage/datarepo.py` 与 Memory 共享进程内锁与 `.gitignore`；新增 `pyyaml` 依赖）、Session Store 与 Confirmation。SQLite schema 为 13（schema 13 新增历史检索的派生索引表 `history_items` 与 `history_fts`；资料身份写在 frontmatter、版本走 Git；schema 11 曾新增回答来源表，schema 12 随撤销来源展示将其删除）。长期记忆管理页面为 `web/src/pages/MemoryPage.tsx`，接口在 `api/routes.py` 的 `/api/memory*`。未实现：主题页与导入（Phase 5）、Skills、认证与 HTTPS 远程访问。
 
 ### Gateway 与触发源
 
@@ -387,7 +388,7 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 
 步骤说明：模型给出完整的工具调用（`AssistantMessage` 中的 `ToolUseBlock`）时、工具执行之前，`agent/client.py` 按该工具注册时声明的 `activity_renderer` 生成一句说明（如“正在检索资料：星云验收”），以 `activity` 事件转发；内置联网工具的说明在开放它们的 `client.py` 里给出，没有声明的工具不展示。`activity` 不写时间线：运行时在内存里按调用记住最后一步，供刷新后的 `GET /tasks/{id}` 在 `latest_run.activity` 读取；模型开始输出文字、调用结束或失败时清除。调用失败时，保存到时间线的失败说明末尾附“（最后一步：…）”。页面在“思考中”的点后显示当前步骤。
 
-模型与凭证只在这一层读取：托管模型直接给型号名；配置第三方提供方时三项必须齐全且供应商已登记，写错在装配期报错，不静默退回托管模型，随后转成 BYOK 的 `resolve_model` 回调；缺令牌时调用前抛 `DependencyUnavailableError`。标题生成另可指定托管型号名，未配置时沿用主对话型号，配置 BYOK 时不换型号。后台记忆回顾与每轮记忆判断是同层的另两个一次性调用（`review_memory`、`judge_memory`）：全新会话、系统提示即指令、MCP 端点只挂各自的记忆工具、无 resume，收尾与标题生成共用 ResultMessage 终态规则；判断额外把每次工具调用与真实结果按序记录返回，供程序渲染提示。
+模型与凭证只在这一层读取：托管模型直接给型号名；配置第三方提供方时三项必须齐全且供应商已登记，写错在装配期报错，不静默退回托管模型，随后转成 BYOK 的 `resolve_model` 回调；缺令牌时调用前抛 `DependencyUnavailableError`。标题生成另可指定托管型号名，未配置时沿用主对话型号，配置 BYOK 时不换型号。后台记忆回顾与每轮记忆判断是同层的另两个一次性调用（`review_memory`、`judge_memory`）：全新会话、系统提示即指令、MCP 端点只挂各自的记忆工具、无 resume，收尾与标题生成共用 ResultMessage 终态规则；两者都把每次工具调用与真实结果按序记录返回，供程序渲染提示。
 
 ### 工具装配
 
@@ -405,14 +406,14 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 
 `web/` 是 React 单页应用，路由为 `/tasks`（任务列表与发起新任务）和 `/tasks/:taskId`（时间线、草稿卡与逐项结果）。任务列表按 5 秒轮询，页面不可见时暂停；任务详情用 SSE，另在有操作处于 `sending` 时按 1.5 秒轮询执行结果，SSE 重连后整体重读时间线对账。单一断点 900px：以上为侧栏布局，以下折叠为底部 tab，两端功能一致。设计 token 分种子、原语与语义三层，见 `src/styles/tokens.css`。
 
-界面只呈现接口能支撑的内容：邮件草稿卡可编辑并确认，日程不渲染卡片，创建结果只在对话文字里汇报、记录留在操作与执行数据中；资料库回答不展示来源；资料有独立的浏览、搜索与编辑页面（`/kb`、`/kb/doc`、`/kb/new`），侧栏与手机底部 tab 提供入口；规则与 Skill 入口仍置灰。
+界面只呈现接口能支撑的内容：邮件草稿卡可编辑并确认，日程不渲染卡片，创建结果只在对话文字里汇报、记录留在操作与执行数据中；资料库回答不展示来源；资料有独立的浏览、搜索与编辑页面（`/kb`、`/kb/doc`、`/kb/new`），侧栏与手机底部 tab 提供入口；长期记忆有查看与编辑页面（`/memory`），入口同样在侧栏与底部 tab；Skill 入口仍置灰。
 
 ### 已知偏差与未完成
 
 - 认证与 HTTPS 未实现：服务当前只按本机与局域网测试使用，`PATCH /api/operations/{operation_id}/draft` 还不校验操作与任务的归属关系。这两项是阶段 6 的交付内容，公网暴露前必须完成。
 - 触发源插孔仍带邮件域名（`MailSource`、`accept_new_mail`、`create_app(mail_source=...)`），与“通用层不持有域措辞”的约定不一致；第二个触发源接入时改为域中立命名。
 - 联网查询的来源没有独立呈现：`agent/client.py` 的流只取 `TextBlock`，`WebSearch` 结果里的 `Links`（标题与 URL）和 `WebFetch` 实际抓取的 URL 都被丢弃，回答末尾的来源列表是模型自己写进正文的 Markdown。已实测出现复述与实际不一致（一轮抓取 6 个页面，正文只列出 5 个）。所需数据在流里已经具备，是否持久化与展示尚未决定（个人知识库已决定回答不展示来源）。
-- 生效 Skill 名单恒为空，Skills 尚无代码；Personal KB 已实现 Phase 1–4（资料的保存、读取、更新、历史版本，分节检索与按引用读取，删除、移动、恢复与改动跟随，管理界面与任务归档；回答不展示来源），主题页与导入尚未实现；Memory 已有两个长期记忆文件、每轮专用记忆判断、后台记忆回顾、逐轮加载与本地 Git 历史，历史对话检索已实现；管理页面和恢复尚未实现。
+- 生效 Skill 名单恒为空，Skills 尚无代码；Personal KB 已实现 Phase 1–4（资料的保存、读取、更新、历史版本，分节检索与按引用读取，删除、移动、恢复与改动跟随，管理界面与任务归档；回答不展示来源），主题页与导入尚未实现；Memory 已有两个长期记忆文件、每轮专用记忆判断、后台记忆回顾与整理、逐轮加载与管理页面，历史对话检索已实现；记忆不做版本管理，误改只能在对话中说明或在页面重新编辑。
 - 主题页、后台主题整理与外部笔记导入尚无代码。资料目录每轮都要纳入用户改动并解析全部资料的 frontmatter，资料数量很大时有额外开销；说明由模型填写，写得不好时 Agent 可能想不到去读对应资料。
 - 用户改动不是实时监听：直接改文件后，要等下一次资料库操作才纳入版本；每次操作都会先做一次 `git status`，资料库很大时有额外开销。删除、移动与恢复前需取得用户同意由工具说明约束模型遵守，程序只保证这三个工具只在用户对话轮可见。
 - 历史检索在第一次搜索时才把已有历史写进索引，历史很多时这次搜索会明显变慢；进行中的轮次搜不到。日期过滤按本机时区换算，服务与用户不在同一时区时自然日边界会有偏差。
