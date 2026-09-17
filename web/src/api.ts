@@ -312,9 +312,9 @@ export const deleteKbDocument = (path: string, expectedVersion: string) =>
 
 export type MemoryTarget = "user" | "memory";
 
-/** 一块长期记忆：`version` 是当前内容的哈希，保存时带回用于冲突检查。 */
+/** 一块长期记忆：整份 Markdown 全文；`version` 是内容哈希，保存时带回用于冲突检查。 */
 export type MemorySection = {
-  entries: string[];
+  content: string;
   usage: { chars: number; limit: number };
   version: string;
 };
@@ -323,19 +323,8 @@ export type MemorySnapshot = Record<MemoryTarget, MemorySection>;
 export type MemoryWriteResult = MemorySection & { target: MemoryTarget; changed: boolean };
 
 export const getMemory = () => request<MemorySnapshot>("/memory");
-export const addMemoryEntry = (target: MemoryTarget, content: string, expectedVersion: string) =>
-  request<MemoryWriteResult>("/memory/entries/add", {
-    method: "POST",
-    body: JSON.stringify({ target, content, expected_version: expectedVersion }),
-  });
-export const updateMemoryEntry = (
-  target: MemoryTarget, old: string, content: string, expectedVersion: string,
-) => request<MemoryWriteResult>("/memory/entries/update", {
-  method: "POST",
-  body: JSON.stringify({ target, old, content, expected_version: expectedVersion }),
-});
-export const removeMemoryEntry = (target: MemoryTarget, old: string, expectedVersion: string) =>
-  request<MemoryWriteResult>("/memory/entries/remove", {
-    method: "POST",
-    body: JSON.stringify({ target, old, expected_version: expectedVersion }),
+export const saveMemory = (target: MemoryTarget, content: string, expectedVersion: string) =>
+  request<MemoryWriteResult>(`/memory/${target}`, {
+    method: "PUT",
+    body: JSON.stringify({ content, expected_version: expectedVersion }),
   });

@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   ApiError,
-  addMemoryEntry,
   getMemory,
-  removeMemoryEntry,
-  updateMemoryEntry,
+  saveMemory,
   type MemorySection,
   type MemorySnapshot,
   type MemoryTarget,
 } from "../api";
 import AppShell from "../components/AppShell";
+import KbEditor from "../components/KbEditor";
 import Notice from "../components/Notice";
 
 const SECTIONS: { target: MemoryTarget; title: string; hint: string }[] = [
@@ -21,23 +20,30 @@ const SECTIONS: { target: MemoryTarget; title: string; hint: string }[] = [
 /** 容量条从这个比例起提醒快满了。 */
 const NEAR_FULL = 0.9;
 
-/** 正在编辑的条目：`original` 为空表示新增。 */
-type Editing = { target: MemoryTarget; original: string | null; text: string };
-type Removing = { target: MemoryTarget; entry: string };
-type Failure = { target: MemoryTarget; error: ApiError };
-
 function asApiError(failure: unknown): ApiError {
   return failure instanceof ApiError ? failure : new ApiError("invalid_request", String(failure), 0);
 }
 
 function failureText(error: ApiError): string {
-  if (error.code === "memory_full") return `${error.message}。先精简这条，或删除、合并其他条目。`;
+  if (error.code === "memory_full") return `${error.message}。先精简或合并已有内容再保存。`;
   const detail = error.fieldErrors?.map((item) => item.message).join("；");
   return detail ? detail : error.message;
 }
 
-function Usage({ section }: { section: MemorySection }) {
-  const { chars, limit } = section.usage;
+/**
+ * 保存前的整理，与服务端的规范化一致：统一换行、去掉首尾空白、合并连续空行，容量按它计算。
+ *
+ * 编辑器把空段落序列化成独占一行的 `<br />`：它对 Agent 没有意义，保存时当作空行去掉。
+ */
+function normalize(content: string): string {
+  return content
+    .replace(/\r\n/g, "\n")
+    .replace(/^[ \t]*<br\s*\/?>[ \t]*$/gm, "")
+    .trim()
+    .replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, "\n\n");
+}
+
+function Usage({ chars, limit }: { chars: number; limit: number }) {
   const ratio = limit > 0 ? chars / limit : 0;
   const tone = ratio > 1 ? " over" : ratio >= NEAR_FULL ? " near" : "";
   return (
@@ -53,61 +59,154 @@ function Usage({ section }: { section: MemorySection }) {
   );
 }
 
-type EditorProps = {
-  editing: Editing;
-  busy: boolean;
-  onChange: (text: string) => void;
-  onSave: () => void;
-  onCancel: () => void;
+type DocumentProps = {
+  target: MemoryTarget;
+  title: string;
+  hint: string;
+  section: MemorySection;
+  onSaved: (section: MemorySection) => void;
+  onReload: () => void;
+  onDirty: (target: MemoryTarget, dirty: boolean) => void;
 };
 
-function EntryEditor({ editing, busy, onChange, onSave, onCancel }: EditorProps) {
-  const unchanged = editing.text.trim() === "" || editing.text.trim() === editing.original;
+/**
+ * 一块记忆的所见即所得编辑区：渲染后的 Markdown 直接可改，有改动时出现保存。
+ *
+ * 编辑器会按自己的写法重新排版原文，“有改动”以编辑器载入后序列化的基准为准，
+ * 只打开不编辑不会产生保存。
+ */
+function MemoryDocument({ target, title, hint, section, onSaved, onReload, onDirty }: DocumentProps) {
+  const baseline = useRef<string | null>(null);
+  const reader = useRef<(() => string) | null>(null);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [touched, setTouched] = useState(false);
+  const [editorKey, setEditorKey] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  const dirty = touched || (baseline.current !== null && draft !== null && draft !== baseline.current);
+  useEffect(() => { onDirty(target, dirty); }, [target, dirty, onDirty]);
+  useEffect(() => () => onDirty(target, false), [target, onDirty]);
+
+  const chars = dirty && draft !== null ? normalize(draft).length : section.usage.chars;
+  const over = chars > section.usage.limit && chars > section.usage.chars;
+
+  const reset = () => {
+    baseline.current = null;
+    setDraft(null);
+    setTouched(false);
+    setError(null);
+    setEditorKey((key) => key + 1);
+  };
+
+  const save = async () => {
+    if (saving || !dirty) return;
+    const latest = reader.current?.() ?? draft ?? section.content;
+    setSaving(true);
+    setError(null);
+    setNote(null);
+    try {
+      if (normalize(latest) === normalize(baseline.current ?? section.content)) {
+        setTouched(false);
+        setDraft(baseline.current);
+        setNote("没有需要保存的改动");
+        return;
+      }
+      const saved = await saveMemory(target, normalize(latest), section.version);
+      onSaved(saved);
+      reset();
+      setNote("已保存，从下一轮对话起生效");
+    } catch (failure) {
+      setError(asApiError(failure));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const conflict = error?.code === "version_conflict";
+
   return (
-    <form className="memory-editor" onSubmit={(event) => { event.preventDefault(); onSave(); }}>
-      <textarea className="input" value={editing.text} autoFocus rows={3}
-        onFocus={(event) => {
-          // 编辑已有条目时光标放到末尾，接着原话往下改。
-          const end = event.currentTarget.value.length;
-          event.currentTarget.setSelectionRange(end, end);
-        }}
-        aria-label={editing.original === null ? "新记忆内容" : "编辑记忆内容"}
-        placeholder="一句简短明确的话，涉及条件时写上条件"
-        onChange={(event) => onChange(event.target.value)}
+    <section className="memory-section" aria-labelledby={`memory-${target}`}>
+      <div className="memory-head">
+        <div className="memory-head-text">
+          <h3 id={`memory-${target}`}>{title}</h3>
+          <div className="memory-hint">{hint}</div>
+        </div>
+        <Usage chars={chars} limit={section.usage.limit} />
+      </div>
+
+      {error !== null && (
+        <Notice tone="danger" title={conflict ? "记忆已被更新" : "保存失败"}
+          actions={conflict
+            ? <button type="button" className="btn-secondary" onClick={onReload}>重新载入（放弃本页修改）</button>
+            : undefined}>
+          {conflict
+            ? "页面打开之后，这部分记忆被对话或文件编辑器改过。为避免覆盖，本次没有保存。"
+            : failureText(error)}
+        </Notice>
+      )}
+
+      <div
         onKeyDown={(event) => {
-          if (event.key === "Escape") onCancel();
           if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
             event.preventDefault();
-            if (!unchanged) onSave();
+            void save();
           }
-        }} />
-      <div className="memory-editor-actions">
-        <button type="submit" className="btn" disabled={busy || unchanged}>{busy ? "保存中…" : "保存"}</button>
-        <button type="button" className="btn-secondary" disabled={busy} onClick={onCancel}>取消</button>
+        }}
+      >
+        <KbEditor
+          key={`${section.version}:${editorKey}`}
+          className="memory-editor"
+          label={`${title}的记忆内容`}
+          initial={section.content}
+          onReady={(markdown) => {
+            baseline.current = markdown;
+            setDraft(markdown);
+          }}
+          onChange={setDraft}
+          onInput={() => { setTouched(true); setNote(null); }}
+          reader={reader}
+        />
       </div>
-    </form>
+
+      {(dirty || note !== null) && (
+        <div className="memory-actions">
+          {dirty ? (
+            <>
+              {over && <span className="memory-over">超出上限，先精简再保存</span>}
+              <button type="button" className="btn-secondary" disabled={saving} onClick={reset}>放弃修改</button>
+              <button type="button" className="btn" disabled={saving || over} onClick={() => void save()}>
+                {saving ? "保存中…" : "保存"}
+              </button>
+            </>
+          ) : (
+            <span className="memory-note" role="status">{note}</span>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
 /**
- * 长期记忆的查看与编辑：两个分区分别对应 USER.md 与 MEMORY.md。
+ * 长期记忆的查看与编辑：两个分区分别对应 USER.md 与 MEMORY.md，各是一份 Markdown 文档。
  *
- * 记忆不做版本管理，每次保存都带上读取时的内容版本：页面打开之后被记忆判断、后台整理
+ * 记忆不做版本管理，保存带上读取时的内容版本：页面打开之后被记忆判断、后台整理
  * 或编辑器改过时保存会被拒绝，提示重新载入，不覆盖别人的修改。修改从下一轮对话起生效。
  */
 export default function MemoryPage() {
   const [snapshot, setSnapshot] = useState<MemorySnapshot | null>(null);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
-  const [editing, setEditing] = useState<Editing | null>(null);
-  const [removing, setRemoving] = useState<Removing | null>(null);
-  const [failure, setFailure] = useState<Failure | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [loads, setLoads] = useState(0);
+  const dirtyTargets = useRef(new Set<MemoryTarget>());
+  const [dirty, setDirty] = useState(false);
 
   const load = useCallback(async () => {
     try {
       setSnapshot(await getMemory());
       setLoadError(null);
-      setFailure(null);
+      setLoads((count) => count + 1);
     } catch (error) {
       setLoadError(asApiError(error));
     }
@@ -115,57 +214,25 @@ export default function MemoryPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const write = async (target: MemoryTarget, action: (version: string) => Promise<MemorySection>) => {
-    if (snapshot === null || busy) return;
-    setBusy(true);
-    setFailure(null);
-    try {
-      const section = await action(snapshot[target].version);
-      setSnapshot({ ...snapshot, [target]: section });
-      setEditing(null);
-      setRemoving(null);
-    } catch (error) {
-      setFailure({ target, error: asApiError(error) });
-    } finally {
-      setBusy(false);
-    }
-  };
+  const onDirty = useCallback((target: MemoryTarget, value: boolean) => {
+    if (value) dirtyTargets.current.add(target);
+    else dirtyTargets.current.delete(target);
+    setDirty(dirtyTargets.current.size > 0);
+  }, []);
 
-  const save = () => {
-    if (editing === null) return;
-    const { target, original } = editing;
-    const text = editing.text.trim();
-    void write(target, (version) => original === null
-      ? addMemoryEntry(target, text, version)
-      : updateMemoryEntry(target, original, text, version));
-  };
-
-  const remove = () => {
-    if (removing === null) return;
-    const { target, entry } = removing;
-    void write(target, (version) => removeMemoryEntry(target, entry, version));
-  };
-
-  const startEditing = (next: Editing) => {
-    setEditing(next);
-    setRemoving(null);
-    setFailure(null);
-  };
-
-  const editorProps = (current: Editing): EditorProps => ({
-    editing: current,
-    busy,
-    onChange: (text) => setEditing({ ...current, text }),
-    onSave: save,
-    onCancel: () => { setEditing(null); setFailure(null); },
-  });
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
 
   return (
     <AppShell serviceError={loadError}>
       <div className="topbar">
         <div style={{ flex: 1, minWidth: 0 }}>
           <h2>记忆</h2>
-          <div className="sub">每轮对话都会带上这些内容，修改从下一轮起生效</div>
+          <div className="sub">每轮对话都会带上这些内容，直接修改，保存后从下一轮起生效</div>
         </div>
       </div>
       <div className="content memory-content">
@@ -178,77 +245,19 @@ export default function MemoryPage() {
 
         {snapshot === null && loadError === null && <div className="loading">读取中…</div>}
 
-        {snapshot !== null && SECTIONS.map(({ target, title, hint }) => {
-          const section = snapshot[target];
-          const sectionFailure = failure?.target === target ? failure.error : null;
-          const conflict = sectionFailure?.code === "version_conflict";
-          const adding = editing?.target === target && editing.original === null ? editing : null;
-          return (
-            <section className="memory-section" key={target} aria-labelledby={`memory-${target}`}>
-              <div className="memory-head">
-                <div className="memory-head-text">
-                  <h3 id={`memory-${target}`}>{title}</h3>
-                  <div className="memory-hint">{hint}</div>
-                </div>
-                <Usage section={section} />
-              </div>
-
-              {sectionFailure !== null && (
-                <Notice tone="danger" title={conflict ? "记忆已被更新" : "保存失败"}
-                  actions={conflict
-                    ? <button type="button" className="btn-secondary" onClick={() => void load()}>重新载入</button>
-                    : undefined}>
-                  {conflict
-                    ? "页面打开之后，这部分记忆被对话或文件编辑器改过。为避免覆盖，本次没有保存；重新载入后再改。"
-                    : failureText(sectionFailure)}
-                </Notice>
-              )}
-
-              <div className="list-card memory-list">
-                {section.entries.length === 0 && adding === null && (
-                  <div className="memory-empty">还没有内容。对话中明确说出的偏好会自动记在这里。</div>
-                )}
-                {section.entries.map((entry) => {
-                  const current = editing?.target === target && editing.original === entry ? editing : null;
-                  const confirming = removing?.target === target && removing.entry === entry;
-                  if (current !== null) {
-                    return <div className="memory-entry" key={entry}><EntryEditor {...editorProps(current)} /></div>;
-                  }
-                  return (
-                    <div className="memory-entry" key={entry}>
-                      <p className="memory-text">{entry}</p>
-                      {confirming ? (
-                        <div className="memory-confirm">
-                          <span>删除后不再带入对话，原对话仍保留。</span>
-                          <button type="button" className="btn danger" disabled={busy} onClick={remove}>确认删除</button>
-                          <button type="button" className="btn-secondary" disabled={busy}
-                            onClick={() => setRemoving(null)}>取消</button>
-                        </div>
-                      ) : (
-                        <div className="memory-entry-actions">
-                          <button type="button" className="memory-action" disabled={busy}
-                            onClick={() => startEditing({ target, original: entry, text: entry })}>编辑</button>
-                          <button type="button" className="memory-action danger" disabled={busy}
-                            onClick={() => { setRemoving({ target, entry }); setEditing(null); setFailure(null); }}>
-                            删除
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-                {adding !== null
-                  ? <div className="memory-entry"><EntryEditor {...editorProps(adding)} /></div>
-                  : (
-                    <button type="button" className="memory-add" disabled={busy}
-                      onClick={() => startEditing({ target, original: null, text: "" })}>
-                      + 新增一条
-                    </button>
-                  )}
-              </div>
-            </section>
-          );
-        })}
+        {snapshot !== null && SECTIONS.map(({ target, title, hint }) => (
+          <MemoryDocument
+            // 重新载入时整块重建：丢掉草稿与错误，编辑器换成最新内容。
+            key={`${target}:${loads}`}
+            target={target}
+            title={title}
+            hint={hint}
+            section={snapshot[target]}
+            onSaved={(section) => setSnapshot((current) => current && { ...current, [target]: section })}
+            onReload={() => void load()}
+            onDirty={onDirty}
+          />
+        ))}
       </div>
     </AppShell>
   );

@@ -18,10 +18,12 @@ type Props = {
   /** 保存时直接读编辑器当前内容，不等防抖后的变更通知。 */
   reader: MutableRefObject<(() => string) | null>;
   label: string;
+  /** 附加在编辑区容器上的类名，用于调整高度与空内容提示。 */
+  className?: string;
 };
 
 /**
- * 资料正文的所见即所得编辑器（Milkdown，CommonMark + GFM）。
+ * Markdown 文件的所见即所得编辑器（Milkdown，CommonMark + GFM）：资料正文与长期记忆共用。
  *
  * 资料以 Markdown 文件为准：编辑器读进来的是原文，保存出去的也是 Markdown。
  * 编辑器会按自己的写法重新排版原文（列表符号、转义等），所以“有改动”以序列化后的
@@ -29,7 +31,7 @@ type Props = {
  *
  * 原文里的 HTML 由预设按纯文本显示，不进入 DOM 执行；资料可能来自邮件等外部内容。
  */
-function Inner({ initial, onReady, onChange, reader }: Omit<Props, "label" | "onInput">) {
+function Inner({ initial, onReady, onChange, reader }: Omit<Props, "label" | "onInput" | "className">) {
   const callbacks = useRef({ onReady, onChange });
   callbacks.current = { onReady, onChange };
 
@@ -66,9 +68,9 @@ function Inner({ initial, onReady, onChange, reader }: Omit<Props, "label" | "on
   return <Milkdown />;
 }
 
-export default function KbEditor({ label, onInput, ...props }: Props) {
+export default function KbEditor({ label, onInput, className, ...props }: Props) {
   return (
-    <div className="md kb-editor" aria-label={label} onInput={onInput}>
+    <div className={`md kb-editor${className ? ` ${className}` : ""}`} aria-label={label} onInput={onInput}>
       <MilkdownProvider>
         <Inner {...props} />
       </MilkdownProvider>
