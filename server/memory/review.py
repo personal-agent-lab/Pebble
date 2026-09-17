@@ -16,45 +16,28 @@ from server.agent.context import Material, render_materials
 from server.config import get_settings
 from server.db import session, write
 from server.errors import NotFoundError
-from server.memory.notices import (
-    MEMORY_CONSOLIDATE_LIMITS,
-    MEMORY_NOT_SAVE,
-    MEMORY_WRITE_STYLE,
-    memory_materials,
-    review_notice_texts,
-)
+from server.memory.notices import MEMORY_RULES, memory_materials, review_notice_texts
 from server.memory.service import MemoryStore
 from server.sessions import repository, timeline
 from server.sessions.service import timestamp
 
 REVIEW_INSTRUCTIONS = (
-    "你是 Pebble 的后台记忆整理程序，独立于用户对话运行。用户单轮明确表达的事实与偏好"
-    "由对话中的即时记忆判断负责，不是你补漏的对象。你会收到一段任务对话记录和"
-    "当前长期记忆，要做两件事：补充跨轮才稳定下来的用户信息，并整理长期记忆。"
-    "除此之外不做任何其他事：不面向用户回复、不改写对话。\n"
+    "你是 Pebble 的后台记忆整理程序，独立于用户对话运行，不面向用户回复。"
+    "用户单轮明确表达的信息由即时判断负责，不是你补漏的对象。"
+    "你会收到一段对话记录和当前长期记忆，做两件事。\n"
     "\n"
-    "补充（memory_edit 的 append，或用 insert 插到相关行下面），依次检查：\n"
-    "- 用户是谁：身份、角色、长期目标、正在进行的学习或研究方向有没有新的稳定信息？\n"
-    "- 用户的偏好与习惯：表达方式、语言、格式、工作节奏有没有跨多轮重复出现的稳定表现？"
-    "只出现一次的不算。\n"
-    "- 用户对助理的期待：哪些做法被明确认可或纠正过，下次仍应沿用？\n"
-    "- 这条信息换一个会话仍然有用吗？只在当前任务内有意义的不算。\n"
-    f"{MEMORY_WRITE_STYLE}\n"
-    f"与当前记忆重复或只是措辞不同、拿不准的不保存。{MEMORY_NOT_SAVE}\n"
+    "补充跨多轮才看得出的信息，拿不准的不保存：\n"
+    "- 重复出现的表达方式、语言、格式或工作节奏偏好，只出现一次的不算；\n"
+    "- 被用户认可或纠正过、下次仍应沿用的做法；\n"
+    "- 对话中逐渐明确的身份、长期目标、学习或研究方向。\n"
     "\n"
-    "整理（memory_edit 的 replace、delete、move）：\n"
-    "- 每块记忆是一份 Markdown 文档：把相关内容归到一起，合并重复或含义相近的内容"
-    "（replace 保留的一行、delete 其余的行，放在同一次调用里），精简冗长的措辞。\n"
-    "- 对话里有明确依据表明某项已经过时或失效时，更新或删除它；"
-    "没有明确依据时不改动已有内容。\n"
-    "- 容量接近上限（材料标题里有已用与上限字数）时优先整理，为新信息腾出空间；"
-    "整理与新增放在同一次调用里。\n"
-    "- 放错分区的内容用 move 移到正确分区，不要拆成删除和追加。\n"
-    "- memory_edit 返回 invalid_memory 时，按返回的最新内容重新定位后再调用一次，最多一次；"
-    "其他失败（容量不足除外）不要重试。\n"
-    f"- {MEMORY_CONSOLIDATE_LIMITS}\n"
+    "整理长期记忆：\n"
+    "- 合并重复或相近的内容，精简冗长措辞，把放错分区的内容移回去；容量接近上限时优先整理。\n"
+    "- 对话中有明确依据表明某项已过时或失效时更新或删除；没有明确依据不改动。\n"
     "\n"
-    "没有需要做的事时不调用任何工具，只回复“无”。完成后用一句话概括做了什么，不逐条复述。"
+    "没有要做的事时不调用工具，只回复“无”；完成后用一句话概括做了什么。\n"
+    "\n"
+    f"{MEMORY_RULES}"
 )
 
 REVIEW_MESSAGE_HEADER = "请按系统提示的规则审阅下面的材料，判断是否需要补充或整理长期记忆。"

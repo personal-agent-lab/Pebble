@@ -11,6 +11,7 @@ from server.db import init_db, session, write
 from server.errors import NotFoundError
 from server.memory.notices import review_notice_texts
 from server.memory.review import (
+    REVIEW_INSTRUCTIONS,
     REVIEW_MESSAGE_HEADER,
     MemoryReviewScheduler,
     build_review_message,
@@ -309,7 +310,7 @@ def test_run_passes_window_and_memory_snapshot_to_gateway(scheduler):
     asyncio.run(scheduler.run(row["review_id"], gateway))
     ((called_task, instructions, transcript),) = gateway.calls
     assert called_task == task_id
-    assert "memory_edit" in instructions
+    assert instructions == REVIEW_INSTRUCTIONS
     assert "我最近正在学习 Hermes 的设计" in transcript
     with session() as conn:
         status = conn.execute(
