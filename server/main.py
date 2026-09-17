@@ -89,6 +89,7 @@ def create_app(
     app.state.agent = agent
     app.state.mail_source = mail_source
     app.state.kb_store = kb_store
+    app.state.memory_store = agent.memory_store
     app.state.history = history if history is not None else HistoryStore()
     # 可选外部服务的接入状态，由生产装配填写；测试装配不声明时健康检查不列出。
     app.state.services = {}

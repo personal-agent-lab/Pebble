@@ -1,4 +1,4 @@
-"""HTTP 路由与请求结构：健康检查、任务、对话、SSE、确认与资料管理。"""
+"""HTTP 路由与请求结构：健康检查、任务、对话、SSE、确认、记忆与资料管理。"""
 
 import asyncio
 import json
@@ -13,6 +13,7 @@ from server.config import get_settings
 from server.db import schema_version, session
 from server.errors import DependencyUnavailableError
 from server.gateway.runtime import GatewayRuntime
+from server.memory.service import MemoryStore
 from server.sessions.history import HistoryStore
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
@@ -55,6 +56,13 @@ Confirmations = Annotated[ConfirmationService, Depends(get_confirmations)]
 
 
 Kb = Annotated[KbStore, Depends(get_kb)]
+
+
+def get_memory(request: Request) -> MemoryStore:
+    return request.app.state.memory_store
+
+
+Memory = Annotated[MemoryStore, Depends(get_memory)]
 
 
 def get_history(request: Request) -> HistoryStore:
@@ -262,6 +270,69 @@ def history_search(
 #
 # 界面操作由用户本人发起，等同于直接改文件：不经过 Agent，也不需要对话中的同意；
 # 写入沿用资料库自身的版本校验，保存、移动与删除都要带上读取时的 version。
+
+
+MemoryTarget = Literal["user", "memory"]
+
+
+class MemoryEntryAdd(BaseModel):
+    target: MemoryTarget
+    content: str
+    expected_version: str = Field(min_length=1)
+
+
+class MemoryEntryUpdate(BaseModel):
+    target: MemoryTarget
+    old: str
+    content: str
+    expected_version: str = Field(min_length=1)
+
+
+class MemoryEntryRemove(BaseModel):
+    target: MemoryTarget
+    old: str
+    expected_version: str = Field(min_length=1)
+
+
+def memory_section(result: dict) -> dict:
+    return {
+        "entries": result["entries"],
+        "usage": result["usage"],
+        "version": result["version"],
+    }
+
+
+@router.get("/memory", tags=["memory"])
+def memory_current(memory: Memory) -> dict:
+    """两块长期记忆的当前条目、容量与版本；超出容量的文件照常返回。"""
+    return {target: memory_section(section) for target, section in memory.snapshot().items()}
+
+
+@router.post("/memory/entries/add", tags=["memory"])
+def memory_add(body: MemoryEntryAdd, memory: Memory) -> dict:
+    result = memory.apply("add", body.target, body.content, expected_version=body.expected_version)
+    return {"target": body.target, "changed": result["changed"], **memory_section(result)}
+
+
+@router.post("/memory/entries/update", tags=["memory"])
+def memory_update(body: MemoryEntryUpdate, memory: Memory) -> dict:
+    result = memory.apply(
+        "replace",
+        body.target,
+        body.content,
+        body.old,
+        exact=True,
+        expected_version=body.expected_version,
+    )
+    return {"target": body.target, "changed": result["changed"], **memory_section(result)}
+
+
+@router.post("/memory/entries/remove", tags=["memory"])
+def memory_remove(body: MemoryEntryRemove, memory: Memory) -> dict:
+    result = memory.apply(
+        "remove", body.target, None, body.old, exact=True, expected_version=body.expected_version
+    )
+    return {"target": body.target, "changed": result["changed"], **memory_section(result)}
 
 
 class KbDocumentCreate(BaseModel):
