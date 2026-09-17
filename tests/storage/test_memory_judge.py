@@ -181,11 +181,7 @@ def test_notice_texts_report_actual_results():
         {"tool": "memory_ask", "arguments": {}, "result": {"question": "要改哪一条？"}},
     ]
     assert notice_texts(records) == [
-        "已记住：- 用户对历史感兴趣",
-        "已记住：- 用户偏好通俗读物",
-        "已修改：- 内部会议 30 分钟 → - 内部会议 45 分钟",
-        "已删除这条记忆：- 用户偏好英文。原对话仍保留。",
-        "已移到“事实与约定”：工作日历用于内部会议",
+        "已更新记忆",
         "这条内容已经在记忆里。",
         "想确认：要改哪一条？",
     ]
@@ -193,8 +189,8 @@ def test_notice_texts_report_actual_results():
 
 def test_notice_texts_report_failure_only_when_last_edit_failed():
     saved = edited(change("append", added=["新偏好"]))
-    assert notice_texts([failed("invalid_memory", "未通过校验"), saved]) == ["已记住：新偏好"]
+    assert notice_texts([failed("invalid_memory", "未通过校验"), saved]) == ["已更新记忆"]
     assert notice_texts([saved, failed("memory_full", "放不下")]) == [
-        "已记住：新偏好",
+        "已更新记忆",
         "记忆保存失败：放不下",
     ]

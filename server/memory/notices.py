@@ -1,7 +1,8 @@
 """记忆会话的共用部分：判断与回顾共用的写入规则、给模型的当前记忆材料、按真实工具结果生成的用户提示。
 
-提示只依据记录到的工具调用与结果生成，模型自述不作为事实来源。每轮判断的每项结果都
-提示；后台回顾只提示修改、删除与跨分区移动（整理动了用户已有的内容），新增不打扰用户。
+提示只依据记录到的工具调用与结果生成，模型自述不作为事实来源。每轮判断有实际变更时只提示
+一次“已更新记忆”，不复述内容；后台回顾只提示修改、删除与跨分区移动（整理动了用户已有的内容），
+新增不打扰用户。
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ MEMORY_RULES = (
     "不能去掉或扩大适用条件；实在腾不出空间就不保存。"
 )
 
+UPDATED_NOTICE = "已更新记忆"
 REVIEW_PREFIX = "整理记忆："
 REVIEW_NOTICE_ACTIONS = {"replace", "delete", "move"}
 
@@ -42,7 +44,7 @@ def memory_materials(snapshot: dict) -> tuple[Material, ...]:
 
 
 def notice_texts(records: list[dict]) -> list[str]:
-    """每轮判断的实际工具调用与结果映射为用户可见的提示，按调用顺序；多处修改逐处提示。
+    """每轮判断的实际工具调用与结果映射为用户可见的提示，按调用顺序；实际变更合并为一条“已更新记忆”。
 
     写入失败只看这次判断最后一次 memory_edit：失败后重试成功的，不再提示前面的失败。
     """
@@ -62,14 +64,15 @@ def notice_texts(records: list[dict]) -> list[str]:
                 if edit.get("reason") == "exists":
                     notices.append("这条内容已经在记忆里。")
                 continue
-            notices.append(_change_text(edit))
+            if UPDATED_NOTICE not in notices:
+                notices.append(UPDATED_NOTICE)
     return notices
 
 
 def review_notice_texts(records: list[dict]) -> list[str]:
     """后台回顾的提示：只列出实际生效的修改、删除与跨分区移动，新增与失败不提示。"""
     return [
-        REVIEW_PREFIX + _change_text(edit, review=True)
+        REVIEW_PREFIX + _change_text(edit)
         for record in records
         for edit in record.get("result", {}).get("applied", [])
         if edit["changed"] and edit["action"] in REVIEW_NOTICE_ACTIONS
@@ -80,11 +83,9 @@ def _joined(lines: list[str]) -> str:
     return " / ".join(line.strip() for line in lines)
 
 
-def _change_text(edit: dict, *, review: bool = False) -> str:
+def _change_text(edit: dict) -> str:
     removed, added = _joined(edit["removed"]), _joined(edit["added"])
     action = edit["action"]
-    if action in ("append", "insert"):
-        return f"已记住：{added}"
     if action == "replace":
         dropped = [line for line in edit["removed"] if line not in edit["added"]]
         if len(dropped) < len(edit["removed"]) and set(edit["added"]) <= set(edit["removed"]):
@@ -95,6 +96,4 @@ def _change_text(edit: dict, *, review: bool = False) -> str:
     if action == "move":
         bare = _joined([LIST_MARKER.sub("", line) for line in edit["removed"]])
         return f"已移到“{MEMORY_LABELS[edit['to']]}”：{bare}"
-    if review:
-        return f"已删除：{removed}"
-    return f"已删除这条记忆：{removed.rstrip('。')}。原对话仍保留。"
+    return f"已删除：{removed}"

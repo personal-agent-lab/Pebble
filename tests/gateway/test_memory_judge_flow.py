@@ -108,7 +108,7 @@ async def test_judgment_runs_in_parallel_and_notice_reaches_timeline(judge_flow)
 
     release.set()
     await drain(judge_flow.service)
-    assert notices(task_id) == ["已记住：用户周末常去徒步"]
+    assert notices(task_id) == ["已更新记忆"]
     notice_items = [item for item in timeline_items(task_id) if item["kind"] == "notice"]
     assert notice_items[0]["role"] is None
     # 提示挂在触发它的消息轮上，并经 SSE 推送。
@@ -123,7 +123,7 @@ async def test_judgment_runs_in_parallel_and_notice_reaches_timeline(judge_flow)
             "run_id": run["run_id"],
             "item_id": notice_items[0]["item_id"],
             "type": "notice",
-            "text": "已记住：用户周末常去徒步",
+            "text": "已更新记忆",
         }
     ]
     assert judge_flow.store.snapshot()["user"]["content"] == "用户周末常去徒步"

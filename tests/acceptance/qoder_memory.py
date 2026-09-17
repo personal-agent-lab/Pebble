@@ -95,7 +95,7 @@ async def verify(root: Path) -> dict:
         notices = await judge(gateway, store, "以后回答我的问题时，请先给结论，再解释原因。")
         check("结论" in memory("user"), "偏好没有写入“关于你”", store, notices)
         check("结论" not in memory("memory"), "偏好被写进了“事实与约定”", store, notices)
-        check(any(n.startswith("已记住：") for n in notices), "写入后没有提示", store, notices)
+        check(any(n == "已更新记忆" for n in notices), "写入后没有提示", store, notices)
         report["preference"] = notices
 
         # 不是“以后请……”式的要求，只是陈述长期在做的事，也应当轮保存。
@@ -119,13 +119,12 @@ async def verify(root: Path) -> dict:
 
         notices = await judge(gateway, store, "我改主意了，以后先解释推导过程，再给结论。")
         check("推导" in memory("user"), "修改没有写入", store, notices)
-        updated = any(n.startswith("已修改：") for n in notices)
-        check(updated, "修改没有提示原内容与新内容", store, notices)
+        check("已更新记忆" in notices, "修改没有提示", store, notices)
         report["update"] = notices
 
         notices = await judge(gateway, store, "忘掉回答顺序这个偏好吧。")
         check("推导" not in memory("user"), "要求忘记后内容仍在", store, notices)
-        check(any(n.startswith("已删除") for n in notices), "删除没有提示", store, notices)
+        check(any(n == "已更新记忆" for n in notices), "删除没有提示", store, notices)
         report["forget"] = notices
 
         reply = await ask(gateway, "我们团队内部会议默认多长时间？只回答时长。")
