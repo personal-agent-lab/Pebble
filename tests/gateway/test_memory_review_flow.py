@@ -133,14 +133,14 @@ async def test_review_consolidation_notice_reaches_timeline_and_events(review_fl
     assert store.snapshot()["user"]["content"] == "- 回答先给结论"
     items = review_flow.service.get_timeline(task_id)["items"]
     assert items[-1]["kind"] == "notice"
-    assert items[-1]["text"] == "整理记忆：已删除：- 回答要先说结论"
+    assert items[-1]["text"] == "已整理记忆"
     events = []
     while not subscription.empty():
         events.append(subscription.get_nowait())
     notice = events[-1]
     assert (notice["type"], notice["text"], notice["item_id"]) == (
         "notice",
-        "整理记忆：已删除：- 回答要先说结论",
+        "已整理记忆",
         items[-1]["item_id"],
     )
     assert notice["run_id"] == review_flow.service.latest_run(task_id)["run_id"]

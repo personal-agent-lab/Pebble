@@ -170,7 +170,7 @@ def timeline_texts(task_id: str):
 
 
 def is_review_notice(kind, text) -> bool:
-    return kind == "notice" and (text or "").startswith("整理记忆：")
+    return kind == "notice" and text == "已整理记忆"
 
 
 def log(step, **fields):

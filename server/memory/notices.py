@@ -1,17 +1,16 @@
 """记忆会话的共用部分：判断与回顾共用的写入规则、给模型的当前记忆材料、按真实工具结果生成的用户提示。
 
 提示只依据记录到的工具调用与结果生成，模型自述不作为事实来源。每轮判断有实际变更时只提示
-一次“已更新记忆”，不复述内容；后台回顾只提示修改、删除与跨分区移动（整理动了用户已有的内容），
-新增不打扰用户。
+一次“已更新记忆”，不复述内容；后台回顾只在修改、删除或跨分区移动（整理动了用户已有的内容）时
+提示一次“已整理记忆”，新增不打扰用户。
 """
 
 from __future__ import annotations
 
 from server.agent.context import Material
-from server.memory.service import LIST_MARKER, model_view
+from server.memory.service import model_view
 
 MEMORY_TITLES = (("user", "关于你"), ("memory", "事实与约定"))
-MEMORY_LABELS = dict(MEMORY_TITLES)
 
 # 判断与回顾两个一次性会话共用的内容规则（对应 docs/memory-spec.md §3.1、§3.4），只在此维护一份。
 # 只管写什么、不写什么、怎么写；分区标准与工具用法在 memory_edit 的说明里，
@@ -28,7 +27,7 @@ MEMORY_RULES = (
 )
 
 UPDATED_NOTICE = "已更新记忆"
-REVIEW_PREFIX = "整理记忆："
+REVIEW_NOTICE = "已整理记忆"
 REVIEW_NOTICE_ACTIONS = {"replace", "delete", "move"}
 
 
@@ -70,30 +69,10 @@ def notice_texts(records: list[dict]) -> list[str]:
 
 
 def review_notice_texts(records: list[dict]) -> list[str]:
-    """后台回顾的提示：只列出实际生效的修改、删除与跨分区移动，新增与失败不提示。"""
-    return [
-        REVIEW_PREFIX + _change_text(edit)
+    """后台回顾的提示：有修改、删除或跨分区移动实际生效时只提示一次“已整理记忆”，新增与失败不提示。"""
+    changed = any(
+        edit["changed"] and edit["action"] in REVIEW_NOTICE_ACTIONS
         for record in records
         for edit in record.get("result", {}).get("applied", [])
-        if edit["changed"] and edit["action"] in REVIEW_NOTICE_ACTIONS
-    ]
-
-
-def _joined(lines: list[str]) -> str:
-    return " / ".join(line.strip() for line in lines)
-
-
-def _change_text(edit: dict) -> str:
-    removed, added = _joined(edit["removed"]), _joined(edit["added"])
-    action = edit["action"]
-    if action == "replace":
-        dropped = [line for line in edit["removed"] if line not in edit["added"]]
-        if len(dropped) < len(edit["removed"]) and set(edit["added"]) <= set(edit["removed"]):
-            # 合并重复：保留了其中一行、其余原样删掉，按删除提示，不把保留的行再列一遍。
-            removed = _joined(dropped)
-        else:
-            return f"已修改：{removed} → {added}"
-    if action == "move":
-        bare = _joined([LIST_MARKER.sub("", line) for line in edit["removed"]])
-        return f"已移到“{MEMORY_LABELS[edit['to']]}”：{bare}"
-    return f"已删除：{removed}"
+    )
+    return [REVIEW_NOTICE] if changed else []

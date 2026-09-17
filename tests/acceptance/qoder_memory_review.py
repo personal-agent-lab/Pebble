@@ -160,7 +160,7 @@ async def verify(root: Path) -> dict:
         assert after_items[: len(before_items)] == before_items, "回顾改动了已有时间线"
         # 回顾只会追加整理提示（修改或删除已有内容时）；从空记忆开始不应出现其他内容。
         assert all(
-            item["kind"] == "notice" and item["text"].startswith("整理记忆：")
+            item["kind"] == "notice" and item["text"] == "已整理记忆"
             for item in after_items[len(before_items) :]
         ), after_items
         assert status["status"] == "done", status

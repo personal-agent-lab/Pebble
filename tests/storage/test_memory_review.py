@@ -356,8 +356,7 @@ def test_run_writes_notices_only_for_changed_existing_content(scheduler):
     published = asyncio.run(scheduler.run(row["review_id"], RecordingGateway(records)))
 
     assert [notice["text"] for notice in published] == [
-        "整理记忆：已修改：先给结论 → 回答先给结论",
-        "整理记忆：已删除：- 重复的约定",
+        "已整理记忆",
     ]
     assert {notice["run_id"] for notice in published} == {last_run}
     with session() as conn:
@@ -410,7 +409,5 @@ def test_review_notices_report_moves_but_not_additions():
         edited("insert", added=["新增不提示"]),
         edited("delete", ["- 旧的偏好"]),
     ]
-    assert review_notice_texts(records) == [
-        "整理记忆：已移到“事实与约定”：内部会议默认 30 分钟",
-        "整理记忆：已删除：- 旧的偏好",
-    ]
+    assert review_notice_texts(records) == ["已整理记忆"]
+    assert review_notice_texts([edited("insert", added=["新增不提示"])]) == []
