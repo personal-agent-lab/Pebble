@@ -12,9 +12,9 @@ import AppShell from "../components/AppShell";
 import KbEditor from "../components/KbEditor";
 import Notice from "../components/Notice";
 
-const SECTIONS: { target: MemoryTarget; title: string; hint: string }[] = [
-  { target: "user", title: "关于你", hint: "背景、长期目标、语言与表达偏好、工作习惯" },
-  { target: "memory", title: "事实与约定", hint: "需要每轮生效的约定与经验；可以查的资料放资料库" },
+const SECTIONS: { target: MemoryTarget; title: string }[] = [
+  { target: "user", title: "关于你" },
+  { target: "memory", title: "事实与约定" },
 ];
 
 /** 容量条从这个比例起提醒快满了。 */
@@ -62,7 +62,6 @@ function Usage({ chars, limit }: { chars: number; limit: number }) {
 type DocumentProps = {
   target: MemoryTarget;
   title: string;
-  hint: string;
   section: MemorySection;
   onSaved: (section: MemorySection) => void;
   onReload: () => void;
@@ -75,7 +74,7 @@ type DocumentProps = {
  * 编辑器会按自己的写法重新排版原文，“有改动”以编辑器载入后序列化的基准为准，
  * 只打开不编辑不会产生保存。
  */
-function MemoryDocument({ target, title, hint, section, onSaved, onReload, onDirty }: DocumentProps) {
+function MemoryDocument({ target, title, section, onSaved, onReload, onDirty }: DocumentProps) {
   const baseline = useRef<string | null>(null);
   const reader = useRef<(() => string) | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
@@ -129,10 +128,7 @@ function MemoryDocument({ target, title, hint, section, onSaved, onReload, onDir
   return (
     <section className="memory-section" aria-labelledby={`memory-${target}`}>
       <div className="memory-head">
-        <div className="memory-head-text">
-          <h3 id={`memory-${target}`}>{title}</h3>
-          <div className="memory-hint">{hint}</div>
-        </div>
+        <h3 id={`memory-${target}`}>{title}</h3>
         <Usage chars={chars} limit={section.usage.limit} />
       </div>
 
@@ -232,7 +228,6 @@ export default function MemoryPage() {
       <div className="topbar">
         <div style={{ flex: 1, minWidth: 0 }}>
           <h2>记忆</h2>
-          <div className="sub">每轮对话都会带上这些内容，直接修改，保存后从下一轮起生效</div>
         </div>
       </div>
       <div className="content memory-content">
@@ -245,13 +240,12 @@ export default function MemoryPage() {
 
         {snapshot === null && loadError === null && <div className="loading">读取中…</div>}
 
-        {snapshot !== null && SECTIONS.map(({ target, title, hint }) => (
+        {snapshot !== null && SECTIONS.map(({ target, title }) => (
           <MemoryDocument
             // 重新载入时整块重建：丢掉草稿与错误，编辑器换成最新内容。
             key={`${target}:${loads}`}
             target={target}
             title={title}
-            hint={hint}
             section={snapshot[target]}
             onSaved={(section) => setSnapshot((current) => current && { ...current, [target]: section })}
             onReload={() => void load()}
