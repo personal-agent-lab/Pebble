@@ -2,6 +2,7 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
 import type { TimelineItem } from "../api";
@@ -155,3 +156,23 @@ test("处理中显示当前步骤；没有步骤时只有跳动的点", () => {
   rerender(<TimelineFeed {...props} running={false} activity="正在检索资料：星云验收" />);
   expect(screen.queryByRole("status")).toBeNull();
 });
+
+test("记忆变更提示带查看记忆入口，其他提示不带", () => {
+  const notice = (item_id: string, text: string): TimelineItem => ({
+    item_id, kind: "notice", run_id: "run-1", text, created_at: "2026-09-14T00:00:00Z",
+  });
+  const items = [
+    notice("n-1", "已记住：回答先给结论"),
+    notice("n-2", "整理记忆：已删除：重复的约定"),
+    notice("n-3", "想确认：你说的是哪一条？"),
+    notice("n-4", "已修改资料：周会纪要。位置：kb/inbox/周会.md。版本：a → b"),
+  ];
+  render(<MemoryRouter><TimelineFeed taskId="task-1" items={items} running={false}
+    sendMessage={vi.fn()} onChanged={vi.fn()} /></MemoryRouter>);
+
+  const links = screen.getAllByRole("link", { name: "查看记忆" });
+  expect(links).toHaveLength(2);
+  expect(links.every((link) => link.getAttribute("href") === "/memory")).toBe(true);
+  expect(screen.getByText("想确认：你说的是哪一条？").parentElement?.querySelector("a")).toBeNull();
+});
+

@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import KbPage from "./pages/KbPage";
+import MemoryPage from "./pages/MemoryPage";
 import SearchPage from "./pages/SearchPage";
 import TaskListPage from "./pages/TaskListPage";
 import TaskPage from "./pages/TaskPage";
@@ -23,6 +24,7 @@ export default function App() {
           <Route path="/tasks/:taskId" element={<TaskPage />} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/kb" element={<KbPage />} />
+          <Route path="/memory" element={<MemoryPage />} />
           <Route path="/kb/doc" element={<Suspense fallback={loading}><KbDocumentPage /></Suspense>} />
           <Route path="/kb/new" element={<Suspense fallback={loading}><KbDocumentPage creating /></Suspense>} />
           <Route path="*" element={<Navigate to="/tasks" replace />} />

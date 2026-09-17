@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { type ApiError, type MessageTarget, type TimelineItem } from "../api";
+import { isMemoryNotice } from "../memory";
 import MailDraftCard from "./MailDraftCard";
 import Markdown from "./Markdown";
 import MessageActions from "./MessageActions";
@@ -122,7 +124,9 @@ export default function TimelineFeed({
         <span className="error-text">本轮处理失败：{item.text}</span><span className="rule" />
       </div>;
       if (item.kind === "notice") return <div className="sys-row" key={item.item_id} {...mark(item.item_id)}>
-        <span>{item.text}</span><span className="rule" />
+        <span>{item.text}</span>
+        {isMemoryNotice(item.text) && <Link className="sys-link" to="/memory">查看记忆</Link>}
+        <span className="rule" />
       </div>;
       if (item.kind === "mail_draft") return <div className="focus-frame" key={item.item_id} {...mark(item.item_id)}>
         <MailDraftCard taskId={taskId} item={item} sendMessage={sendMessage} onChanged={onChanged} />

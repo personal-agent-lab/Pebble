@@ -1,4 +1,4 @@
-/** 后端 Interface：统一时间线、邮件草稿版本、确认执行与资料管理。 */
+/** 后端 Interface：统一时间线、邮件草稿版本、确认执行、资料与长期记忆管理。 */
 
 export type RunStatus = "pending" | "running" | "done" | "error" | "interrupted";
 export type OperationStatus = "pending" | "sending" | "sent" | "creating" | "created" | "failed" | "unknown";
@@ -306,4 +306,36 @@ export const deleteKbDocument = (path: string, expectedVersion: string) =>
   request<{ path: string }>("/kb/document/delete", {
     method: "POST",
     body: JSON.stringify({ path, expected_version: expectedVersion }),
+  });
+
+/* ---------- 长期记忆 ---------- */
+
+export type MemoryTarget = "user" | "memory";
+
+/** 一块长期记忆：`version` 是当前内容的哈希，保存时带回用于冲突检查。 */
+export type MemorySection = {
+  entries: string[];
+  usage: { chars: number; limit: number };
+  version: string;
+};
+
+export type MemorySnapshot = Record<MemoryTarget, MemorySection>;
+export type MemoryWriteResult = MemorySection & { target: MemoryTarget; changed: boolean };
+
+export const getMemory = () => request<MemorySnapshot>("/memory");
+export const addMemoryEntry = (target: MemoryTarget, content: string, expectedVersion: string) =>
+  request<MemoryWriteResult>("/memory/entries/add", {
+    method: "POST",
+    body: JSON.stringify({ target, content, expected_version: expectedVersion }),
+  });
+export const updateMemoryEntry = (
+  target: MemoryTarget, old: string, content: string, expectedVersion: string,
+) => request<MemoryWriteResult>("/memory/entries/update", {
+  method: "POST",
+  body: JSON.stringify({ target, old, content, expected_version: expectedVersion }),
+});
+export const removeMemoryEntry = (target: MemoryTarget, old: string, expectedVersion: string) =>
+  request<MemoryWriteResult>("/memory/entries/remove", {
+    method: "POST",
+    body: JSON.stringify({ target, old, expected_version: expectedVersion }),
   });

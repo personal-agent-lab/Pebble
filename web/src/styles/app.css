@@ -757,6 +757,76 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .btn.danger { background: var(--color-danger); border-color: var(--color-danger); }
 .btn.danger:hover:not(:disabled) { background: color-mix(in oklch, var(--color-danger) 88%, var(--color-fg)); }
 
+/* ===== 长期记忆 ===== */
+/* 两个分区各是一张条目卡：标题与容量条一行，条目逐条可编辑。条目是会被每轮带给 Agent 的原话，
+   用正文字号完整展示，不截断。 */
+.memory-content { display: flex; flex-direction: column; gap: var(--spacing-lg); max-width: var(--feed-col); }
+.memory-section { display: flex; flex-direction: column; gap: 10px; }
+.memory-head { display: flex; align-items: flex-end; gap: 16px; }
+.memory-head-text { flex: 1; min-width: 0; }
+.memory-head h3 { margin: 0; font-size: var(--text-md); font-weight: 600; }
+.memory-hint { margin-top: 2px; font-size: var(--text-xs); color: var(--color-muted); }
+
+.memory-usage { flex: none; display: flex; align-items: center; gap: 8px; font-size: var(--text-xs); color: var(--color-muted); }
+.memory-meter {
+  width: 96px; height: 4px; border-radius: 999px; overflow: hidden;
+  background: color-mix(in oklch, var(--color-fg) 8%, transparent);
+}
+.memory-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--color-muted); }
+.memory-usage.near .memory-meter > span { background: var(--color-accent); }
+.memory-usage.over { color: var(--color-danger); }
+.memory-usage.over .memory-meter > span { background: var(--color-danger); }
+.memory-usage-text { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.memory-list { padding: 4px 0; }
+.memory-entry {
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; padding: 10px 16px;
+}
+.memory-entry + .memory-entry { box-shadow: inset 0 1px 0 var(--color-border-subtle); }
+.memory-text {
+  flex: 1; min-width: 0; margin: 0;
+  font-size: var(--text-md); line-height: var(--leading-body);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.memory-entry-actions { flex: none; display: flex; gap: 2px; opacity: 0; transition: opacity var(--duration-fast) ease-in-out; }
+.memory-entry:hover .memory-entry-actions,
+.memory-entry:focus-within .memory-entry-actions { opacity: 1; }
+@media (hover: none) { .memory-entry-actions { opacity: 1; } }
+.memory-action {
+  border: none; background: none; cursor: pointer; border-radius: var(--radius-sm);
+  padding: 2px 6px; font: 510 var(--text-sm)/1.6 var(--font-body); color: var(--color-muted);
+}
+.memory-action:hover:not(:disabled) { color: var(--color-fg); background: var(--color-bg); }
+.memory-action.danger:hover:not(:disabled) { color: var(--color-danger); }
+.memory-action:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
+.memory-action:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 删除确认独占条目下方一行，说明与按钮不和条目原文挤在一起。 */
+.memory-confirm {
+  flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px;
+  font-size: var(--text-sm); color: var(--color-muted);
+}
+.memory-confirm > span { margin-right: auto; }
+.memory-editor { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.memory-editor textarea.input { min-height: 72px; font-size: var(--text-md); line-height: var(--leading-body); }
+.memory-editor-actions { display: flex; gap: 8px; }
+
+.memory-empty { padding: 12px 16px; font-size: var(--text-sm); color: var(--color-muted); }
+.memory-add {
+  display: block; width: 100%; text-align: left; border: none; background: none; cursor: pointer;
+  padding: 10px 16px; box-shadow: inset 0 1px 0 var(--color-border-subtle);
+  font: 510 var(--text-sm)/1.4 var(--font-body); color: var(--color-muted);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+.memory-add:hover:not(:disabled) { color: var(--color-accent); }
+.memory-add:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--color-ring); }
+.memory-add:disabled { opacity: 0.5; cursor: not-allowed; }
+.memory-list > .memory-add:first-child { box-shadow: none; }
+
+/* 时间线里记忆提示的入口：跟在提示文字后面，同一行。 */
+.sys-row .sys-link { flex: none; color: var(--color-accent); font-weight: 510; }
+.sys-row .sys-link:hover { text-decoration: underline; }
+
 /* ===== 提示与空态 ===== */
 .notice {
   border-radius: var(--radius-md);
@@ -840,5 +910,11 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   .kb-row-title { max-width: none; flex: 1; }
   .kb-editor { padding: 12px 14px; }
   .kb-field { grid-template-columns: 1fr; gap: 4px; }
+
+  .memory-head { flex-direction: column; align-items: stretch; gap: 8px; }
+  .memory-meter { flex: 1; width: auto; }
+  .memory-entry { flex-direction: column; gap: 6px; padding: 10px 14px; }
+  .memory-entry-actions { align-self: flex-end; }
+  .memory-add { padding: 12px 14px; }
 
 }
