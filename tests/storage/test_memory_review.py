@@ -24,6 +24,7 @@ from server.sessions import repository, timeline
 from server.sessions import runs as repo
 from server.sessions.service import timestamp
 from server.tools.memory.tools import review_registry
+from tests.support import memory_anchor, seed_memory
 
 
 def review_tools(store):
@@ -75,21 +76,14 @@ def seed_round(conn, task_id: str, text: str) -> str:
 def test_review_registry_binds_only_the_edit_tool(store):
     tools = {tool.name: tool for tool in review_tools(store)}
     assert list(tools) == ["memory_edit"]
-    edit = tools["memory_edit"]
+    seed_memory(store, "user", "- 用户在研究记忆机制")
 
-    assert edit("user", new_text="- 用户在研究记忆机制")["changed"] is True
-    assert edit("user", new_text="- 用户在研究 Hermes")["changed"] is True
-    assert edit("user", "记忆机制", "记忆机制与 Hermes")["changed"] is True
-    assert edit("user", "- 用户在研究 Hermes")["changed"] is True
-    assert store.snapshot()["user"]["content"] == "- 用户在研究记忆机制与 Hermes"
+    result = tools["memory_edit"](
+        [{"action": "move", "anchor": memory_anchor(store, "- 用户在研究记忆机制"), "to": "memory"}]
+    )
 
-
-def test_edit_tool_skips_duplicate_appends(store):
-    edit = review_tools(store)[0]
-    first = edit("memory", new_text="项目使用 SQLite")
-    second = edit("memory", new_text="项目使用 SQLite")
-    assert first["changed"] is True and second["changed"] is False
-    assert store.snapshot()["memory"]["content"] == "项目使用 SQLite"
+    assert result["changed"] is True
+    assert store.snapshot()["memory"]["content"] == "- 用户在研究记忆机制"
 
 
 def test_review_registry_has_no_foreground_memory_tool():
@@ -261,11 +255,12 @@ def test_render_transcript_labels_roles():
 
 
 def test_build_review_message_renders_materials(store):
-    store.edit("user", new_text="已有画像")
+    seed_memory(store, "user", "已有画像")
+    line = memory_anchor(store, "已有画像")
     message = build_review_message("用户：新信息", store.snapshot())
     assert message.startswith(REVIEW_MESSAGE_HEADER)
     assert "## 自上次回顾以来的任务对话\n用户：新信息" in message
-    assert "## 当前长期记忆：关于你（已用 4 / 上限 1375 字）\n已有画像" in message
+    assert f"## 当前长期记忆：关于你（已用 4 / 上限 1375 字）\n{line}| 已有画像" in message
     assert "## 当前长期记忆：事实与约定（已用 0 / 上限 2200 字）\n（空）" in message
 
 
@@ -312,7 +307,7 @@ def test_run_passes_window_and_memory_snapshot_to_gateway(scheduler):
     assert scheduler.claim(row["review_id"])["status"] == "running"
     gateway = RecordingGateway()
     asyncio.run(scheduler.run(row["review_id"], gateway))
-    (called_task, instructions, transcript), = gateway.calls
+    ((called_task, instructions, transcript),) = gateway.calls
     assert called_task == task_id
     assert "memory_edit" in instructions
     assert "我最近正在学习 Hermes 的设计" in transcript
@@ -323,16 +318,19 @@ def test_run_passes_window_and_memory_snapshot_to_gateway(scheduler):
     assert status["status"] == "done"
 
 
-def edited(arguments, changed=True):
-    edit = {
-        "old_text": arguments.get("old_text", ""),
-        "new_text": arguments.get("new_text", ""),
+def edited(action, removed=(), added=(), changed=True, **extra):
+    applied = {
+        "action": action,
+        "target": "user",
+        "removed": list(removed),
+        "added": list(added),
         "changed": changed,
+        **extra,
     }
     return {
         "tool": "memory_edit",
-        "arguments": arguments,
-        "result": {"changed": changed, "applied": [edit]},
+        "arguments": {"operations": []},
+        "result": {"changed": changed, "applied": [applied]},
     }
 
 
@@ -344,14 +342,14 @@ def test_run_writes_notices_only_for_changed_existing_content(scheduler):
     row = scheduler.enqueue_manual(task_id)
     scheduler.claim(row["review_id"])
     records = [
-        edited({"target": "user", "new_text": "新增不提示"}),
-        edited({"target": "user", "old_text": "先给结论", "new_text": "回答先给结论"}),
-        edited({"target": "user", "old_text": "没有变化", "new_text": "没有变化"}, False),
-        edited({"target": "memory", "old_text": "- 重复的约定", "new_text": ""}),
+        edited("append", added=["新增不提示"]),
+        edited("replace", ["先给结论"], ["回答先给结论"]),
+        edited("replace", ["没有变化"], ["没有变化"], changed=False, reason="same"),
+        edited("delete", ["- 重复的约定"]),
         {
             "tool": "memory_edit",
-            "arguments": {"target": "memory", "old_text": "不存在"},
-            "error": {"error": "invalid_memory", "message": "没有找到这段原文"},
+            "arguments": {},
+            "error": {"error": "invalid_memory", "message": "长期记忆操作未通过校验"},
         },
     ]
     published = asyncio.run(scheduler.run(row["review_id"], RecordingGateway(records)))
@@ -405,35 +403,13 @@ def test_claim_and_finish_transition(scheduler):
     assert "记忆回顾失败" in record["error"]
 
 
-def move(source, destination, text, added=None):
-    """把一段内容从一个分区删掉、追加到另一分区的两次调用。"""
-    return [
-        {
-            "tool": "memory_edit",
-            "arguments": {"target": source, "old_text": text},
-            "result": {"changed": True, "applied": [
-                {"old_text": text, "new_text": "", "changed": True}
-            ]},
-        },
-        {
-            "tool": "memory_edit",
-            "arguments": {"target": destination, "new_text": added or text},
-            "result": {"changed": True, "applied": [
-                {"old_text": "", "new_text": added or text, "changed": True}
-            ]},
-        },
-    ]
-
-
 def test_review_notices_report_moves_but_not_additions():
     records = [
-        *move("user", "memory", "- 内部会议默认 30 分钟"),
-        *move("memory", "user", "用户偏好先给结论", added="- 用户偏好先给结论"),
-        edited({"target": "user", "new_text": "新增不提示"}),
-        edited({"target": "user", "old_text": "- 旧的偏好", "new_text": ""}),
+        edited("move", ["- 内部会议默认 30 分钟"], ["- 内部会议默认 30 分钟"], to="memory"),
+        edited("insert", added=["新增不提示"]),
+        edited("delete", ["- 旧的偏好"]),
     ]
     assert review_notice_texts(records) == [
         "整理记忆：已移到“事实与约定”：内部会议默认 30 分钟",
-        "整理记忆：已移到“关于你”：用户偏好先给结论",
         "整理记忆：已删除：- 旧的偏好",
     ]

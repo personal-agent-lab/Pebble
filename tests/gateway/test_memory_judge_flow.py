@@ -87,7 +87,9 @@ async def test_judgment_runs_in_parallel_and_notice_reaches_timeline(judge_flow)
 
     async def blocked_judge(task_id, instructions, message):
         await release.wait()
-        arguments = {"target": "user", "new_text": "用户周末常去徒步"}
+        arguments = {
+            "operations": [{"action": "append", "target": "user", "text": "用户周末常去徒步"}]
+        }
         result = judge_flow.store.edit(**arguments)
         return [{"tool": "memory_edit", "arguments": arguments, "result": result}]
 
@@ -97,8 +99,10 @@ async def test_judgment_runs_in_parallel_and_notice_reaches_timeline(judge_flow)
     await wait_for(lambda: len(judge_flow.gateway.judge_calls) == 1)
     # 判断仍在执行，主回答已经完成：判断不占用任务的串行调度。
     await wait_for(
-        lambda: (run := judge_flow.service.latest_run(task_id))["status"] == "done"
-        and run["kind"] == "message"
+        lambda: (
+            (run := judge_flow.service.latest_run(task_id))["status"] == "done"
+            and run["kind"] == "message"
+        )
     )
     assert notices(task_id) == []
 

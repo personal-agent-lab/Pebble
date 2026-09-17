@@ -12,6 +12,7 @@ from server.db import init_db, session
 from server.gateway.runtime import GatewayRuntime
 from server.memory.review import MemoryReviewScheduler
 from server.sessions.service import SessionStore
+from tests.support import memory_anchor, seed_memory
 from tests.support.agent_double import FakeAgentGateway
 
 pytestmark = pytest.mark.anyio
@@ -79,8 +80,10 @@ async def submit_and_settle(flow: ReviewFlow, task_id: str, text: str) -> None:
     """提交一条消息并等它完成，不等可能被脚本阻塞的回顾任务。"""
     flow.service.submit_message(task_id, text)
     await wait_for(
-        lambda: (run := flow.service.latest_run(task_id))["status"] == "done"
-        and run["kind"] == "message"
+        lambda: (
+            (run := flow.service.latest_run(task_id))["status"] == "done"
+            and run["kind"] == "message"
+        )
     )
 
 
@@ -114,11 +117,11 @@ async def test_review_runs_after_five_done_messages_and_writes_nothing_visible(r
 async def test_review_consolidation_notice_reaches_timeline_and_events(review_flow):
     task_id = review_flow.tasks.create_task("闲聊")["task_id"]
     store = review_flow.service.memory_store
-    store.edit("user", new_text="- 回答先给结论")
-    store.edit("user", new_text="- 回答要先说结论")
+    seed_memory(store, "user", "- 回答先给结论\n- 回答要先说结论")
 
     async def consolidating_review(task_id, instructions, transcript):
-        arguments = {"target": "user", "old_text": "- 回答要先说结论"}
+        line = memory_anchor(store, "- 回答要先说结论")
+        arguments = {"operations": [{"action": "delete", "anchor": line}]}
         removed = store.edit(**arguments)
         return [{"tool": "memory_edit", "arguments": arguments, "result": removed}]
 
@@ -202,8 +205,10 @@ async def test_message_during_review_is_not_delayed(review_flow):
     await wait_for(lambda: len(review_flow.gateway.calls_of("message")) == 6)
     # 回顾仍在执行，第 6 条消息已经完成。
     await wait_for(
-        lambda: (run := review_flow.service.latest_run(task_id))["status"] == "done"
-        and run["kind"] == "message"
+        lambda: (
+            (run := review_flow.service.latest_run(task_id))["status"] == "done"
+            and run["kind"] == "message"
+        )
     )
     assert len(review_flow.gateway.review_calls) == 1
 

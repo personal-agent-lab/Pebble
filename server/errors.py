@@ -58,10 +58,11 @@ class DraftValidationError(Exception):
 
 
 class MemoryValidationError(Exception):
-    """长期记忆操作的字段或匹配条件不合法。"""
+    """长期记忆操作的字段或定位条件不合法；`memory` 是交回模型重新定位用的带锚点最新内容。"""
 
-    def __init__(self, errors: list[dict[str, str]]):
+    def __init__(self, errors: list[dict[str, str]], memory: dict | None = None):
         self.errors = errors
+        self.memory = memory
         super().__init__(str(errors))
 
 
@@ -71,8 +72,9 @@ MEMORY_LABELS = {"user": "关于你", "memory": "事实与约定"}
 class MemoryFullError(Exception):
     """长期记忆文件超过该目标的字符容量。"""
 
-    def __init__(self, target: str, used: int, limit: int):
+    def __init__(self, target: str, used: int, limit: int, memory: dict | None = None):
         self.target = target
+        self.memory = memory
         self.used = used
         self.limit = limit
         label = MEMORY_LABELS.get(target, target)
@@ -140,6 +142,7 @@ def error_details(error: Exception) -> dict | None:
             "error": "invalid_memory",
             "message": "长期记忆操作未通过校验",
             "errors": error.errors,
+            **({"memory": error.memory} if error.memory is not None else {}),
         }
     if isinstance(error, MemoryFullError):
         return {
@@ -148,6 +151,7 @@ def error_details(error: Exception) -> dict | None:
             "target": error.target,
             "used": error.used,
             "limit": error.limit,
+            **({"memory": error.memory} if error.memory is not None else {}),
         }
     if isinstance(error, MemoryStoreUnavailableError):
         return {"error": "memory_store_unavailable", "message": str(error)}

@@ -36,6 +36,7 @@ from server.tools.gmail.service import MailDraftStore
 from server.tools.gmail.trigger import new_mail_content
 from server.tools.personal_kb.service import KbStore
 from server.tools.registry import SideEffect, ToolDefinition
+from tests.support import seed_memory
 from tests.support.gmail_double import MockGmailClient
 from tests.support.mcp_http import mcp_session, tool_payload
 
@@ -369,14 +370,14 @@ def test_resumed_turn_injects_fresh_material_without_changing_base_prompt(settin
 
 def test_memory_is_reloaded_and_precedes_turn_materials(settings):
     gateway = make_gateway(settings)
-    gateway.memory_store.edit("user", new_text="回答先给结论")
+    seed_memory(gateway.memory_store, "user", "回答先给结论")
     first = options_for(
         gateway,
         TurnKind.MESSAGE,
         materials=(Material("本轮材料", "只对本轮有效"),),
     )
-    gateway.memory_store.edit("user", "先给结论", "先解释推导")
-    gateway.memory_store.edit("memory", new_text="Pebble 使用 Python")
+    seed_memory(gateway.memory_store, "user", "回答先解释推导")
+    seed_memory(gateway.memory_store, "memory", "Pebble 使用 Python")
     second = options_for(
         gateway,
         TurnKind.MESSAGE,
@@ -402,7 +403,7 @@ def test_kb_catalog_is_injected_after_memory_and_before_turn_materials(settings)
         ToolServer(),
         settings=configured(settings),
     )
-    gateway.memory_store.edit("user", new_text="回答先给结论")
+    seed_memory(gateway.memory_store, "user", "回答先给结论")
     assert injected_context(options_for(gateway, TurnKind.MESSAGE)) == "## 关于你\n回答先给结论"
 
     kb.save(title="星云验收纪要", body="通过。", path="项目/验收", summary="二期验收结论")
@@ -688,6 +689,9 @@ def run_judge(gateway: QoderGateway, monkeypatch, *calls: ToolCall, task_id="tas
     return asyncio.run(gateway.judge_memory(task_id, "判断指令", "判断材料"))
 
 
+ADD_CHINESE = {"action": "append", "target": "user", "text": "默认使用中文"}
+
+
 def test_judge_memory_records_real_tool_results(settings, monkeypatch):
     gateway = make_gateway(settings)
     task_id = gateway.tasks_store.create_task("判断记忆")["task_id"]
@@ -695,16 +699,16 @@ def test_judge_memory_records_real_tool_results(settings, monkeypatch):
     records = run_judge(
         gateway,
         monkeypatch,
-        ToolCall("memory_edit", {"target": "user", "new_text": "默认使用中文"}),
+        ToolCall("memory_edit", {"operations": [ADD_CHINESE]}),
         ToolCall("memory_ask", {"question": "要改哪一条？"}),
         task_id=task_id,
     )
 
     assert [record["tool"] for record in records] == ["memory_edit", "memory_ask"]
     first = records[0]
-    assert first["arguments"] == {"target": "user", "new_text": "默认使用中文"}
+    assert first["arguments"] == {"operations": [ADD_CHINESE]}
     assert first["result"]["changed"] is True
-    assert first["result"]["content"] == "默认使用中文"
+    assert first["result"]["applied"][0]["added"] == ["默认使用中文"]
     assert records[1]["result"] == {"question": "要改哪一条？"}
     assert (settings.data_dir / "memory" / "USER.md").read_text() == "默认使用中文"
 
@@ -716,17 +720,22 @@ def test_judge_memory_records_structured_errors(settings, monkeypatch):
     records = run_judge(
         gateway,
         monkeypatch,
-        ToolCall("memory_edit", {"target": "user", "new_text": "甲" * 1376}),
+        ToolCall(
+            "memory_edit",
+            {"operations": [{"action": "append", "target": "user", "text": "甲" * 1376}]},
+        ),
         task_id=task_id,
     )
 
-    assert records[0]["error"] == {
+    error = records[0]["error"]
+    assert {key: error[key] for key in ("error", "message", "target", "used", "limit")} == {
         "error": "memory_full",
         "message": "“关于你”放不下：保存后需要 1376 个字符，上限为 1375",
         "target": "user",
         "used": 1376,
         "limit": 1375,
     }
+    assert error["memory"]["user"]["content"] == "（空）"
     assert gateway.memory_store.snapshot()["user"]["content"] == ""
 
 

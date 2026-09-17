@@ -134,10 +134,9 @@ async def verify(root: Path) -> dict:
         calls: list[tuple] = []
         original_edit = memory_store.edit
 
-        def traced_edit(target, old_text="", new_text="", operations=None):
-            edits = operations or [{"old_text": old_text, "new_text": new_text}]
-            calls.extend((target, e.get("old_text", ""), e.get("new_text", "")) for e in edits)
-            return original_edit(target, old_text, new_text, operations)
+        def traced_edit(operations):
+            calls.extend((e.get("action"), e.get("anchor"), e.get("text", "")) for e in operations)
+            return original_edit(operations)
 
         memory_store.edit = traced_edit
 

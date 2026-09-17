@@ -18,6 +18,7 @@ from server.sessions import repository, timeline
 from server.sessions import runs as repo
 from server.sessions.service import timestamp
 from server.tools.memory.tools import judge_registry
+from tests.support import memory_anchor, seed_memory
 
 
 def judge_tools(store):
@@ -72,10 +73,9 @@ def test_judge_registry_exposes_edit_and_ask(store):
 
 def test_judge_edit_tool_writes_through_store(store):
     edit = judge_tools(store)["memory_edit"]
-    assert edit("user", new_text="用户对历史感兴趣")["changed"] is True
-    assert edit("user", "对历史感兴趣", "偏好通俗的历史读物")["changed"] is True
-    assert "通俗" in store.snapshot()["user"]["content"]
-    assert edit("user", "用户偏好通俗的历史读物")["changed"] is True
+    assert edit([{"action": "append", "target": "user", "text": "用户对历史感兴趣"}])["changed"]
+    line = memory_anchor(store, "用户对历史感兴趣")
+    assert edit([{"action": "delete", "anchor": line}])["changed"] is True
     assert store.snapshot()["user"]["content"] == ""
 
 
@@ -90,12 +90,13 @@ def test_judge_ask_records_question_without_writing(store):
 
 
 def test_build_judge_message_renders_materials(store):
-    store.edit("user", new_text="已有画像")
+    seed_memory(store, "user", "已有画像")
+    line = memory_anchor(store, "已有画像")
     message = build_judge_message("我对历史感兴趣", "用户：你好\n助手：你好！", store.snapshot())
     assert message.startswith(JUDGE_MESSAGE_HEADER)
     assert "## 用户刚发的消息\n我对历史感兴趣" in message
     assert "## 近期对话\n用户：你好\n助手：你好！" in message
-    assert "## 当前长期记忆：关于你（已用 4 / 上限 1375 字）\n已有画像" in message
+    assert f"## 当前长期记忆：关于你（已用 4 / 上限 1375 字）\n{line}| 已有画像" in message
     assert "## 当前长期记忆：事实与约定（已用 0 / 上限 2200 字）\n（空）" in message
 
 
@@ -144,152 +145,56 @@ def test_recent_text_items_include_notices(settings):
 # ---------- 提示文案 ----------
 
 
-def edited(arguments, changed=True):
-    edit = {
-        "old_text": arguments.get("old_text", ""),
-        "new_text": arguments.get("new_text", ""),
-        "changed": changed,
-    }
+def edited(*applied):
     return {
         "tool": "memory_edit",
-        "arguments": arguments,
-        "result": {"changed": changed, "applied": [edit]},
+        "arguments": {"operations": []},
+        "result": {"changed": True, "applied": list(applied)},
     }
+
+
+def change(action, removed=(), added=(), changed=True, **extra):
+    return {
+        "action": action,
+        "target": "user",
+        "removed": list(removed),
+        "added": list(added),
+        "changed": changed,
+        **extra,
+    }
+
+
+def failed(error, message):
+    return {"tool": "memory_edit", "arguments": {}, "error": {"error": error, "message": message}}
 
 
 def test_notice_texts_report_actual_results():
     records = [
-        edited({"target": "user", "new_text": "用户对历史感兴趣"}),
         edited(
-            {"target": "user", "old_text": "用户对历史感兴趣", "new_text": "用户偏好通俗历史读物"}
+            change("append", added=["- 用户对历史感兴趣"]),
+            change("insert", added=["- 用户偏好通俗读物"]),
+            change("replace", ["- 内部会议 30 分钟"], ["- 内部会议 45 分钟"]),
+            change("delete", ["- 用户偏好英文"]),
+            change("move", ["- 工作日历用于内部会议"], ["- 工作日历用于内部会议"], to="memory"),
+            change("append", changed=False, reason="exists"),
         ),
-        edited({"target": "user", "old_text": "用户偏好通俗历史读物", "new_text": ""}),
-        edited({"target": "user", "new_text": "用户对历史感兴趣"}, changed=False),
-        {
-            "tool": "memory_ask",
-            "arguments": {"question": "要改哪一条？"},
-            "result": {"question": "要改哪一条？"},
-        },
+        {"tool": "memory_ask", "arguments": {}, "result": {"question": "要改哪一条？"}},
     ]
     assert notice_texts(records) == [
-        "已记住：用户对历史感兴趣",
-        "已修改：用户对历史感兴趣 → 用户偏好通俗历史读物",
-        "已删除这条记忆：用户偏好通俗历史读物。原对话仍保留。",
+        "已记住：- 用户对历史感兴趣",
+        "已记住：- 用户偏好通俗读物",
+        "已修改：- 内部会议 30 分钟 → - 内部会议 45 分钟",
+        "已删除这条记忆：- 用户偏好英文。原对话仍保留。",
+        "已移到“事实与约定”：工作日历用于内部会议",
         "这条内容已经在记忆里。",
         "想确认：要改哪一条？",
     ]
 
 
-def failed(arguments, error, message):
-    return {
-        "tool": "memory_edit",
-        "arguments": arguments,
-        "error": {"error": error, "message": message},
-    }
-
-
-FULL = "“关于你”放不下：保存后需要 1400 个字符，上限为 1375"
-
-
-def test_notice_texts_show_only_real_failures():
-    records = [
-        failed({"target": "user", "new_text": "一条"}, "memory_full", FULL),
-        failed(
-            {"target": "user", "new_text": "另一条"},
-            "memory_store_unavailable",
-            "无法读取 USER.md",
-        ),
-        failed({"target": "user", "new_text": "第三条"}, "unexpected", "工具执行失败"),
-        # invalid_memory 是模型可自行修正的参数问题，不生成提示。
-        failed(
-            {"target": "user", "old_text": "不存在"}, "invalid_memory", "长期记忆操作未通过校验"
-        ),
-    ]
-    assert notice_texts(records) == [
-        f"记忆保存失败：{FULL}",
-        "记忆保存失败：无法读取 USER.md",
-        "记忆保存失败：工具执行失败",
-    ]
-
-
-def test_notice_texts_list_each_edit_of_a_batch():
-    operations = [
-        {"old_text": "- 旧条目", "new_text": "- 合并后的条目"},
-        {"old_text": "- 重复条目", "new_text": ""},
-        {"old_text": "", "new_text": "- 新偏好"},
-        {"old_text": "", "new_text": "- 已有偏好"},
-    ]
-    record = {
-        "tool": "memory_edit",
-        "arguments": {"target": "user", "operations": operations},
-        "result": {
-            "changed": True,
-            "applied": [{**edit, "changed": index != 3} for index, edit in enumerate(operations)],
-        },
-    }
-    assert notice_texts([record]) == [
-        "已修改：- 旧条目 → - 合并后的条目",
-        "已删除这条记忆：- 重复条目。原对话仍保留。",
-        "已记住：- 新偏好",
-        "这条内容已经在记忆里。",
-    ]
-
-
-def test_notice_texts_hide_capacity_failure_resolved_by_consolidation():
-    batch = {
-        "tool": "memory_edit",
-        "arguments": {"target": "user", "operations": []},
-        "result": {
-            "changed": True,
-            "applied": [
-                {"old_text": "旧条目", "new_text": "合并后的条目", "changed": True},
-                {"old_text": "", "new_text": "新偏好", "changed": True},
-            ],
-        },
-    }
-    records = [
-        failed({"target": "user", "new_text": "新偏好"}, "memory_full", FULL),
-        batch,
-        failed({"target": "user", "new_text": "放不下"}, "memory_full", FULL),
-    ]
-    assert notice_texts(records) == [
-        "已修改：旧条目 → 合并后的条目",
+def test_notice_texts_report_failure_only_when_last_edit_failed():
+    saved = edited(change("append", added=["新偏好"]))
+    assert notice_texts([failed("invalid_memory", "未通过校验"), saved]) == ["已记住：新偏好"]
+    assert notice_texts([saved, failed("memory_full", "放不下")]) == [
         "已记住：新偏好",
-        f"记忆保存失败：{FULL}",
-    ]
-
-
-def move(source, destination, text, added=None):
-    """把一段内容从一个分区删掉、追加到另一分区的两次调用。"""
-    return [
-        {
-            "tool": "memory_edit",
-            "arguments": {"target": source, "old_text": text},
-            "result": {"changed": True, "applied": [
-                {"old_text": text, "new_text": "", "changed": True}
-            ]},
-        },
-        {
-            "tool": "memory_edit",
-            "arguments": {"target": destination, "new_text": added or text},
-            "result": {"changed": True, "applied": [
-                {"old_text": "", "new_text": added or text, "changed": True}
-            ]},
-        },
-    ]
-
-
-def test_notice_texts_merge_a_move_between_partitions():
-    records = [
-        *move("user", "memory", "- 内部会议默认 30 分钟", added="内部会议默认 30 分钟"),
-        edited({"target": "memory", "new_text": "“工作”日历用于内部会议"}),
-    ]
-    assert notice_texts(records) == [
-        "已移到“事实与约定”：内部会议默认 30 分钟",
-        "已记住：“工作”日历用于内部会议",
-    ]
-    # 删掉的内容与追加的内容不同、或在同一分区里，不算移动。
-    assert notice_texts(move("user", "user", "偏好先给结论")) == [
-        "已删除这条记忆：偏好先给结论。原对话仍保留。",
-        "已记住：偏好先给结论",
+        "记忆保存失败：放不下",
     ]

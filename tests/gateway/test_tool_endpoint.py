@@ -13,6 +13,7 @@ from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
 from server.tools.memory.tools import judge_registry, review_registry
 from server.tools.personal_kb.service import KbStore
+from tests.support import memory_anchor, seed_memory
 from tests.support.gmail_double import MockGmailClient
 from tests.support.mcp_http import mcp_session, tool_payload
 
@@ -217,26 +218,30 @@ def test_review_endpoint_exposes_review_tools(settings):
             listed = await session.list_tools()
             assert [tool.name for tool in listed.tools] == ["memory_edit"]
             operations = listed.tools[0].inputSchema["properties"]["operations"]
-            assert operations["items"]["properties"].keys() == {"old_text", "new_text"}
+            assert operations["items"]["properties"]["action"]["enum"] == [
+                "append",
+                "insert",
+                "replace",
+                "delete",
+                "move",
+            ]
 
             saved = await session.call_tool(
-                "memory_edit", {"target": "user", "new_text": "用户在研究记忆机制"}
+                "memory_edit",
+                {
+                    "operations": [
+                        {"action": "append", "target": "user", "text": "用户在研究记忆机制"}
+                    ]
+                },
             )
             assert saved.isError is False
             assert tool_payload(saved)["changed"] is True
 
-            batch = await session.call_tool(
-                "memory_edit",
-                {
-                    "target": "user",
-                    "operations": [
-                        {"old_text": "记忆机制", "new_text": "长期记忆机制"},
-                        {"old_text": "", "new_text": "用户偏好先给结论"},
-                    ],
-                },
+            stale = await session.call_tool(
+                "memory_edit", {"operations": [{"action": "delete", "anchor": "zzzz"}]}
             )
-            assert batch.isError is False
-            assert [edit["changed"] for edit in tool_payload(batch)["applied"]] == [True, True]
+            assert stale.isError is True
+            assert "用户在研究记忆机制" in tool_payload(stale)["memory"]["user"]["content"]
 
             # 回顾没有提问的对象：追问工具只在每轮判断会话中存在。
             blocked = await session.call_tool("memory_ask", {"question": "要改哪一条？"})
@@ -244,13 +249,14 @@ def test_review_endpoint_exposes_review_tools(settings):
             assert tool_payload(blocked)["error"] == "unknown_tool"
 
     asyncio.run(scenario())
-    assert store.snapshot()["user"]["content"] == "用户在研究长期记忆机制\n\n用户偏好先给结论"
+    assert store.snapshot()["user"]["content"] == "用户在研究记忆机制"
 
 
 def test_judge_endpoint_exposes_judgment_tools(settings):
     init_db()
     store = MemoryStore(settings.data_dir)
-    store.edit("user", new_text="用户在研究记忆机制")
+    seed_memory(store, "user", "用户在研究记忆机制")
+    line = memory_anchor(store, "用户在研究记忆机制")
     tools = build_tools(
         ToolDeps(drafts=None, tasks=None, gmail=None, memory_store=store),
         registry=judge_registry,
@@ -268,7 +274,11 @@ def test_judge_endpoint_exposes_judgment_tools(settings):
 
             replaced = await session.call_tool(
                 "memory_edit",
-                {"target": "user", "old_text": "记忆机制", "new_text": "长期记忆机制"},
+                {
+                    "operations": [
+                        {"action": "replace", "anchor": line, "text": "用户在研究长期记忆机制"}
+                    ]
+                },
             )
             assert replaced.isError is False
             assert tool_payload(replaced)["changed"] is True
