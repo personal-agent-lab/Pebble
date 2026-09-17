@@ -266,12 +266,12 @@ function TaskItemMenu({ taskId, onDeleted }: { taskId: string; onDeleted: () => 
 /**
  * 任务列表本身就是导航，列表项直接进入对应任务。
  *
- * 默认只列最近几条，其余折在“展开显示”后面——这是索引不是总览，
- * 状态与时间留在任务页；行内只标出没读过的待确认，因为它需要用户动作，
+ * 这是索引不是总览，状态与时间留在任务页；行内只标出没读过的待确认，因为它需要用户动作，
  * 点进去读过就不再提醒（真实状态仍在任务页顶部）。
- * PC 放在侧栏，手机没有侧栏，同一组件直接出现在任务页里。
+ * PC 放在侧栏，列出全部任务、由列表自己滚动；手机没有侧栏，同一组件出现在任务页里，
+ * 那里默认只列最近几条，其余折在“展开显示”后面，免得把输入框推出一屏。
  */
-export function TaskLinks() {
+export function TaskLinks({ limited = true }: { limited?: boolean }) {
   const { entries, reload } = useTasks();
   const seen = useSeen();
   const [expanded, setExpanded] = useState(readExpanded);
@@ -290,7 +290,7 @@ export function TaskLinks() {
   };
 
   const all = entries ?? [];
-  const visible = expanded ? [...all] : all.slice(0, COLLAPSED_COUNT);
+  const visible = !limited || expanded ? [...all] : all.slice(0, COLLAPSED_COUNT);
   // 正在查看的任务始终留在列表里，收起时也不会从列表消失。
   const current = all.find((entry) => pathname.startsWith(`/tasks/${entry.task.task_id}`));
   if (current !== undefined && !visible.includes(current)) visible.push(current);
@@ -298,9 +298,17 @@ export function TaskLinks() {
   // 一条邮件任务都没有时不留，免得每行都带一段没有来由的缩进。
   const reserveSource = visible.some((entry) => entry.task.source === "mail");
 
+  // 列表在自己的区域里滚动：从搜索或别处打开一条靠后的任务时，把它滚进视野。
+  const list = useRef<HTMLDivElement>(null);
+  const currentId = current?.task.task_id;
+  useEffect(() => {
+    if (currentId === undefined) return;
+    list.current?.querySelector(".nav-task.active")?.scrollIntoView({ block: "nearest" });
+  }, [currentId]);
+
   return (
     <>
-      <div className="nav-list">
+      <div className="nav-list" ref={list}>
         {entries === null && <div className="nav-note">读取中…</div>}
         {entries !== null && all.length === 0 && <div className="nav-note">还没有任务</div>}
         {visible.map((entry) => {
@@ -331,7 +339,7 @@ export function TaskLinks() {
         })}
       </div>
 
-      {all.length > COLLAPSED_COUNT && (
+      {limited && all.length > COLLAPSED_COUNT && (
         <button type="button" className="nav-more" aria-expanded={expanded} onClick={toggle}>
           {expanded ? "收起显示" : "展开显示"}
         </button>
@@ -340,7 +348,11 @@ export function TaskLinks() {
   );
 }
 
-/** 侧栏任务区：分区标题 + 任务列表，标题右侧是发起新任务的入口。 */
+/**
+ * 侧栏任务区：排在资料、记忆等固定入口之后，占满侧栏剩余高度，任务多了在列表内滚动，
+ * 固定入口始终留在原位。“任务”是分区小标题而不是页面入口，没有选中态；
+ * 待确认计数和搜索、发起新任务的入口挂在标题上，列表滚到哪里都看得到。
+ */
 function SidebarTasks() {
   const { entries } = useTasks();
   const unread = useSeen().unreadTotal(entries);
@@ -348,7 +360,6 @@ function SidebarTasks() {
   return (
     <div className="nav-group">
       <div className="nav-head">
-        {TASKS_ICON}
         <span className="nav-head-title">任务</span>
         {unread > 0 && <span className="nav-head-count">{unread} 待确认</span>}
         <NavLink
@@ -369,7 +380,7 @@ function SidebarTasks() {
           {COMPOSE_ICON}
         </NavLink>
       </div>
-      <TaskLinks />
+      <TaskLinks limited={false} />
     </div>
   );
 }
@@ -385,16 +396,13 @@ export default function AppShell({ serviceError, children }: Props) {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">P</div>
-          <div>
-            <div className="brand-name">Pebble</div>
-            <div className="brand-sub">personal agent</div>
-          </div>
+          <div className="brand-name">Pebble</div>
         </div>
         <nav className="sidebar-nav">
-          <SidebarTasks />
           <KbLink />
           <MemoryLink />
           <Placeholders />
+          <SidebarTasks />
         </nav>
         {offline && (
           <div className="sidebar-foot">

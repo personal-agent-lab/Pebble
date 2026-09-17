@@ -114,7 +114,6 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   font: 700 var(--text-sm)/1 var(--font-mono);
 }
 .brand-name { font-weight: 600; font-size: var(--text-md); line-height: 1.2; }
-.brand-sub { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-muted); margin-top: 2px; }
 
 .nav-item {
   display: flex; align-items: center; gap: 10px;
@@ -122,26 +121,30 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   font-size: var(--text-md); font-weight: 510; color: var(--color-muted);
   margin-bottom: 2px; width: 100%; text-align: left;
   border: none; background: none; font-family: var(--font-body); cursor: pointer;
+  /* 按钮默认 line-height: normal，比链接矮一截：置灰的 Skill 按钮与上面的链接行高对齐。 */
+  line-height: inherit;
 }
-.nav-item:hover { color: var(--color-fg); }
+/* 侧栏各行悬停一律用浅灰底提示可点，文字颜色不变；比选中的 --color-bg 更浅，
+   悬停不会和“当前所在”混淆。 */
+.nav-item:hover:not(.active):not(.disabled) { background: color-mix(in oklch, var(--color-fg) 3%, transparent); }
 .nav-item.active {
   background: var(--color-bg); color: var(--color-fg); font-weight: 600;
 }
 .nav-item.disabled { opacity: 0.55; cursor: not-allowed; }
-.nav-item.disabled:hover { color: var(--color-muted); }
 .nav-count { margin-left: auto; font-size: var(--text-xs); color: var(--color-muted); }
 
 /* ===== 侧栏任务区（任务列表即导航） ===== */
-/* 任务多了由导航区自己滚动，品牌区与连接状态始终留在原位。 */
-.sidebar-nav { flex: 1; min-height: 0; overflow-y: auto; }
-.nav-group { margin-bottom: 10px; }
+/* 固定入口在上，任务区占满剩余高度；任务多了只在列表内滚动，品牌区、固定入口与连接状态始终留在原位。 */
+.sidebar-nav { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.nav-group { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-top: 16px; }
+.nav-group .nav-list { flex: 1; min-height: 0; overflow-y: auto; }
 
-/* 分区标题一行说清三件事：这是任务、有没有待确认、从哪里发起新任务。 */
+/* 分区标题：字号与资料、记忆等入口一致，颜色浅、不带图标，读起来是一组列表的标题而不是页面入口。
+   它不可点，也就没有悬停与选中底色；右侧是待确认计数、搜索与发起新任务。 */
 .nav-head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 7px 6px 7px 10px; border-radius: var(--radius-md);
-  background: var(--color-bg);
-  font-size: var(--text-md); font-weight: 600; color: var(--color-fg);
+  display: flex; align-items: center; gap: 6px;
+  padding: 2px 6px 2px 10px;
+  font-size: var(--text-md); font-weight: 600; color: var(--color-muted);
 }
 .nav-head-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-head-count {
@@ -152,9 +155,8 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   display: grid; place-items: center; border-radius: var(--radius-sm);
   color: var(--color-muted);
 }
-.nav-head-count + .nav-new { margin-left: 0; }
 /* 搜索与新任务并排：搜索在前，只有它推到行尾，新任务紧挨着。 */
-.nav-search + .nav-new { margin-left: 0; }
+.nav-head-count + .nav-new, .nav-search + .nav-new { margin-left: 0; }
 .nav-new:hover { color: var(--color-fg); background: color-mix(in oklch, var(--color-fg) 6%, transparent); }
 .nav-new.active { color: var(--color-fg); }
 .nav-new:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
@@ -216,7 +218,6 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   padding: 6px 30px 6px 10px; border-radius: var(--radius-md);
   font-size: var(--text-sm); color: var(--color-muted); min-width: 0;
 }
-.nav-task-row:hover .nav-task { color: var(--color-fg); }
 .nav-task.active { color: var(--color-fg); font-weight: 600; }
 .nav-task:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
 /* 任务名一行截断：侧栏是索引，完整文案在任务对话里，悬停另有 title。 */
@@ -828,6 +829,7 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
     flex: 1; flex-direction: column; gap: 3px; justify-content: center;
     padding: 6px 0; font-size: var(--text-xs); margin: 0; border-radius: var(--radius-md);
   }
+  .tabbar .nav-item:hover:not(.disabled) { background: none; }
   .tabbar .nav-item.active { background: none; box-shadow: none; color: var(--color-accent); }
   .tabbar .nav-item svg.i { width: 20px; height: 20px; }
   .tabbar .nav-count { display: none; }
