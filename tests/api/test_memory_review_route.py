@@ -27,10 +27,11 @@ def review_rows() -> list[dict]:
 def test_manual_review_endpoint_enqueues_and_runs(settings):
     gateway = FakeAgentGateway()
     with TestClient(create_app(gateway=gateway)) as client:
-        task_id = client.post("/api/tasks", json={"goal": "闲聊"}).json()["task_id"]
-        client.post(
-            f"/api/tasks/{task_id}/messages", json={"message": "我最近正在学习 Hermes 的设计"}
+        created = client.post(
+            "/api/tasks",
+            data={"model": "qmodel_38max", "message": "我最近正在学习 Hermes 的设计"},
         )
+        task_id = created.json()["task"]["task_id"]
         wait_for(
             lambda: client.get(f"/api/tasks/{task_id}").json()["latest_run"]["status"] == "done"
         )
@@ -60,13 +61,13 @@ def test_manual_review_endpoint_rejects_unknown_task(settings):
 
 def test_interval_review_triggers_after_five_messages_over_http(settings):
     gateway = FakeAgentGateway()
-    with TestClient(create_app(gateway=gateway)) as client:
-        task_id = client.post("/api/tasks", json={"goal": "闲聊"}).json()["task_id"]
+    app = create_app(gateway=gateway)
+    with TestClient(app) as client:
+        task_id = app.state.tasks.create_task("闲聊")["task_id"]
         for index in range(5):
-            client.post(f"/api/tasks/{task_id}/messages", json={"message": f"第 {index + 1} 句"})
+            client.post(f"/api/tasks/{task_id}/messages", data={"message": f"第 {index + 1} 句"})
             wait_for(
-                lambda: client.get(f"/api/tasks/{task_id}").json()["latest_run"]["status"]
-                == "done"
+                lambda: client.get(f"/api/tasks/{task_id}").json()["latest_run"]["status"] == "done"
             )
         wait_for(lambda: review_rows() and review_rows()[0]["status"] == "done")
         assert len(gateway.review_calls) == 1

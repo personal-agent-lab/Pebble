@@ -109,6 +109,26 @@ test("用户消息与邮件卡不挂落款", () => {
   expect(screen.queryByRole("button", { name: "复制回答" })).toBeNull();
 });
 
+test("附件单独消息刷新后仍按顺序显示图片与下载文件", () => {
+  const items: TimelineItem[] = [{
+    item_id: "ask", kind: "text", role: "user", run_id: "run-1", text: "",
+    created_at: "2026-09-14T00:00:00Z", attachments: [
+      { file_id: "image", filename: "photo.png", mime_type: "image/png", size: 12,
+        sha256: "a", url: "/api/tasks/t/attachments/image" },
+      { file_id: "text", filename: "notes.md", mime_type: "text/markdown", size: 1024,
+        sha256: "b", url: "/api/tasks/t/attachments/text" },
+    ],
+  }];
+  render(<TimelineFeed taskId="task-1" items={items} running={false}
+    sendMessage={vi.fn()} onChanged={vi.fn()} />);
+
+  expect(screen.getByRole("link", { name: "查看图片 photo.png" }).getAttribute("href"))
+    .toBe("/api/tasks/t/attachments/image");
+  const download = screen.getByText("notes.md").closest("a");
+  expect(download?.getAttribute("href")).toBe("/api/tasks/t/attachments/text");
+  expect(download?.hasAttribute("download")).toBe(true);
+});
+
 test("调用进行中在消息流末尾留思考占位，结束后撤掉", () => {
   const items: TimelineItem[] = [
     { item_id: "text-1", kind: "text", role: "user", run_id: "run-1", text: "帮我看邮件", created_at: "2026-09-14T00:00:00Z" },
@@ -175,4 +195,3 @@ test("记忆变更提示带查看记忆入口，其他提示不带", () => {
   expect(links.every((link) => link.getAttribute("href") === "/memory")).toBe(true);
   expect(screen.getByText("想确认：你说的是哪一条？").parentElement?.querySelector("a")).toBeNull();
 });
-

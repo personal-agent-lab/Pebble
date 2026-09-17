@@ -139,12 +139,38 @@ def test_v12_migration_drops_run_sources_and_keeps_existing_timeline(
     assert init_db() == SCHEMA_VERSION
     with session() as conn:
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert conn.execute(
-            "SELECT text FROM task_timeline_items WHERE item_id='i1'"
-        ).fetchone()["text"] == "旧回答"
+        assert (
+            conn.execute("SELECT text FROM task_timeline_items WHERE item_id='i1'").fetchone()[
+                "text"
+            ]
+            == "旧回答"
+        )
         assert (
             conn.execute(
                 "SELECT name FROM sqlite_master WHERE name LIKE 'task_run_sources%'"
             ).fetchall()
             == []
         )
+
+
+def test_v14_migration_fixes_existing_task_model_and_adds_attachment_tables(
+    settings: Settings,
+) -> None:
+    settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+    with session() as conn, write(conn):
+        conn.execute("CREATE TABLE schema_meta (version INTEGER NOT NULL)")
+        conn.execute("INSERT INTO schema_meta VALUES (13)")
+        for version in range(1, 14):
+            for statement in db.SCHEMA_MIGRATIONS[version]:
+                conn.execute(statement)
+        conn.execute("INSERT INTO tasks VALUES ('t1','旧任务',NULL,'2026-09-01T00:00:00Z')")
+
+    assert init_db() == SCHEMA_VERSION
+    with session() as conn:
+        task = conn.execute("SELECT model FROM tasks WHERE task_id='t1'").fetchone()
+        assert task["model"] == (settings.qoder_model or "auto")
+        tables = {
+            row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert {"uploaded_files", "timeline_item_attachments"} <= tables
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

@@ -13,10 +13,12 @@ Confirmation 调用。网关不区分触发来源：一轮的消息与材料由�
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from qodercn_agent_sdk import (
@@ -142,10 +144,13 @@ class QoderGateway:
         self.tool_server = tool_server
         self.memory_store = deps.memory_store or MemoryStore(self.settings.data_dir)
         self.kb_store = deps.kb_store
+        self.tasks_store = deps.tasks
         agent_dir = self.settings.data_dir / "agent"
         self.workspace = agent_dir / "workspace"
+        self.workspaces = agent_dir / "workspaces"
         config_dir = agent_dir / "config"
         self.workspace.mkdir(parents=True, exist_ok=True)
+        self.workspaces.mkdir(parents=True, exist_ok=True)
         config_dir.mkdir(parents=True, exist_ok=True)
         # 会话记录的读写都以这里为根：本进程读历史时查环境变量，子进程按继承的环境写入，
         # 两者必须指向同一目录，否则重启后读不到会话。
@@ -206,7 +211,10 @@ class QoderGateway:
         # 记忆工具不发草稿事件，队列恒为空，仅为满足端点签名传入。
         queued: asyncio.Queue = asyncio.Queue()
         async with self.tool_server.serve(tools, task_id=task_id, queued=queued) as path:
-            options = self._oneshot_options(instructions, path, tools)
+            task = self.tasks_store.get_task(task_id)
+            options = self._oneshot_options(
+                instructions, path, tools, task_id=task_id, model=task["model"]
+            )
             async with QoderSDKClient(options) as client:
                 await client.query(message)
                 async for reply in client.receive_response():
@@ -234,7 +242,7 @@ class QoderGateway:
             async with QoderSDKClient(options) as client:
                 if turn.sdk_session_id is not None:
                     await self._compact_if_needed(client)
-                await client.query(turn.message)
+                await client.query(self._query_input(turn))
                 async for message in client.receive_response():
                     # 工具事件在产生它的那次调用之后、模型的下一条消息之前送出。
                     while not queued.empty():
@@ -322,6 +330,59 @@ class QoderGateway:
             return ()
         return (context.Material(CATALOG_TITLE, catalog),) if catalog else ()
 
+    async def _image_input(self, turn: Turn) -> AsyncIterator[dict[str, Any]]:
+        content: list[dict[str, Any]] = [{"type": "text", "text": turn.message}]
+        for attachment in turn.attachments:
+            if not attachment.is_image:
+                continue
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": attachment.mime_type,
+                        "data": base64.b64encode(attachment.path.read_bytes()).decode("ascii"),
+                    },
+                }
+            )
+        yield {
+            "type": "user",
+            "message": {"role": "user", "content": content},
+            "parent_tool_use_id": None,
+        }
+
+    def _query_input(self, turn: Turn) -> str | AsyncIterator[dict[str, Any]]:
+        if any(item.is_image for item in turn.attachments):
+            return self._image_input(turn)
+        return turn.message
+
+    def _task_workspace(self, task_id: str) -> Any:
+        workspace = self.workspaces / task_id
+        workspace.mkdir(parents=True, exist_ok=True)
+        return workspace
+
+    def _permission_callback(self, task_id: str, *, web_enabled: bool, read_enabled: bool):
+        workspace = self._task_workspace(task_id).resolve()
+
+        async def authorize(tool_name: str, tool_input: dict, _context: Any):
+            if web_enabled and tool_name in WEB_TOOLS:
+                return PermissionResultAllow()
+            if (
+                read_enabled
+                and tool_name == "Read"
+                and isinstance(tool_input.get("file_path"), str)
+            ):
+                requested = Path(tool_input["file_path"])
+                requested = requested if requested.is_absolute() else workspace / requested
+                try:
+                    requested.resolve().relative_to(workspace)
+                except ValueError:
+                    return PermissionResultDeny(message="只能读取当前任务的附件")
+                return PermissionResultAllow()
+            return PermissionResultDeny(message=f"未授权的工具：{tool_name}")
+
+        return authorize
+
     def _options(
         self, turn: Turn, *, visible: list[ToolDefinition], path: str
     ) -> QoderAgentOptions:
@@ -334,16 +395,25 @@ class QoderGateway:
         ctx = context.assemble(
             materials=(*memory_materials, *self._catalog_materials(), *turn.materials)
         )
+        workspace = self._task_workspace(turn.task_id)
         web_tools = list(WEB_TOOLS) if turn.kind is TurnKind.MESSAGE else []
+        read_enabled = turn.kind is TurnKind.MESSAGE and (workspace / "attachments").is_dir()
+        builtins = [*web_tools, *(["Read"] if read_enabled else [])]
         return QoderAgentOptions(
             # 内置工具只开放联网查询（见 WEB_TOOLS），本机设置一律关闭：模型能看到的其余
             # 工具只有本轮 MCP 端点里的那些。
-            tools=web_tools,
+            tools=builtins,
             allowed_tools=[
-                *web_tools,
+                *builtins,
                 *(f"mcp__{TOOL_SERVER_NAME}__{definition.name}" for definition in visible),
             ],
-            can_use_tool=authorize_web_tool if web_tools else None,
+            can_use_tool=(
+                self._permission_callback(
+                    turn.task_id, web_enabled=bool(web_tools), read_enabled=read_enabled
+                )
+                if builtins
+                else None
+            ),
             mcp_servers={
                 TOOL_SERVER_NAME: {"type": "http", "url": self._tool_url(path)},
             },
@@ -353,11 +423,11 @@ class QoderGateway:
             skills=ctx.skills,
             system_prompt=ctx.system_prompt,
             hooks=turn_context_hooks(ctx.additional_context),
-            cwd=self.workspace,
+            cwd=workspace,
             resume=turn.sdk_session_id,
             include_partial_messages=True,
             auth=self._auth(),
-            **self._model_options(),
+            **self._model_options(selected_model=turn.model),
         )
 
     def _title_options(self) -> QoderAgentOptions:
@@ -377,15 +447,18 @@ class QoderGateway:
         )
 
     def _oneshot_options(
-        self, instructions: str, path: str, tools: list[ToolDefinition]
+        self,
+        instructions: str,
+        path: str,
+        tools: list[ToolDefinition],
+        *,
+        task_id: str,
+        model: str,
     ) -> QoderAgentOptions:
         # 与标题生成同形，但经本轮 MCP 端点带上指定工具集；无 resume，每次都是全新会话。
         return QoderAgentOptions(
             tools=[],
-            allowed_tools=[
-                f"mcp__{TOOL_SERVER_NAME}__{definition.name}"
-                for definition in tools
-            ],
+            allowed_tools=[f"mcp__{TOOL_SERVER_NAME}__{definition.name}" for definition in tools],
             mcp_servers={
                 TOOL_SERVER_NAME: {"type": "http", "url": self._tool_url(path)},
             },
@@ -394,10 +467,10 @@ class QoderGateway:
             setting_sources=[],
             skills=[],
             system_prompt=instructions,
-            cwd=self.workspace,
+            cwd=self._task_workspace(task_id),
             include_partial_messages=False,
             auth=self._auth(),
-            **self._model_options(),
+            **self._model_options(selected_model=model),
         )
 
     def _tool_url(self, path: str) -> str:
@@ -435,7 +508,9 @@ class QoderGateway:
                 f"可选：{', '.join(sorted(BYOK_PROVIDERS))}"
             )
 
-    def _model_options(self, *, hosted_model: str | None = None) -> dict[str, Any]:
+    def _model_options(
+        self, *, selected_model: str | None = None, hosted_model: str | None = None
+    ) -> dict[str, Any]:
         """托管模型直接给型号名；配了第三方模型就转成 BYOK，凭证只在这里读取。
 
         `hosted_model` 只替换托管型号。BYOK 的密钥与供应商标识绑定，换型号就需要另一份
@@ -452,7 +527,7 @@ class QoderGateway:
             if settings.model_base_url:
                 custom["url"] = settings.model_base_url
             return {"resolve_model": lambda _context: {"model": custom}}
-        return {"model": hosted_model or settings.qoder_model}
+        return {"model": hosted_model or selected_model or settings.qoder_model}
 
 
 def _result_event(message: ResultMessage) -> AgentEvent:

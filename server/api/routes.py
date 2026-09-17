@@ -4,14 +4,16 @@ import asyncio
 import json
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from server.agent.models import ModelCatalog
 from server.approval.service import ConfirmationService
+from server.attachments import AttachmentStore, prepare_uploads
 from server.config import get_settings
 from server.db import schema_version, session
-from server.errors import DependencyUnavailableError
+from server.errors import AttachmentValidationError, DependencyUnavailableError
 from server.gateway.runtime import GatewayRuntime
 from server.memory.service import MemoryStore
 from server.sessions.history import HistoryStore
@@ -72,6 +74,18 @@ def get_history(request: Request) -> HistoryStore:
 History = Annotated[HistoryStore, Depends(get_history)]
 
 
+def get_models(request: Request) -> ModelCatalog:
+    return request.app.state.model_catalog
+
+
+def get_attachments(request: Request) -> AttachmentStore:
+    return request.app.state.attachments
+
+
+Models = Annotated[ModelCatalog, Depends(get_models)]
+Attachments = Annotated[AttachmentStore, Depends(get_attachments)]
+
+
 router = APIRouter()
 
 
@@ -94,18 +108,30 @@ def health(request: Request) -> dict[str, object]:
     }
 
 
-class TaskCreate(BaseModel):
-    goal: str = Field(min_length=1)
-
-
 @router.get("/tasks", tags=["tasks"])
 def list_tasks(tasks: Tasks) -> list[dict]:
     return tasks.list_tasks()
 
 
+@router.get("/models", tags=["chat"])
+async def list_models(models: Models) -> dict:
+    return await models.response()
+
+
 @router.post("/tasks", status_code=201, tags=["tasks"])
-def create_task(body: TaskCreate, tasks: Tasks) -> dict:
-    return tasks.create_task(body.goal)
+async def create_task(
+    agent: Agent,
+    models: Models,
+    model: Annotated[str, Form()],
+    message: Annotated[str, Form()] = "",
+    files: Annotated[list[UploadFile] | None, File()] = None,
+) -> dict:
+    prepared = await prepare_uploads(files or [])
+    if not message.strip() and not prepared:
+        raise AttachmentValidationError(
+            [{"field": "message", "message": "请输入文字或至少添加一个附件"}]
+        )
+    return agent.start_task(await models.validate(model), message, prepared)
 
 
 @router.get("/tasks/{task_id}", tags=["tasks"])
@@ -138,17 +164,45 @@ class MessageTarget(BaseModel):
     operation_id: str
 
 
-class MessageInput(BaseModel):
-    message: str = Field(min_length=1)
-    target: MessageTarget | None = None
-
-
 @router.post("/tasks/{task_id}/messages", status_code=202, tags=["chat"])
-async def submit_message(task_id: str, body: MessageInput, agent: Agent) -> dict:
+async def submit_message(
+    task_id: str,
+    agent: Agent,
+    message: Annotated[str, Form()] = "",
+    target: Annotated[str | None, Form()] = None,
+    files: Annotated[list[UploadFile] | None, File()] = None,
+) -> dict:
+    prepared = await prepare_uploads(files or [])
+    if not message.strip() and not prepared:
+        raise AttachmentValidationError(
+            [{"field": "message", "message": "请输入文字或至少添加一个附件"}]
+        )
+    parsed_target = None
+    if target is not None:
+        try:
+            parsed_target = MessageTarget.model_validate_json(target).model_dump()
+        except ValueError as error:
+            raise AttachmentValidationError(
+                [{"field": "target", "message": "消息目标不合法"}]
+            ) from error
     return agent.submit_message(
         task_id,
-        body.message,
-        target=body.target.model_dump() if body.target is not None else None,
+        message,
+        target=parsed_target,
+        attachments=prepared,
+    )
+
+
+@router.get("/tasks/{task_id}/attachments/{file_id}", tags=["chat"])
+def read_attachment(task_id: str, file_id: str, attachments: Attachments) -> FileResponse:
+    with session() as conn:
+        record, path = attachments.get(conn, task_id, file_id)
+    inline = record["mime_type"].startswith("image/")
+    return FileResponse(
+        path,
+        media_type=record["mime_type"],
+        filename=None if inline else record["filename"],
+        content_disposition_type="inline" if inline else "attachment",
     )
 
 

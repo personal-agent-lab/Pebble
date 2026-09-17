@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { type ApiError, type MessageTarget, type TimelineItem } from "../api";
+import { FileText } from "@phosphor-icons/react";
+
+import { type ApiError, type Attachment, type MessageTarget, type TimelineItem } from "../api";
 import { isMemoryNotice } from "../memory";
 import MailDraftCard from "./MailDraftCard";
 import Markdown from "./Markdown";
@@ -37,10 +39,29 @@ const scrollEventTarget = (scroller: HTMLElement): EventTarget =>
 function contentSignature(items: TimelineItem[]): string {
   const last = items[items.length - 1];
   if (last === undefined) return "0";
-  const growth = last.kind === "text" ? last.text.length
+  const growth = last.kind === "text" ? `${last.text.length}:${(last.attachments ?? []).map((item) => item.file_id).join(",")}`
     : last.kind === "mail_draft" ? `${last.draft.version}:${last.execution.status}`
     : last.text.length;
   return `${items.length}:${last.item_id}:${growth}`;
+}
+
+const formatSize = (size: number) => size >= 1024 * 1024
+  ? `${(size / 1024 / 1024).toFixed(1)} MB`
+  : `${Math.max(1, Math.round(size / 1024))} KB`;
+
+function MessageAttachments({ items }: { items: Attachment[] }) {
+  if (items.length === 0) return null;
+  return <div className="message-attachments">
+    {items.map((attachment) => attachment.mime_type.startsWith("image/")
+      ? <a className="message-image" href={attachment.url} target="_blank" rel="noreferrer"
+          key={attachment.file_id} aria-label={`查看图片 ${attachment.filename}`}>
+          <img src={attachment.url} alt={attachment.filename} />
+        </a>
+      : <a className="message-file" href={attachment.url} key={attachment.file_id} download>
+          <FileText size={22} weight="regular" />
+          <span><strong>{attachment.filename}</strong><small>{formatSize(attachment.size)}</small></span>
+        </a>)}
+  </div>;
 }
 
 /** 连续几条 Agent 文字读起来是同一个回答，复制要拿到完整一段而不是最后一截。 */
@@ -142,7 +163,8 @@ export default function TimelineFeed({
       return <div className={`msg ${agent ? "agent" : "user"}${grouped ? " cont" : ""}`} key={item.item_id}
         {...mark(item.item_id)}>
         <div className="msg-body"><span className="sr-only">{agent ? "Agent 说：" : "我说："}</span>
-          <div className="bubble">{agent ? <Markdown text={item.text} /> : item.text}</div>
+          {item.text && <div className="bubble">{agent ? <Markdown text={item.text} /> : item.text}</div>}
+          {!agent && <MessageAttachments items={item.attachments ?? []} />}
           {agent && ended && <MessageActions text={answerText(items, index)}
             createdAt={item.created_at} pinned={last} />}
         </div>

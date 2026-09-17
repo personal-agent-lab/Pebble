@@ -130,10 +130,11 @@ export function useTaskDetail(taskId: string) {
   const send = useCallback(async (
     message: string,
     target: MessageTarget | null = null,
+    files: File[] = [],
   ) => {
     setSending(true);
     try {
-      await sendMessage(taskId, message, target);
+      await sendMessage(taskId, message, target, files);
       await reload();
       return null;
     } catch (failure) { return toApiError(failure); }

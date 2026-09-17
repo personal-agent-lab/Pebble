@@ -7,10 +7,25 @@ Gateway 通过本接口把输入交给 Agent 会话并消费事件流；实现�
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol, TypedDict
 
 from server.agent.context import Material
 from server.agent.toolset import TurnKind
+
+
+@dataclass(frozen=True)
+class TurnAttachment:
+    file_id: str
+    filename: str
+    mime_type: str
+    size: int
+    path: Path
+    relative_path: str
+
+    @property
+    def is_image(self) -> bool:
+        return self.mime_type.startswith("image/")
 
 
 @dataclass(frozen=True)
@@ -21,6 +36,8 @@ class Turn:
     task_id: str
     sdk_session_id: str | None
     message: str
+    model: str | None = None
+    attachments: tuple[TurnAttachment, ...] = ()
     materials: tuple[Material, ...] = ()
     target_operation_id: str | None = None
 

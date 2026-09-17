@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from server.errors import (
+    AttachmentValidationError,
     DependencyUnavailableError,
     DraftValidationError,
     HistoryValidationError,
@@ -19,6 +20,7 @@ from server.errors import (
     MemoryFullError,
     MemoryStoreUnavailableError,
     MemoryValidationError,
+    ModelValidationError,
     NotEditableError,
     NotFoundError,
     SessionConflictError,
@@ -34,6 +36,8 @@ STATUS_CODES: tuple[tuple[type[Exception], int], ...] = (
     (NotEditableError, 409),
     (SessionConflictError, 409),
     (TaskActiveError, 409),
+    (ModelValidationError, 422),
+    (AttachmentValidationError, 422),
     (DraftValidationError, 422),
     (HistoryValidationError, 422),
     (KbValidationError, 422),

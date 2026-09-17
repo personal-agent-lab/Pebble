@@ -8,7 +8,7 @@
 确认操作；任务不依赖始终开启的浏览器页面。新邮件是首版的系统触发源，收到即自动开始处理，
 但邮件只是它能做的事之一。
 
-当前状态：对话链、任务时间线、Gateway 与 Qoder CN/Gmail/iCloud Calendar 生产装配已接通，SQLite schema 为 11。
+当前状态：对话链、按任务固定模型、图片/文件附件、任务时间线、Gateway 与 Qoder CN/Gmail/iCloud Calendar 生产装配已接通，SQLite schema 为 14。
 Gmail 支持搜索、单封与完整往来读取、入站附件读取、回复与主动新写邮件；两者共用内嵌草稿卡、
 草稿编辑、最终版本确认、去重发送和结果核实。外发邮件只支持纯文字正文。
 iCloud Calendar 支持查询、详情、冲突检查与创建单次日程：对话里给出标题和起止时间就直接创建，
@@ -56,7 +56,7 @@ cp .env.example .env
 | `PEBBLE_DATA_DIR` | 实例数据目录，默认 `<仓库根>/.data` |
 | `PEBBLE_HOST`、`PEBBLE_PORT` | 监听地址与端口，默认 `127.0.0.1:8000` |
 | `QODERCN_PERSONAL_ACCESS_TOKEN` | Qoder CN 访问令牌，注意没有 `PEBBLE_` 前缀 |
-| `PEBBLE_QODER_MODEL` | 托管模型型号，取值由 CLI 按账号动态下发（`qodercli --list-models`） |
+| `PEBBLE_QODER_MODEL` | 新任务默认选中的型号标识（如 `qmodel_38max`），取值见 `GET /api/models` 的 `id`；未配置时默认 `auto` |
 | `PEBBLE_TITLE_MODEL` | 只给任务标题生成用的型号，默认沿用 `PEBBLE_QODER_MODEL` |
 | `PEBBLE_MODEL_PROVIDER`、`PEBBLE_MODEL_API_KEY`、`PEBBLE_MODEL_BASE_URL` | 自定义模型（BYOK）。供应商、密钥、型号必须同时给全，`BASE_URL` 可选；provider 必须匹配账号的 BYOK 目录 |
 | `PEBBLE_GMAIL_CREDENTIALS_PATH` | Gmail OAuth 桌面应用 JSON，默认 `<data_dir>/credentials.json` |
@@ -115,6 +115,8 @@ npm run dev
 断点 900px：以上为侧栏布局，以下折叠为底部 tab，两端功能一致。
 任务列表就是导航本身：PC 在侧栏资料、记忆等固定入口之下，列出全部任务并在列表内滚动；手机在任务页内，默认列最近 5 条，其余折在「展开显示」后面。
 
+新任务与任务详情共用 Codex 风格输入框。新建任务时从当前 Qoder 账号目录选择模型，创建后模型固定；若该型号后来不可用，后续轮次明确失败而不会换模型。模型目录保存在 `<PEBBLE_DATA_DIR>/agent/models.json`，服务启动时后台预读；网络波动读不到最新目录时沿用最近一次成功的目录，输入框旁提示“模型目录可能不是最新”并可重试。可上传 PNG/JPEG/WebP、PDF、UTF-8 文本、Markdown 与代码文件，也可只发附件；每条消息最多 10 个、每个不超过 20 MB。图片在时间线中预览，其他文件下载。附件保存在 `<PEBBLE_DATA_DIR>/agent/workspaces/<task_id>/attachments/`，删除任务时一并删除；附件中的指令只是待分析内容，不取得任何外部写权限。
+
 邮件草稿固定在 Agent 生成时的对话位置，卡片内展示完整正文，并支持直接编辑、定向对话修改与最终确认。
 未保存的修改不能确认，确认绑定卡片当前展示的草稿版本；发送状态和结果继续显示在原卡片上。
 编辑收件人时每行填写一个地址，可保留显示名。
@@ -134,6 +136,7 @@ npm run dev
 
 ```bash
 curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/models
 ```
 
 返回里的 `services.gmail` 与 `services.calendar` 为 `ok` 表示已接入，`unconfigured` 表示缺凭证、相关功能已关闭。

@@ -22,6 +22,7 @@ export type TaskSource = "mail" | "user";
 export type Task = {
   task_id: string;
   goal: string;
+  model: string;
   source: TaskSource;
   sdk_session_id: string | null;
   created_at: string;
@@ -66,6 +67,7 @@ export type TimelineItem =
       role: "user" | "assistant";
       run_id: string;
       text: string;
+      attachments?: Attachment[];
       created_at: string;
     }
   | {
@@ -94,6 +96,22 @@ export type TimelineItem =
 
 export type Timeline = { task_id: string; sdk_session_id: string | null; items: TimelineItem[] };
 export type MessageTarget = { kind: "mail_draft"; operation_id: string };
+export type Attachment = {
+  file_id: string;
+  filename: string;
+  mime_type: string;
+  size: number;
+  sha256: string;
+  url: string;
+};
+export type ModelEntry = { id: string; label: string; kind: "managed" | "custom" };
+export type ModelCatalog = {
+  default_model: string;
+  models: ModelEntry[];
+  fetched_at: string | null;
+  /** 服务端最近一次刷新目录失败，返回的是之前读到的目录。 */
+  stale: boolean;
+};
 export type FieldError = { field: string; message: string };
 
 export type AgentEvent =
@@ -141,7 +159,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`/api${path}`, {
       ...init,
-      headers: init?.body ? { "Content-Type": "application/json", ...init.headers } : init?.headers,
+      headers: init?.body && !(init.body instanceof FormData)
+        ? { "Content-Type": "application/json", ...init.headers }
+        : init?.headers,
     });
   } catch (error) {
     throw new ApiError("offline", `无法连接 Pebble 服务：${String(error)}`, 0);
@@ -161,8 +181,47 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const listTasks = () => request<Task[]>("/tasks");
-export const createTask = (goal: string) =>
-  request<Task>("/tasks", { method: "POST", body: JSON.stringify({ goal }) });
+const MODEL_CATALOG_KEY = "pebble.models";
+
+function storedCatalog(): ModelCatalog | null {
+  try {
+    const value = JSON.parse(localStorage.getItem(MODEL_CATALOG_KEY) ?? "null") as ModelCatalog | null;
+    return value !== null && Array.isArray(value.models) && value.models.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+let modelCatalog: ModelCatalog | null = null;
+/**
+ * 每次读取都刷新内存与本机缓存。页面先用缓存立即显示目录，网络波动读不到时继续沿用，
+ * 避免闪出型号标识或整页不可用；服务端校验仍以它自己的目录为准。
+ */
+export const listModels = async () => {
+  modelCatalog = await request<ModelCatalog>("/models");
+  try {
+    localStorage.setItem(MODEL_CATALOG_KEY, JSON.stringify(modelCatalog));
+  } catch {
+    // 本机缓存只是加速显示，写不进去不影响使用。
+  }
+  return modelCatalog;
+};
+export const cachedCatalog = () => modelCatalog ?? storedCatalog();
+export const cachedModels = () => cachedCatalog()?.models ?? null;
+
+function messageForm(message: string, files: File[], target: MessageTarget | null = null): FormData {
+  const body = new FormData();
+  body.set("message", message);
+  if (target !== null) body.set("target", JSON.stringify(target));
+  for (const file of files) body.append("files", file);
+  return body;
+}
+
+export const createTask = (message: string, model: string, files: File[]) => {
+  const body = messageForm(message, files);
+  body.set("model", model);
+  return request<{ task: Task; run: Run }>("/tasks", { method: "POST", body });
+};
 export const getTask = (taskId: string) => request<TaskDetail>(`/tasks/${taskId}`);
 export const deleteTask = (taskId: string) =>
   request<void>(`/tasks/${taskId}`, { method: "DELETE" });
@@ -174,9 +233,10 @@ export const sendMessage = (
   taskId: string,
   message: string,
   target: MessageTarget | null = null,
+  files: File[] = [],
 ) => request<Run>(`/tasks/${taskId}/messages`, {
   method: "POST",
-  body: JSON.stringify({ message, target }),
+  body: messageForm(message, files, target),
 });
 
 export const editDraft = (

@@ -32,8 +32,18 @@ def tasks(conn: sqlite3.Connection) -> list[dict]:
     ]
 
 
-def insert_task(conn: sqlite3.Connection, task_id: str, goal: str, now: str) -> None:
-    conn.execute("INSERT INTO tasks VALUES (?, ?, NULL, ?)", (task_id, goal, now))
+def insert_task(
+    conn: sqlite3.Connection,
+    task_id: str,
+    goal: str,
+    now: str,
+    model: str = "auto",
+) -> None:
+    conn.execute(
+        "INSERT INTO tasks (task_id,goal,sdk_session_id,created_at,model) "
+        "VALUES (?, ?, NULL, ?, ?)",
+        (task_id, goal, now, model),
+    )
 
 
 def bind_session(conn: sqlite3.Connection, task_id: str, sdk_session_id: str) -> None:
@@ -119,6 +129,12 @@ def delete_task(conn: sqlite3.Connection, task_id: str) -> None:
         (task_id,),
     )
     conn.execute("DELETE FROM history_items WHERE task_id = ?", (task_id,))
+    conn.execute(
+        "DELETE FROM timeline_item_attachments WHERE item_id IN "
+        "(SELECT item_id FROM task_timeline_items WHERE task_id = ?)",
+        (task_id,),
+    )
+    conn.execute("DELETE FROM uploaded_files WHERE task_id = ?", (task_id,))
     conn.execute("DELETE FROM task_timeline_items WHERE task_id = ?", (task_id,))
     conn.execute("DELETE FROM memory_reviews WHERE task_id = ?", (task_id,))
     conn.execute(

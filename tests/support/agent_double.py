@@ -50,9 +50,7 @@ class FakeAgentGateway:
             self.title_calls.append(text)
         return self.title
 
-    async def review_memory(
-        self, task_id: str, instructions: str, transcript: str
-    ) -> list[dict]:
+    async def review_memory(self, task_id: str, instructions: str, transcript: str) -> list[dict]:
         with self._lock:
             self.review_calls.append(
                 {"task_id": task_id, "instructions": instructions, "transcript": transcript}
@@ -83,6 +81,8 @@ class FakeAgentGateway:
                     "task_id": turn.task_id,
                     "sdk_session_id": turn.sdk_session_id,
                     "message": turn.message,
+                    "model": turn.model,
+                    "attachments": turn.attachments,
                     "materials": turn.materials,
                 }
             )

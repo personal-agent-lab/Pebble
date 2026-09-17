@@ -13,7 +13,7 @@ vi.mock("./api", async (importOriginal) => {
   return {
     ...actual,
     getTask: (taskId: string) => Promise.resolve({
-      task_id: taskId, goal: "查资料", source: "user", sdk_session_id: null,
+      task_id: taskId, goal: "查资料", model: "Auto", source: "user", sdk_session_id: null,
       created_at: "2026-09-16T00:00:00Z", latest_run: latestRun,
     } satisfies TaskDetail),
     listOperations: () => Promise.resolve([]),

@@ -11,9 +11,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from server.agent.mcp import MCP_MOUNT_PATH, ToolServer
+from server.agent.models import ModelCatalog
 from server.api.errors import install_error_handlers
 from server.api.routes import router
 from server.approval.service import ConfirmationService
+from server.attachments import AttachmentStore
 from server.db import init_db
 from server.errors import DependencyUnavailableError
 from server.gateway.runtime import GatewayRuntime, MailSource
@@ -44,13 +46,17 @@ def create_app(
     history: HistoryStore | None = None,
     create_event=None,
     verify_event=None,
+    model_catalog: ModelCatalog | None = None,
+    attachments: AttachmentStore | None = None,
 ) -> FastAPI:
     """装配应用。
 
     `tasks` / `drafts` / `confirmations` 供调用方先行构造：Agent 工具与 HTTP 必须共用同一组
     实例，而工具要在构造 gateway 之前绑定依赖。未传入时就地构造。
     """
-    tasks = tasks if tasks is not None else SessionStore()
+    attachments = attachments if attachments is not None else AttachmentStore()
+    model_catalog = model_catalog if model_catalog is not None else ModelCatalog()
+    tasks = tasks if tasks is not None else SessionStore(attachments=attachments)
     drafts = drafts if drafts is not None else MailDraftStore()
     confirmations = (
         confirmations
@@ -61,7 +67,12 @@ def create_app(
     )
     reviews = reviews if reviews is not None else MemoryReviewScheduler()
     agent = GatewayRuntime(
-        gateway, confirmations=confirmations, reviews=reviews, memory_store=memory_store
+        gateway,
+        confirmations=confirmations,
+        reviews=reviews,
+        memory_store=memory_store,
+        attachments=attachments,
+        model_catalog=model_catalog,
     )
 
     @asynccontextmanager
@@ -69,6 +80,8 @@ def create_app(
         init_db()
         confirmations.recover_interrupted_executions()
         agent.resume()
+        # 启动即在后台预读模型目录：新任务页打开时通常已有目录，读取失败也不影响启动。
+        model_catalog.refresh_in_background()
         # 邮件检测在恢复之后开始：重启遗留的调用先各自归位，再接受新的邮件输入。
         if mail_source is not None:
             await mail_source.start(agent)
@@ -78,6 +91,7 @@ def create_app(
             if mail_source is not None:
                 await mail_source.stop()
             await agent.close()
+            await model_catalog.close()
 
     app = FastAPI(title="Pebble", lifespan=lifespan)
     if tool_server is not None:
@@ -91,6 +105,8 @@ def create_app(
     app.state.kb_store = kb_store
     app.state.memory_store = agent.memory_store
     app.state.history = history if history is not None else HistoryStore()
+    app.state.model_catalog = model_catalog
+    app.state.attachments = attachments
     # 可选外部服务的接入状态，由生产装配填写；测试装配不声明时健康检查不列出。
     app.state.services = {}
     install_error_handlers(app)
@@ -133,7 +149,8 @@ def create_production_app() -> FastAPI:
     from server.tools.gmail.sync import GmailSource
 
     settings = get_settings()
-    tasks = SessionStore()
+    attachments = AttachmentStore(settings)
+    tasks = SessionStore(attachments=attachments)
     drafts = MailDraftStore()
     calendar_events = CalendarEventStore()
     memory_store = MemoryStore(settings.data_dir)
@@ -182,6 +199,8 @@ def create_production_app() -> FastAPI:
         memory_store=memory_store,
         kb_store=kb_store,
         history=history,
+        model_catalog=ModelCatalog(settings),
+        attachments=attachments,
     )
     app.state.services = {
         "gmail": _service_state(gmail_reason),

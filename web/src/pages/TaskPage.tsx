@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
-import { ApiError } from "../api";
+import { cachedModels, listModels, type ModelEntry } from "../api";
 import AppShell from "../components/AppShell";
+import Composer from "../components/Composer";
 import Notice from "../components/Notice";
 import StatusBadge from "../components/StatusBadge";
 import TimelineFeed from "../components/TimelineFeed";
@@ -11,8 +12,6 @@ import { shortTime, taskBadge } from "../status";
 import { useTasks } from "../tasks";
 
 const BACK_ICON = <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><polyline points="15 18 9 12 15 6" /></svg>;
-const SEND_ICON = <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>;
-
 export default function TaskPage() {
   const { taskId = "" } = useParams();
   const navigate = useNavigate();
@@ -20,22 +19,17 @@ export default function TaskPage() {
   const focusItemId = hash.startsWith("#item-") ? decodeURIComponent(hash.slice("#item-".length)) : null;
   const detail = useTaskDetail(taskId);
   const tasks = useTasks();
-  const [message, setMessage] = useState("");
-  const [actionError, setActionError] = useState<ApiError | null>(null);
+  const [models, setModels] = useState<ModelEntry[] | null>(cachedModels);
+
+  // 目录只用来把固定型号显示成名称；读取失败时退回显示型号标识。
+  useEffect(() => {
+    void listModels().then((catalog) => setModels(catalog.models))
+      .catch(() => setModels((current) => current ?? []));
+  }, []);
 
   const onChanged = async () => {
     await detail.reload();
     void tasks.reload();
-  };
-
-  const submit = async () => {
-    const text = message.trim();
-    if (text === "" || detail.sending) return;
-    const failure = await detail.send(text, null);
-    if (failure === null) {
-      setMessage("");
-      setActionError(null);
-    } else setActionError(failure);
   };
 
   if (detail.error !== null) return <AppShell serviceError={detail.error}><div className="content">
@@ -67,19 +61,11 @@ export default function TaskPage() {
         activity={running ? detail.activity : null}
         focusItemId={focusItemId}
         sendMessage={(text, target) => detail.send(text, target)} onChanged={onChanged} />
-      {actionError !== null && <Notice tone={actionError.unavailable ? "muted" : "danger"}
-        title={actionError.unavailable ? "功能暂未开放" : "操作失败"}>{actionError.message}</Notice>}
     </div></div>
 
     <div className="msg-composer"><div className="composer-wrap">
-      <div className="composer-row">
-        <textarea value={message} placeholder="回复 Agent，或补充修改意见…" aria-label="消息" rows={1}
-          onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
-          }} />
-        <button type="button" className="send-btn" onClick={() => void submit()}
-          disabled={message.trim() === "" || detail.sending} aria-label="发送">{SEND_ICON}</button>
-      </div>
+      <Composer placeholder="随心输入" sending={detail.sending} model={detail.task?.model ?? ""}
+        models={models ?? []} modelsPending={models === null} modelLocked onSubmit={(text, files) => detail.send(text, null, files)} />
     </div></div>
   </AppShell>;
 }

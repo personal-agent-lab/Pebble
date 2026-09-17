@@ -20,8 +20,10 @@ def wait_done(client, task_id):
 
 def test_search_history_over_http(settings):
     with TestClient(create_app(gateway=FakeAgentGateway())) as client:
-        task_id = client.post("/api/tasks", json={"goal": "预算"}).json()["task_id"]
-        client.post(f"/api/tasks/{task_id}/messages", json={"message": "运维预算提高一成"})
+        created = client.post(
+            "/api/tasks", data={"model": "qmodel_38max", "message": "运维预算提高一成"}
+        )
+        task_id = created.json()["task"]["task_id"]
         wait_done(client, task_id)
 
         results = client.get("/api/history/search", params={"q": "运维预算"}).json()["results"]

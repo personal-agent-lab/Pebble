@@ -125,10 +125,23 @@ class TimelineStore:
                     "created_at": item["created_at"],
                 }
                 if item["kind"] == "text":
+                    attachment_rows = conn.execute(
+                        "SELECT f.file_id,f.filename,f.mime_type,f.size,f.sha256 "
+                        "FROM timeline_item_attachments a JOIN uploaded_files f "
+                        "ON f.file_id=a.file_id WHERE a.item_id=? ORDER BY a.position",
+                        (item["item_id"],),
+                    ).fetchall()
                     payload = {
                         **base,
                         "role": item["role"],
                         "text": item["text"],
+                        "attachments": [
+                            {
+                                **dict(attachment),
+                                "url": f"/api/tasks/{task_id}/attachments/{attachment['file_id']}",
+                            }
+                            for attachment in attachment_rows
+                        ],
                     }
                     items.append(payload)
                 elif item["kind"] in ("error", "notice"):
@@ -148,4 +161,3 @@ class TimelineStore:
                 "sdk_session_id": record["sdk_session_id"],
                 "items": items,
             }
-

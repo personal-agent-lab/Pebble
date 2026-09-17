@@ -162,7 +162,7 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
         )
         assert duplicate["task_id"] == tid
         for message in ["帮我写一封回信", "询问会议链接"]:
-            response = http.post(f"/api/tasks/{tid}/messages", json={"message": message})
+            response = http.post(f"/api/tasks/{tid}/messages", data={"message": message})
             assert response.status_code == 202
             wait()
         oid = operation["operation_id"]

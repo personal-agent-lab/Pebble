@@ -1,20 +1,19 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { ApiError, createTask, sendMessage } from "../api";
+import {
+  ApiError, cachedCatalog, cachedModels, createTask, listModels, type ModelCatalog, type ModelEntry,
+} from "../api";
 import AppShell, { TaskLinks } from "../components/AppShell";
+import Composer from "../components/Composer";
 import Notice from "../components/Notice";
 import { useTasks } from "../tasks";
 
-const SEND_ICON = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="12" y1="19" x2="12" y2="5" />
-    <polyline points="5 12 12 5 19 12" />
-  </svg>
-);
+const STALE_RETRY_MS = 5000;
 
-/** 输入框跟着内容长高，到上限后改为内部滚动，不把页面顶出视野。 */
-const MAX_INPUT_HEIGHT = 200;
+/** 默认型号在目录里就选它，否则留空，由页面提示默认模型不可用。 */
+const initialModel = (catalog: ModelCatalog | null) =>
+  catalog?.models.some((entry) => entry.id === catalog.default_model) ? catalog.default_model : "";
 
 /**
  * 新任务入口。任务索引在侧栏，这里只有一件事：写下目标。
@@ -23,37 +22,57 @@ const MAX_INPUT_HEIGHT = 200;
 export default function TaskListPage() {
   const navigate = useNavigate();
   const { error, reload } = useTasks();
-  const [goal, setGoal] = useState("");
+  const [models, setModels] = useState<ModelEntry[]>(() => cachedModels() ?? []);
+  const [model, setModel] = useState(() => initialModel(cachedCatalog()));
+  const [catalogStale, setCatalogStale] = useState(false);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<ApiError | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<ApiError | null>(null);
-  const input = useRef<HTMLTextAreaElement>(null);
+  const retryTimer = useRef<number | null>(null);
 
-  const resize = () => {
-    const node = input.current;
-    if (node === null) return;
-    node.style.height = "auto";
-    node.style.height = `${Math.min(node.scrollHeight, MAX_INPUT_HEIGHT)}px`;
-  };
+  // 先用缓存的目录立即可选，再请求最新目录；读不到时沿用旧目录并提示，只有从未读到过才报错。
+  const loadModels = useCallback(async (autoRetry: boolean) => {
+    setCatalogLoading(true);
+    try {
+      const catalog = await listModels();
+      setModels(catalog.models);
+      setModel((current) => catalog.models.some((entry) => entry.id === current)
+        ? current : initialModel(catalog));
+      setCatalogStale(catalog.stale);
+      setCatalogError(catalog.models.some((entry) => entry.id === catalog.default_model)
+        ? null
+        : new ApiError("invalid_model", `默认模型当前不可用：${catalog.default_model}，请另选模型`, 422));
+      // 服务端在后台刷新目录：稍后再取一次，刷新成功时提示自动消失。
+      if (catalog.stale && autoRetry) {
+        retryTimer.current = window.setTimeout(() => void loadModels(false), STALE_RETRY_MS);
+      }
+    } catch (failure) {
+      if (cachedModels() !== null) setCatalogStale(true);
+      else setCatalogError(failure instanceof ApiError ? failure : new ApiError("offline", String(failure), 0));
+    } finally {
+      setCatalogLoading(false);
+    }
+  }, []);
 
-  const start = async () => {
-    const text = goal.trim();
-    if (text === "" || starting) return;
+  useEffect(() => {
+    void loadModels(true);
+    return () => { if (retryTimer.current !== null) window.clearTimeout(retryTimer.current); };
+  }, [loadModels]);
+
+  const start = async (message: string, files: File[]) => {
+    if (starting) return new ApiError("busy", "任务正在创建", 409);
     setStarting(true);
     setStartError(null);
     try {
-      const task = await createTask(text);
-      // 目标同时作为首条消息交给 Agent；Agent 未接入时任务已建立，提交失败只提示。
-      try {
-        await sendMessage(task.task_id, text);
-      } catch (failure) {
-        if (!(failure instanceof ApiError) || !failure.unavailable) throw failure;
-        setStartError(failure);
-      }
-      setGoal("");
+      const created = await createTask(message, model, files);
       void reload();
-      navigate(`/tasks/${task.task_id}`);
+      navigate(`/tasks/${created.task.task_id}`);
+      return null;
     } catch (failure) {
-      setStartError(failure instanceof ApiError ? failure : new ApiError("offline", String(failure), 0));
+      const error = failure instanceof ApiError ? failure : new ApiError("offline", String(failure), 0);
+      setStartError(error);
+      return error;
     } finally {
       setStarting(false);
     }
@@ -65,38 +84,13 @@ export default function TaskListPage() {
         <div className="hero-inner">
           <h1 className="hero-title">今天要做什么？</h1>
 
-          <div className="starter">
-            <textarea
-              ref={input}
-              className="starter-input"
-              rows={1}
-              value={goal}
-              placeholder="输入目标开始任务…"
-              aria-label="新任务目标"
-              onChange={(event) => {
-                setGoal(event.target.value);
-                resize();
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void start();
-                }
-              }}
-            />
-            <div className="starter-foot">
-              <span className="starter-tip">Enter 发起 · Shift + Enter 换行</span>
-              <button
-                type="button"
-                className="starter-send"
-                onClick={() => void start()}
-                disabled={goal.trim() === "" || starting}
-                aria-label="发起任务"
-              >
-                {SEND_ICON}
-              </button>
-            </div>
-          </div>
+          <Composer placeholder="随心输入" sending={starting} model={model} models={models}
+            onModelChange={setModel} onSubmit={start}
+            catalogNotice={catalogStale ? {
+              message: "模型目录可能不是最新",
+              retrying: catalogLoading,
+              onRetry: () => void loadModels(false),
+            } : null} />
 
           {error !== null && (
             <Notice
@@ -111,6 +105,21 @@ export default function TaskListPage() {
               {error.message}
               <br />
               确认 Pebble 服务已启动后重试。已保存的草稿与待确认内容不会丢失。
+            </Notice>
+          )}
+
+          {catalogError !== null && (
+            <Notice
+              tone="danger"
+              title="模型目录不可用"
+              actions={
+                <button type="button" className="btn-secondary" disabled={catalogLoading}
+                  onClick={() => void loadModels(false)}>
+                  {catalogLoading ? "读取中…" : "重新读取"}
+                </button>
+              }
+            >
+              {catalogError.message}
             </Notice>
           )}
 

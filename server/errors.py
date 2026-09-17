@@ -9,6 +9,18 @@ class DependencyUnavailableError(Exception):
     """所需外部能力尚未接入，工作未被接受。"""
 
 
+class ModelValidationError(Exception):
+    def __init__(self, model: str):
+        self.model = model
+        super().__init__(f"模型当前不可用：{model}")
+
+
+class AttachmentValidationError(Exception):
+    def __init__(self, errors: list[dict[str, str]]):
+        self.errors = errors
+        super().__init__(str(errors))
+
+
 class NotFoundError(Exception):
     pass
 
@@ -99,6 +111,14 @@ def error_details(error: Exception) -> dict | None:
     """已知业务异常的名称与附带字段；其他异常返回 None，由调用方按未预期错误处理。"""
     if isinstance(error, DependencyUnavailableError):
         return {"error": "unavailable", "message": str(error)}
+    if isinstance(error, ModelValidationError):
+        return {"error": "invalid_model", "message": str(error), "model": error.model}
+    if isinstance(error, AttachmentValidationError):
+        return {
+            "error": "invalid_attachment",
+            "message": "附件未通过校验",
+            "errors": error.errors,
+        }
     if isinstance(error, NotFoundError):
         return {"error": "not_found", "message": f"对象不存在：{error}"}
     if isinstance(error, VersionConflictError):

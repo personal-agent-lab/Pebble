@@ -15,6 +15,7 @@ import threading
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -87,10 +88,21 @@ class Service:
         self.process.communicate(timeout=15)
         self.process = None
 
-    def request(self, path, body=None, method=None, timeout=30):
-        data = None if body is None else json.dumps(body).encode()
+    def request(self, path, body=None, method=None, timeout=30, form=False):
+        data = (
+            None
+            if body is None
+            else (urlencode(body).encode() if form else json.dumps(body).encode())
+        )
         req = Request(
-            self.base + path, data=data, method=method, headers={"Content-Type": "application/json"}
+            self.base + path,
+            data=data,
+            method=method,
+            headers={
+                "Content-Type": (
+                    "application/x-www-form-urlencoded" if form else "application/json"
+                )
+            },
         )
         try:
             with urlopen(req, timeout=timeout) as response:
@@ -135,7 +147,8 @@ def review_rows(task_id: str):
 
 def message_run_ids(task_id: str):
     return {
-        row["run_id"] for row in query(
+        row["run_id"]
+        for row in query(
             "SELECT run_id FROM agent_runs WHERE task_id = ? AND kind = 'message'", (task_id,)
         )
     }
@@ -198,7 +211,7 @@ class SseListener:
 
 
 def send_and_wait(service: Service, task_id: str, message: str):
-    status, _ = service.request(f"/tasks/{task_id}/messages", {"message": message})
+    status, _ = service.request(f"/tasks/{task_id}/messages", {"message": message}, form=True)
     assert status == 202
     wait_for(
         lambda: service.request(f"/tasks/{task_id}")[1]["latest_run"]["status"] == "done",
@@ -208,11 +221,20 @@ def send_and_wait(service: Service, task_id: str, message: str):
 
 def phase_a(service: Service) -> dict:
     log("A/5 创建任务并订阅 SSE")
-    _, task = service.request("/tasks", {"goal": "记忆回顾验收：周期触发"})
-    task_id = task["task_id"]
+    status, created = service.request(
+        "/tasks",
+        {"model": os.environ.get("PEBBLE_QODER_MODEL", "auto"), "message": PHASE_A_MESSAGES[0]},
+        form=True,
+    )
+    assert status == 201, created
+    task_id = created["task"]["task_id"]
     listener = SseListener(service, task_id).start()
+    wait_for(
+        lambda: service.request(f"/tasks/{task_id}")[1]["latest_run"]["status"] == "done",
+        timeout=240,
+    )
 
-    for message in PHASE_A_MESSAGES:
+    for message in PHASE_A_MESSAGES[1:]:
         send_and_wait(service, task_id, message)
     run_ids = message_run_ids(task_id)
     assert all_run_kinds(task_id) == {"message"}, all_run_kinds(task_id)
@@ -270,9 +292,18 @@ def phase_a(service: Service) -> dict:
 
 def phase_b(service: Service) -> str:
     log("B/5 重启恢复：另起任务攒五轮")
-    _, task = service.request("/tasks", {"goal": "记忆回顾验收：重启恢复"})
-    task_id = task["task_id"]
-    for message in PHASE_B_MESSAGES:
+    status, created = service.request(
+        "/tasks",
+        {"model": os.environ.get("PEBBLE_QODER_MODEL", "auto"), "message": PHASE_B_MESSAGES[0]},
+        form=True,
+    )
+    assert status == 201, created
+    task_id = created["task"]["task_id"]
+    wait_for(
+        lambda: service.request(f"/tasks/{task_id}")[1]["latest_run"]["status"] == "done",
+        timeout=240,
+    )
+    for message in PHASE_B_MESSAGES[1:]:
         send_and_wait(service, task_id, message)
 
     log("B/5 等待复盘进入 running 后强杀进程")
@@ -299,8 +330,10 @@ def phase_b(service: Service) -> str:
     log("B/5 第六条消息触发计数自愈")
     send_and_wait(service, task_id, "对了，复盘机制验证得怎么样了？")
     wait_for(
-        lambda: review_rows(task_id)[-1]["status"] == "done"
-        and review_rows(task_id)[-1]["origin"] == "interval",
+        lambda: (
+            review_rows(task_id)[-1]["status"] == "done"
+            and review_rows(task_id)[-1]["origin"] == "interval"
+        ),
         timeout=300,
     )
     rows = review_rows(task_id)

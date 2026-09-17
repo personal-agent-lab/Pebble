@@ -34,14 +34,14 @@ def test_starts_without_gmail_or_icloud_and_hides_their_tools(isolated):
 
     with TestClient(app) as client:
         health = client.get("/api/health").json()
-        created = client.post("/api/tasks", json={"goal": "只聊天"})
+        created = app.state.tasks.create_task("只聊天")
         documents = client.get("/api/kb/documents")
 
     assert health["status"] == "ok"
     assert health["services"]["gmail"]["status"] == "unconfigured"
     assert health["services"]["calendar"]["status"] == "unconfigured"
     assert "iCloud" in health["services"]["calendar"]["detail"]
-    assert created.status_code == 201
+    assert created["goal"] == "只聊天"
     assert documents.status_code == 200
 
     names = tool_names(app)

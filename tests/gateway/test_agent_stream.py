@@ -29,7 +29,7 @@ from server.agent.toolset import ALLOWED_EFFECTS, ToolDeps, TurnKind, exposed_to
 from server.config import Settings
 from server.db import init_db
 from server.errors import DependencyUnavailableError
-from server.gateway.agent_contract import Turn
+from server.gateway.agent_contract import Turn, TurnAttachment
 from server.gateway.runtime import execution_result_content
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
@@ -134,7 +134,7 @@ def test_message_turn_allows_drafting_and_resumes_session(settings):
     assert "gmail_prepare_reply" in names and "gmail_update_draft" in names
     assert options.resume == "session-1"
     assert options.include_partial_messages is True
-    assert options.cwd == gateway.workspace
+    assert options.cwd == gateway.workspaces / "task-1"
 
 
 @pytest.mark.parametrize("kind", list(TurnKind))
@@ -157,13 +157,70 @@ def test_user_turn_permission_callback_allows_only_declared_web_tools(settings):
     assert options.can_use_tool is not None
     context = ToolPermissionContext()
 
-    fetch = asyncio.run(
-        options.can_use_tool("WebFetch", {"url": "https://example.com"}, context)
-    )
+    fetch = asyncio.run(options.can_use_tool("WebFetch", {"url": "https://example.com"}, context))
     unexpected = asyncio.run(options.can_use_tool("Bash", {"command": "true"}, context))
 
     assert isinstance(fetch, PermissionResultAllow)
     assert isinstance(unexpected, PermissionResultDeny)
+
+
+def test_attachment_turn_enables_read_only_inside_task_workspace(settings):
+    gateway = make_gateway(settings)
+    workspace = gateway.workspaces / "task-1"
+    attachment = workspace / "attachments" / "file-1"
+    attachment.parent.mkdir(parents=True, exist_ok=True)
+    attachment.write_text("random", encoding="utf-8")
+    turn = Turn(
+        kind=TurnKind.MESSAGE,
+        task_id="task-1",
+        sdk_session_id=None,
+        message="读取附件",
+        attachments=(
+            TurnAttachment(
+                "file-1", "note.txt", "text/plain", 6, attachment, "attachments/file-1.txt"
+            ),
+        ),
+    )
+    options = options_for_turn(gateway, turn)
+    context = ToolPermissionContext()
+
+    assert "Read" in options.allowed_tools
+    inside = asyncio.run(options.can_use_tool("Read", {"file_path": "attachments/file-1"}, context))
+    outside = asyncio.run(
+        options.can_use_tool("Read", {"file_path": "../task-2/attachments/file-2"}, context)
+    )
+    shell = asyncio.run(options.can_use_tool("Bash", {"command": "true"}, context))
+    assert isinstance(inside, PermissionResultAllow)
+    assert isinstance(outside, PermissionResultDeny)
+    assert isinstance(shell, PermissionResultDeny)
+
+
+def test_image_attachment_uses_structured_base64_input(settings):
+    gateway = make_gateway(settings)
+    path = gateway.workspaces / "task-1" / "attachments" / "image-1"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"random-image")
+    turn = Turn(
+        kind=TurnKind.MESSAGE,
+        task_id="task-1",
+        sdk_session_id=None,
+        message="看图",
+        attachments=(
+            TurnAttachment(
+                "image-1", "image.png", "image/png", 12, path, "attachments/image-1.png"
+            ),
+        ),
+    )
+
+    payload = asyncio.run(collect(gateway._query_input(turn)))[0]
+    content = payload["message"]["content"]
+    assert content[0] == {"type": "text", "text": "看图"}
+    assert content[1]["type"] == "image"
+    assert content[1]["source"] == {
+        "type": "base64",
+        "media_type": "image/png",
+        "data": "cmFuZG9tLWltYWdl",
+    }
 
 
 @pytest.mark.parametrize("kind", list(TurnKind))
@@ -179,12 +236,15 @@ def test_memory_tools_are_never_visible_in_foreground_turns(settings, kind):
 def test_review_options_expose_review_tools_in_fresh_session(settings):
     gateway = make_gateway(settings)
     options = gateway._oneshot_options(
-        "回顾指令", f"{MCP_MOUNT_PATH}/{TURN_TOKEN}", gateway.review_tools
+        "回顾指令",
+        f"{MCP_MOUNT_PATH}/{TURN_TOKEN}",
+        gateway.review_tools,
+        task_id="task-1",
+        model="q-model",
     )
 
     assert options.allowed_tools == [
-        f"mcp__{TOOL_SERVER_NAME}__{name}"
-        for name in ("memory_edit",)
+        f"mcp__{TOOL_SERVER_NAME}__{name}" for name in ("memory_edit",)
     ]
     assert options.tools == []
     assert options.setting_sources == []
@@ -204,12 +264,15 @@ def test_review_options_expose_review_tools_in_fresh_session(settings):
 def test_judge_options_expose_judgment_tools_in_fresh_session(settings):
     gateway = make_gateway(settings)
     options = gateway._oneshot_options(
-        "判断指令", f"{MCP_MOUNT_PATH}/{TURN_TOKEN}", gateway.judge_tools
+        "判断指令",
+        f"{MCP_MOUNT_PATH}/{TURN_TOKEN}",
+        gateway.judge_tools,
+        task_id="task-1",
+        model="q-model",
     )
 
     assert options.allowed_tools == [
-        f"mcp__{TOOL_SERVER_NAME}__{name}"
-        for name in ("memory_edit", "memory_ask")
+        f"mcp__{TOOL_SERVER_NAME}__{name}" for name in ("memory_edit", "memory_ask")
     ]
     assert options.tools == []
     assert options.system_prompt == "判断指令"
@@ -627,12 +690,14 @@ def run_judge(gateway: QoderGateway, monkeypatch, *calls: ToolCall, task_id="tas
 
 def test_judge_memory_records_real_tool_results(settings, monkeypatch):
     gateway = make_gateway(settings)
+    task_id = gateway.tasks_store.create_task("判断记忆")["task_id"]
 
     records = run_judge(
         gateway,
         monkeypatch,
         ToolCall("memory_edit", {"target": "user", "new_text": "默认使用中文"}),
         ToolCall("memory_ask", {"question": "要改哪一条？"}),
+        task_id=task_id,
     )
 
     assert [record["tool"] for record in records] == ["memory_edit", "memory_ask"]
@@ -646,11 +711,13 @@ def test_judge_memory_records_real_tool_results(settings, monkeypatch):
 
 def test_judge_memory_records_structured_errors(settings, monkeypatch):
     gateway = make_gateway(settings)
+    task_id = gateway.tasks_store.create_task("判断记忆")["task_id"]
 
     records = run_judge(
         gateway,
         monkeypatch,
         ToolCall("memory_edit", {"target": "user", "new_text": "甲" * 1376}),
+        task_id=task_id,
     )
 
     assert records[0]["error"] == {

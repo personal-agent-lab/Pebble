@@ -58,3 +58,8 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def default_model(settings: Settings | None = None) -> str:
+    """未指定型号时的服务端有效模型：配置值，否则为 Auto。"""
+    return (settings or get_settings()).qoder_model or "auto"

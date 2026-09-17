@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from server.attachments import AttachmentStore
+from server.config import default_model
 from server.db import session, write
 from server.errors import (
     NotEditableError,
@@ -40,13 +42,15 @@ def next_version(conn: sqlite3.Connection, operation_id: str, expected_version: 
 
 
 class SessionStore:
-    def __init__(self, path: Path | None = None):
+    def __init__(self, path: Path | None = None, attachments: AttachmentStore | None = None):
         self.path = path
+        self.attachments = attachments or AttachmentStore()
 
-    def create_task(self, goal: str) -> dict:
+    def create_task(self, goal: str, model: str | None = None) -> dict:
         with session(self.path) as conn, write(conn):
             task_id = str(uuid4())
-            repo.insert_task(conn, task_id, goal, timestamp())
+            selected = model or default_model()
+            repo.insert_task(conn, task_id, goal, timestamp(), model=selected)
             return repo.task(conn, task_id)
 
     def get_task(self, task_id: str) -> dict:
@@ -63,6 +67,7 @@ class SessionStore:
             if repo.has_active_run(conn, task_id):
                 raise TaskActiveError(task_id)
             repo.delete_task(conn, task_id)
+        self.attachments.delete_task_files(task_id)
 
     def bind_sdk_session(self, task_id: str, sdk_session_id: str) -> dict:
         with session(self.path) as conn, write(conn):

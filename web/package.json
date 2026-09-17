@@ -13,6 +13,7 @@
   "dependencies": {
     "@milkdown/kit": "^7.22.1",
     "@milkdown/react": "^7.22.1",
+    "@phosphor-icons/react": "^2.1.10",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",

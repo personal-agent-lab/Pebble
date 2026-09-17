@@ -7,8 +7,8 @@ import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { OperationSummary, Task, TaskDetail, Timeline } from "../api";
 
 const tasks: Task[] = [
-  { task_id: "task-1", goal: "没读过的任务", source: "mail", sdk_session_id: null, created_at: "2026-09-14T01:00:00Z" },
-  { task_id: "task-2", goal: "正在看的任务", source: "user", sdk_session_id: null, created_at: "2026-09-14T02:00:00Z" },
+  { task_id: "task-1", goal: "没读过的任务", model: "Auto", source: "mail", sdk_session_id: null, created_at: "2026-09-14T01:00:00Z" },
+  { task_id: "task-2", goal: "正在看的任务", model: "Auto", source: "user", sdk_session_id: null, created_at: "2026-09-14T02:00:00Z" },
 ];
 const operations: Record<string, OperationSummary[]> = {
   "task-1": [{ operation_id: "op-1", type: "mail_draft", version: 1, status: "pending" }],

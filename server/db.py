@@ -7,9 +7,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from server.config import get_settings
+from server.config import default_model, get_settings
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -243,6 +243,20 @@ SCHEMA_V13 = (
     "CREATE VIRTUAL TABLE history_fts USING fts5(body, tokenize='trigram')",
 )
 
+# 任务固定模型；附件使用任务内不可变标识，时间线只保存有序关联。
+SCHEMA_V14 = (
+    "ALTER TABLE tasks ADD COLUMN model TEXT NOT NULL DEFAULT 'auto'",
+    "CREATE TABLE uploaded_files (file_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), filename TEXT NOT NULL, "
+    "mime_type TEXT NOT NULL, size INTEGER NOT NULL CHECK(size >= 0), sha256 TEXT NOT NULL, "
+    "storage_path TEXT NOT NULL, created_at TEXT NOT NULL)",
+    "CREATE INDEX uploaded_files_task ON uploaded_files(task_id)",
+    "CREATE TABLE timeline_item_attachments ("
+    "item_id TEXT NOT NULL REFERENCES task_timeline_items(item_id), "
+    "file_id TEXT NOT NULL REFERENCES uploaded_files(file_id), position INTEGER NOT NULL, "
+    "PRIMARY KEY(item_id,file_id), UNIQUE(item_id,position))",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -257,6 +271,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     11: SCHEMA_V11,
     12: SCHEMA_V12,
     13: SCHEMA_V13,
+    14: SCHEMA_V14,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000
@@ -324,6 +339,12 @@ def init_db(path: Path | None = None) -> int:
             for version in range(current + 1, SCHEMA_VERSION + 1):
                 for statement in SCHEMA_MIGRATIONS[version]:
                     conn.execute(statement)
+                if version == 14:
+                    # 旧任务此前逐轮使用全局配置；迁移时把当下有效型号固化到任务。
+                    conn.execute(
+                        "UPDATE tasks SET model = ?",
+                        (default_model(),),
+                    )
             if current != SCHEMA_VERSION:
                 conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
             if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:

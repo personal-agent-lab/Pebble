@@ -47,14 +47,14 @@ flowchart TD
 
 | 组件 | 职责 | 位置 |
 | --- | --- | --- |
-| Web Chat | PC 与手机共用响应式界面，以有序时间线展示对话和完整草稿卡，提供草稿编辑、定向修改、明确确认与逐项结果展示 | `web/`（TypeScript + React + Vite） |
+| Web Chat | PC 与手机共用响应式界面，以统一 Composer 选择新任务模型、上传附件，并在有序时间线展示对话、附件和完整草稿卡 | `web/`（TypeScript + React + Vite） |
 | Gateway | HTTP、SSE、认证与远程访问入口；接收用户与触发源输入，定位会话，启动 Agent 并返回结果 | `server/api/`（HTTP/SSE/认证）、`server/gateway/`（后台运行） |
 | Context | 每轮装配基础提示与常驻材料（`USER.md`、`MEMORY.md`、资料目录），控制各块容量；不预先检索资料或历史 | `server/agent/context.py`、`server/agent/client.py` |
 | Agent Loop | 通过 Qoder Agent SDK 调用模型和工具，加载已生效 Skills，按目标决定下一步 | `server/agent/` |
 | Memory | 保存用户背景、偏好、长期目标与约定，每轮判断与后台回顾负责写入；不记录出处 | `server/memory/` |
 | Skills | 保存可复用流程，管理两条来源、草稿、审核、生效版本及 Git 历史 | `server/skills/` |
 | Tools | 集中注册、校验和调用工具；每个实现负责自己的认证、协议和业务校验 | `server/tools/` |
-| Session Store | 保存会话关联、任务目标、运行状态、网页时间线、待确认内容及版本、确认记录和逐项执行结果 | `server/sessions/`、`server/approval/` |
+| Session Store | 保存会话关联、任务目标与固定模型、运行状态、网页时间线、附件关联、待确认内容及版本、确认记录和逐项执行结果 | `server/sessions/`、`server/attachments.py`、`server/approval/` |
 | Trigger Source | 触发源插孔与实现；首版为 Gmail 增量检测，把未处理邮件交给 Gateway | `server/gateway/runtime.py`（插孔）、`server/tools/gmail/sync.py`（实现） |
 
 PC 与手机共用 `web/` 中的页面组件和交互逻辑，按屏幕尺寸调整布局；两端提供规格要求的完整功能，使用同一套 API、任务状态和确认流程。手机不要求与服务在同一局域网，远程访问的传输与安全要求见第 6 节。
@@ -70,6 +70,7 @@ Pebble/
 │   ├── main.py               # 服务启动、SDK 配置与工具注册
 │   ├── config.py             # 模型、持久目录与外部服务凭证引用
 │   ├── db.py                 # SQLite 连接、约束与迁移
+│   ├── attachments.py        # 上传校验、任务隔离存储与时间线附件关联
 │   ├── errors.py             # 跨模块共享的业务异常
 │   ├── pyproject.toml
 │   ├── api/                  # HTTP/SSE 传输层
@@ -81,6 +82,7 @@ Pebble/
 │   │   └── agent_contract.py # Agent 调用接口与事件类型
 │   ├── agent/                # 不实现自有循环，只装配 SDK
 │   │   ├── client.py         # SDK 客户端装配、消息流转与会话恢复
+│   │   ├── models.py         # 当前 Qoder 账号模型目录及创建/运行时校验
 │   │   ├── mcp.py            # 应用进程内的工具端点：按轮次登记模型可见工具
 │   │   ├── toolset.py        # 按装配依赖绑定业务工具，按轮次筛选模型可见范围
 │   │   ├── context.py        # 每轮系统提示、常驻材料（记忆、资料目录）与技能名单组装
@@ -179,7 +181,9 @@ Gmail、Calendar、Personal KB、Memory 与 Skills 都通过相同入口注册�
 
 ### Session Store
 
-任务开始、等待用户、准备操作和取得执行结果时保存必要状态。每个 Agent run 产生有序时间线项：连续文字增量合并为一个文字项；草稿工具成功时结束当前文字项并在当前位置插入一张卡；后续文字建立新项。页面刷新后读取已保存时间线；SSE 只传输实时变化，断开不取消后台执行，运行结束后前端重新读取时间线对账。
+任务开始、等待用户、准备操作和取得执行结果时保存必要状态。每个任务在创建时保存所选模型，之后每个主回答、恢复轮、记忆判断与回顾均读取这一字段；标题生成继续使用独立的 `PEBBLE_TITLE_MODEL`。每个 Agent run 产生有序时间线项：连续文字增量合并为一个文字项；草稿工具成功时结束当前文字项并在当前位置插入一张卡；后续文字建立新项。页面刷新后读取已保存时间线；SSE 只传输实时变化，断开不取消后台执行，运行结束后前端重新读取时间线对账。
+
+用户消息的文字可为空，但文字和附件不能同时为空。上传先整批完成签名、UTF-8、类型、数量和大小校验，任一失败则整条消息不登记。附件以内部 ID 加白名单内的小写扩展名落在 `data_dir/agent/workspaces/{task_id}/attachments/`（Runtime 的 `Read` 按扩展名识别 PDF 与图片），原文件名只作为元数据；SQLite 保存任务归属与时间线顺序。图片同时转成 SDK 结构化 Base64 图片块，普通文件由该任务工作目录中的 `Read` 读取；只有存在附件的用户轮开放 `Read`，权限回调把路径限制在当前任务 workspace。附件材料明确标为不可信输入，不改变外部写授权。删除任务时先清理附件记录，再删除整个任务 workspace。
 
 时间线只保存草稿卡位置和 `operation_id`，读取时物化该操作的最新版本和执行状态。同一草稿的直接编辑和 Agent 修改都只新增不可变版本，不移动卡片，也不新增第二张卡。卡片定向消息把目标操作的最新完整内容作为本轮材料，同时工具端点禁止新建操作或读写其他草稿。
 
@@ -291,7 +295,7 @@ Gateway 以 HTTP 提交操作、SSE 展示进度。Agent Loop 使用 `qodercn-ag
 
 ### 模型与 SDK 约束
 
-模型先采用一个明确配置的模型完成闭环。Qoder 托管模型从 `get_available_models()` 获取；使用自有 API Key 时通过 `resolve_model` 返回 `CustomModel`。BYOK 三项（供应商、密钥、型号）在装配期校验完整性，缺项直接报错，不静默退回托管模型；供应商标识经 `agent/client.py` 的登记表校验，未登记同样报错并在报错中列出可登记项，登记表的增补以 `list_byok_providers()` 目录为准，协议风格统一取 `openai`。不增加动态路由模块。[Python SDK 参考](https://docs.qoder.com/cli/sdk/references-python)
+模型目录由 SDK 的 `get_available_models()` 读取（与 Agent 轮次共用 `data_dir/agent/config`），只返回当前账号实际可用的 managed/custom 型号，稳定 ID 取条目的 `value`：托管型号如 `qmodel_38max`，自定义型号为 UUID。CLI `--list-models` 只打印显示名，无法还原调用值，不使用。目录读取区分两类结果：读不到目录是暂时的，读到目录而型号不在其中才是确定的不可用。最近一次成功读到的目录连同读取时间落盘在 `data_dir/agent/models.json`，服务启动时后台预读；读取失败先重试，仍失败不覆盖缓存，并发读取共享同一次子进程。`GET /api/models` 有缓存即立即返回（超过 5 分钟或上次刷新失败时后台刷新），以 `stale` 标记最近一次刷新失败，从未读到过才同步读取。新建任务在写入前重新读取目录；读不到时按 24 小时内的缓存判断，连缓存也没有才返回服务不可用。已有任务每轮校验固定型号（复用 60 秒内的目录），读不到且无可用缓存时放行，由模型调用本身给出结果；型号确定不在目录中时本轮明确失败，不改用其他模型。前端在本机保存上次目录，先显示再刷新，读取失败时沿用旧目录并提供重试。自动邮件任务显式保存服务端默认模型。使用自有 API Key 时通过 `resolve_model` 返回 `CustomModel`。BYOK 三项（供应商、密钥、型号）在装配期校验完整性，缺项直接报错，不静默退回托管模型；供应商标识经 `agent/client.py` 的登记表校验，未登记同样报错并在报错中列出可登记项，登记表的增补以 `list_byok_providers()` 目录为准，协议风格统一取 `openai`。不增加动态路由模块。[Python SDK 参考](https://docs.qoder.com/cli/sdk/references-python)
 
 SDK 显式限定项目工具和必要的 Skill 能力，使用独立工作目录与配置目录，限制配置加载来源，禁用可绕过外部写授权或 Skill 审核的通用 Shell、任意文件写入及无关扩展；使用面向个人助理的系统提示。工具授权不使用权限绕过模式。[权限控制](https://docs.qoder.com/cli/sdk/permissions)
 
@@ -299,7 +303,7 @@ SDK 显式限定项目工具和必要的 Skill 能力，使用独立工作目录
 
 模型与外部服务凭证仅保存在服务端，不进入聊天上下文、前端或 Git。外部内容（邮件、资料、Skill 文本）中出现的指令只作为材料，不能代替用户授权。
 
-实例数据目录保存 SQLite、SDK 会话与子进程工作目录、Gmail 同步游标与凭证、`kb/`、`kb-index.sqlite3`、资料导入状态 `kb-imports.json`、`memory/`、`skills/` 与 `skill_drafts/`。日志关联会话和操作，保留实际结果，避免记录凭证。
+实例数据目录保存 SQLite、SDK 会话与每任务独立工作目录（含上传附件）、Gmail 同步游标与凭证、`kb/`、`kb-index.sqlite3`、资料导入状态 `kb-imports.json`、`memory/`、`skills/` 与 `skill_drafts/`。日志关联会话和操作，保留实际结果，避免记录凭证。
 
 ## 7. 交付阶段
 
@@ -360,7 +364,7 @@ git 提交遵循 `AGENTS.md` 的约定：当前分支、英文 `[Module] Descrip
 
 ## 10. 当前实现
 
-已实现：Web、Gateway、Agent 装配、Gmail 域、Calendar 域、长期 Memory 文件与每轮专用记忆判断（主 Agent 不再持有记忆工具）、后台记忆回顾、Personal KB Phase 1–4（`kb_list`/`kb_save`/`kb_read`/`kb_update`/`kb_history`/`kb_search`/`kb_delete`/`kb_move`/`kb_restore`/`kb_archive`，资料为 `kb/` 下的 Markdown 文件，由数据目录内的本地 Git 仓库做版本；`kb-index.sqlite3` 是数据目录内的派生 FTS5 索引，按二级标题分节、写入后增量替换、以 `kb/` 的 Git tree 标识判断是否需要重建；引用带完整 commit 与行号区间，可按引用读回该版本原文，回答不展示来源；每次操作前把用户在文件系统里的改动纳入版本，移动按 frontmatter 的 `id` 识别；删除保留历史，`kb_list` 可列出已删除资料供恢复；每份资料可带一句话说明 `summary`，`catalog.py` 据此每轮现算资料目录，经 `agent/client.py` 排在长期记忆之后注入；资料管理界面为 `web/src/pages/KbPage.tsx`（浏览与搜索）与 `KbDocumentPage.tsx`（Milkdown 所见即所得编辑，按需懒加载），接口在 `api/routes.py` 的 `/api/kb/*`；模块在 `server/tools/personal_kb/`，经 `server/storage/datarepo.py` 与 Memory 共享进程内锁与 `.gitignore`；新增 `pyyaml` 依赖）、Session Store 与 Confirmation。SQLite schema 为 13（schema 13 新增历史检索的派生索引表 `history_items` 与 `history_fts`；资料身份写在 frontmatter、版本走 Git；schema 11 曾新增回答来源表，schema 12 随撤销来源展示将其删除）。长期记忆管理页面为 `web/src/pages/MemoryPage.tsx`（两份 Markdown 文档，复用资料页的 Milkdown 编辑器直接编辑，按需懒加载），接口在 `api/routes.py` 的 `GET /api/memory` 与 `PUT /api/memory/{target}`。未实现：主题页与导入（Phase 5）、Skills、认证与 HTTPS 远程访问。
+已实现：Web、Gateway、Agent 装配、按任务固定模型与附件上传、Gmail 域、Calendar 域、长期 Memory 文件与每轮专用记忆判断（主 Agent 不再持有记忆工具）、后台记忆回顾、Personal KB Phase 1–4（`kb_list`/`kb_save`/`kb_read`/`kb_update`/`kb_history`/`kb_search`/`kb_delete`/`kb_move`/`kb_restore`/`kb_archive`，资料为 `kb/` 下的 Markdown 文件，由数据目录内的本地 Git 仓库做版本；`kb-index.sqlite3` 是数据目录内的派生 FTS5 索引，按二级标题分节、写入后增量替换、以 `kb/` 的 Git tree 标识判断是否需要重建；引用带完整 commit 与行号区间，可按引用读回该版本原文，回答不展示来源；每次操作前把用户在文件系统里的改动纳入版本，移动按 frontmatter 的 `id` 识别；删除保留历史，`kb_list` 可列出已删除资料供恢复；每份资料可带一句话说明 `summary`，`catalog.py` 据此每轮现算资料目录，经 `agent/client.py` 排在长期记忆之后注入；资料管理界面为 `web/src/pages/KbPage.tsx`（浏览与搜索）与 `KbDocumentPage.tsx`（Milkdown 所见即所得编辑，按需懒加载），接口在 `api/routes.py` 的 `/api/kb/*`；模块在 `server/tools/personal_kb/`，经 `server/storage/datarepo.py` 与 Memory 共享进程内锁与 `.gitignore`；新增 `pyyaml` 依赖）、Session Store 与 Confirmation。SQLite schema 为 14（schema 14 固化任务模型并新增上传文件与时间线附件关联；schema 13 新增历史检索的派生索引表 `history_items` 与 `history_fts`；资料身份写在 frontmatter、版本走 Git；schema 11 曾新增回答来源表，schema 12 随撤销来源展示将其删除）。长期记忆管理页面为 `web/src/pages/MemoryPage.tsx`（两份 Markdown 文档，复用资料页的 Milkdown 编辑器直接编辑，按需懒加载），接口在 `api/routes.py` 的 `GET /api/memory` 与 `PUT /api/memory/{target}`。未实现：主题页与导入（Phase 5）、Skills、认证与 HTTPS 远程访问。
 
 ### Gateway 与触发源
 
@@ -370,7 +374,7 @@ git 提交遵循 `AGENTS.md` 的约定：当前分支、英文 `[Module] Descrip
 
 任务创建时以触发文案或用户首句作为目标；首个调用成功结束后，运行时把该轮对话文本交给一次性的无工具模型调用生成不超过 12 字的短标题，改写任务目标。生成失败或为空时保留原目标；该调用不接续任务会话，也不进入对话历史。
 
-schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`。schema 4 将回复专用草稿表收敛为新邮件与回复共用的 `mail_drafts` 和 `mail_draft_versions`。schema 5 增加 `task_timeline_items`。schema 6 移除邮件附件绑定。schema 7 增加日程内容表、`creating/created` 状态与日程时间线卡，并将执行结果统一保存为 JSON。schema 8 取消日程卡与待确认预览：时间线类型收回 `text`、`mail_draft`、`error`，删除历史日程卡条目，日程内容表改名为 `calendar_events` 和 `calendar_event_versions`，操作与执行记录保留。schema 9 增加 `memory_reviews`（周期与手动后台记忆回顾的状态机，部分唯一索引保证每任务至多一条未完成回顾）。schema 10 为时间线增加 `notice` 类型（程序生成的记忆提示：挂在触发它的消息轮上，无角色）。schema 11 增加 `task_run_sources`：模型成功读取资料原文时按轮次记录引用与本次读到的片段，同一轮同一版本与行号唯一。schema 12 撤销回答来源展示，删除 `task_run_sources`。schema 13 增加历史对话检索的派生索引：`history_items`（条目与全文行的对应，以及邮件草稿写入索引时的版本与状态）与 FTS5 表 `history_fts`，检索前从时间线增量同步，删除任务时一并清理。
+schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`。schema 4 将回复专用草稿表收敛为新邮件与回复共用的 `mail_drafts` 和 `mail_draft_versions`。schema 5 增加 `task_timeline_items`。schema 6 移除邮件附件绑定。schema 7 增加日程内容表、`creating/created` 状态与日程时间线卡，并将执行结果统一保存为 JSON。schema 8 取消日程卡与待确认预览：时间线类型收回 `text`、`mail_draft`、`error`，删除历史日程卡条目，日程内容表改名为 `calendar_events` 和 `calendar_event_versions`，操作与执行记录保留。schema 9 增加 `memory_reviews`（周期与手动后台记忆回顾的状态机，部分唯一索引保证每任务至多一条未完成回顾）。schema 10 为时间线增加 `notice` 类型（程序生成的记忆提示：挂在触发它的消息轮上，无角色）。schema 11 增加 `task_run_sources`：模型成功读取资料原文时按轮次记录引用与本次读到的片段，同一轮同一版本与行号唯一。schema 12 撤销回答来源展示，删除 `task_run_sources`。schema 13 增加历史对话检索的派生索引：`history_items`（条目与全文行的对应，以及邮件草稿写入索引时的版本与状态）与 FTS5 表 `history_fts`，检索前从时间线增量同步，删除任务时一并清理。schema 14 为任务增加非空固定模型，新增 `uploaded_files` 与 `timeline_item_attachments`，升级时把旧任务固化为当下服务端模型。
 
 接受确认与后台开始发送分别原子处理，发送开始标记防止重复调用；保存发送结果和登记一次回传共用事务。Confirmation 依赖 sessions 的调用记录存取，不依赖 SDK 或 api 实现。Gateway 在转发 SSE 前先把用户文字、Agent 文字、草稿位置和错误写入应用时间线，事件携带持久化后的 `item_id` 与 `run_id`。网页只读取 `GET /tasks/{task_id}/timeline`；SDK 历史不作为展示接口，也不需要前端解析模型自然语言或拼接操作列表。
 
@@ -378,7 +382,7 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 
 ### Agent 装配
 
-`agent/client.py` 的 `QoderGateway` 实现 `AgentGateway` 接口（契约只有 `stream_turn`）：每轮输入独立启动一次 qodercli 子进程，新会话由 CLI 生成会话标识并经 init 事件交回，Gateway 绑定到任务后，后续轮次用 `resume` 接续，本层不保存会话状态。CLI 会话记录落在 `data_dir/agent/config` 下，仅用于 SDK 恢复模型上下文；子进程以 `data_dir/agent/workspace` 为工作目录。
+`agent/client.py` 的 `QoderGateway` 实现 `AgentGateway` 接口（契约只有 `stream_turn`）：每轮输入独立启动一次 qodercli 子进程，新会话由 CLI 生成会话标识并经 init 事件交回，Gateway 绑定到任务后，后续轮次用 `resume` 接续，本层不保存会话状态。CLI 会话记录落在 `data_dir/agent/config` 下，仅用于 SDK 恢复模型上下文；每个任务的子进程以 `data_dir/agent/workspaces/{task_id}` 为工作目录。
 
 模型可见的工具由本进程的 MCP 端点提供（`agent/mcp.py`，server 名 `pebble`）：每轮登记一个一次性路径，绑定当轮工具集合、任务标识与草稿事件队列，CLI 子进程按回环地址 `http://127.0.0.1:{settings.port}/mcp/{token}` 连接，轮次结束即撤销，旧路径不再指向任何工具。端点由 `create_app(tool_server=...)` 挂在业务路由之外，端口与 uvicorn 监听同一设置。工具候选来自 `agent/toolset.py` 按副作用筛选的结果；内置工具仅开放联网查询（`WEB_TOOLS`：`WebSearch` 与 `WebFetch`，2026-09-15 实测在托管与 BYOK 模型下均可用，搜索请求经 Qoder 后端代理并计入账号用量），且只在用户亲自发起的轮次暴露——搜索查询与抓取 URL 会离开实例，触发轮与结果回传轮的输入来自外部内容，不能让其中的指令驱动联网请求。本机设置一律关闭（`setting_sources=[]`、`strict_mcp_config`、只允许 `pebble` 这一个 MCP server），技能名单由 `agent/context.py` 逐轮组装，当前为空。
 
