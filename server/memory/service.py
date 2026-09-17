@@ -1,14 +1,24 @@
-"""两个 Markdown 文件组成的长期记忆，以及独立的本地 Git 版本历史。"""
+"""两个 Markdown 文件组成的长期记忆。
+
+记忆不做版本管理：条目简短、由模型持续整理，变化本身已经体现在对话里的记忆提示中。
+文件只保存当前有效内容；写入是原子替换，版本号取文件内容的哈希，供管理页做冲突检查。
+"""
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
 import tempfile
 from pathlib import Path
 
-from server.errors import MemoryFullError, MemoryStoreUnavailableError, MemoryValidationError
+from server.errors import (
+    MemoryFullError,
+    MemoryStoreUnavailableError,
+    MemoryValidationError,
+    VersionConflictError,
+)
 from server.storage.datarepo import GITIGNORE
 from server.storage.datarepo import lock_for as _lock_for
 
@@ -17,12 +27,8 @@ TARGETS = {
     "user": ("USER.md", 1375),
     "memory": ("MEMORY.md", 2200),
 }
-INITIAL_COMMIT = "[Memory] Initialize persistent memory"
-COMMIT_ACTIONS = {
-    "add": "Add",
-    "replace": "Replace",
-    "remove": "Remove",
-}
+ACTIONS = ("add", "replace", "remove")
+UNTRACK_MESSAGE = "[Memory] Stop versioning memory files"
 
 
 class MemoryStore:
@@ -31,12 +37,16 @@ class MemoryStore:
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir.resolve()
         self.memory_dir = self.data_dir / "memory"
+        # 与资料库共用数据目录锁：判断、回顾与管理页的写入彼此串行。
         self._lock = _lock_for(self.data_dir)
         with self._lock:
             self._initialize()
 
     def snapshot(self) -> dict[str, dict]:
-        """返回两个目标的当前内容；直接文件修改会在本次读取中生效。"""
+        """返回两个目标的当前内容；直接文件修改会在本次读取中生效。
+
+        超出容量的文件照常返回（`usage.chars` 大于 `limit`），由调用方提示整理，不在读取时报错。
+        """
         with self._lock:
             return {target: self._target_snapshot(target) for target in TARGETS}
 
@@ -46,70 +56,104 @@ class MemoryStore:
         target: str,
         content: str | None = None,
         old_text: str | None = None,
+        *,
+        exact: bool = False,
+        expected_version: str | None = None,
     ) -> dict:
-        """新增、替换或删除一个条目，并把一次有效修改提交到本地 Git。"""
+        """新增、替换或删除一个条目。
+
+        `exact` 为真时 `old_text` 必须等于某个条目全文（管理页），否则按片段唯一匹配（模型）。
+        给出 `expected_version` 时，文件在读取之后被改过即拒绝，不覆盖别人的修改。
+        """
         self._validate_request(action, target, content, old_text)
         with self._lock:
             current = self._target_snapshot(target)
+            if expected_version is not None and expected_version != current["version"]:
+                raise VersionConflictError(current["version"])
             entries = list(current["entries"])
-            changed, old = self._change(entries, action, content, old_text)
+            changed, old = self._change(entries, action, content, old_text, exact)
             serialized = self._serialize(entries)
             limit = TARGETS[target][1]
-            if len(serialized) > limit:
+            # 已经超限的文件允许变小：整理本身不能因为容量被拒绝。
+            if len(serialized) > limit and len(serialized) > current["usage"]["chars"]:
                 raise MemoryFullError(target, len(serialized), limit)
-
-            if not changed:
-                return self._result(target, action, False, entries, self._head(), old)
-
-            path = self._path(target)
-            previous = path.read_bytes()
-            try:
-                self._atomic_write(path, serialized)
-                commit = self._commit(path, action, target)
-            except Exception as error:
-                self._restore(path, previous)
-                if isinstance(error, MemoryStoreUnavailableError):
-                    raise
-                raise MemoryStoreUnavailableError("长期记忆保存失败，文件已恢复") from error
-            return self._result(target, action, True, entries, commit, old)
+            if changed:
+                try:
+                    self._atomic_write(self._path(target), serialized)
+                except OSError as error:
+                    raise MemoryStoreUnavailableError("长期记忆保存失败") from error
+            return {
+                "target": target,
+                "action": action,
+                "changed": changed,
+                "entries": entries,
+                "usage": {"chars": len(serialized), "limit": limit},
+                "version": _version(serialized),
+                "old": old,
+            }
 
     def _initialize(self) -> None:
         try:
-            self.data_dir.mkdir(parents=True, exist_ok=True)
             self.memory_dir.mkdir(parents=True, exist_ok=True)
-            self._ensure_repository()
-            ignore = self.data_dir / ".gitignore"
-            if not ignore.exists() or ignore.read_text(encoding="utf-8") != GITIGNORE:
-                self._atomic_write(ignore, GITIGNORE)
             for target in TARGETS:
                 path = self._path(target)
                 if not path.exists():
                     self._atomic_write(path, "")
-            paths = [ignore, *(self._path(target) for target in TARGETS)]
-            self._git("add", "--", *(self._relative(path) for path in paths))
-            if self._git_changed(*paths):
-                self._git(
-                    "commit",
-                    "--quiet",
-                    "--only",
-                    "-m",
-                    INITIAL_COMMIT,
-                    "--",
-                    *(self._relative(path) for path in paths),
-                )
-        except MemoryStoreUnavailableError:
-            raise
-        except (OSError, UnicodeError) as error:
+        except OSError as error:
             raise MemoryStoreUnavailableError("无法初始化长期记忆文件") from error
+        self._stop_versioning()
 
-    def _ensure_repository(self) -> None:
+    def _stop_versioning(self) -> None:
+        """旧实例里记忆曾随数据目录仓库提交：单独提交一次移出版本管理，文件与其他暂存保持不动。
+
+        用临时索引构造提交，不经过共享索引，资料库已暂存的改动不会被一并提交。
+        失败只意味着记忆文件仍被跟踪，不影响读写，因此不抛出。
+        """
         if not (self.data_dir / ".git").exists():
-            self._git("init", "--quiet")
-        root = self._git("rev-parse", "--show-toplevel").stdout.strip()
-        if Path(root).resolve() != self.data_dir:
-            raise MemoryStoreUnavailableError("实例数据目录不是独立的 Git 仓库")
-        self._git("config", "user.name", "Pebble")
-        self._git("config", "user.email", "pebble@local")
+            return
+        listed = self._git("ls-files", "--", "memory")
+        if listed is None or not listed.stdout.strip():
+            return
+        index = self.data_dir / ".git" / "pebble-untrack-index"
+        env = {**os.environ, "GIT_INDEX_FILE": str(index)}
+        try:
+            ignore = self.data_dir / ".gitignore"
+            if not ignore.exists() or ignore.read_text(encoding="utf-8") != GITIGNORE:
+                self._atomic_write(ignore, GITIGNORE)
+            steps = (
+                ("read-tree", "HEAD"),
+                ("rm", "-r", "--cached", "--quiet", "--", "memory"),
+                ("add", "--", ".gitignore"),
+            )
+            if any(self._git(*step, env=env) is None for step in steps):
+                return
+            tree = self._git("write-tree", env=env)
+            if tree is None:
+                return
+            commit = self._git(
+                "commit-tree", tree.stdout.strip(), "-p", "HEAD", "-m", UNTRACK_MESSAGE
+            )
+            if commit is None or self._git("update-ref", "HEAD", commit.stdout.strip()) is None:
+                return
+            self._git("rm", "-r", "--cached", "--quiet", "--", "memory")
+            self._git("add", "--", ".gitignore")
+        except (OSError, UnicodeError):
+            return
+        finally:
+            index.unlink(missing_ok=True)
+
+    def _git(self, *args: str, env: dict | None = None) -> subprocess.CompletedProcess[str] | None:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(self.data_dir), *args],
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+            )
+        except OSError:
+            return None
+        return result if result.returncode == 0 else None
 
     def _target_snapshot(self, target: str) -> dict:
         if target not in TARGETS:
@@ -117,18 +161,18 @@ class MemoryStore:
         path = self._path(target)
         try:
             content = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            content = ""
         except (OSError, UnicodeError) as error:
             raise MemoryStoreUnavailableError(f"无法读取 {path.name}") from error
         entries = self._parse(content)
         normalized = self._serialize(entries)
-        limit = TARGETS[target][1]
-        if len(normalized) > limit:
-            raise MemoryFullError(target, len(normalized), limit)
         return {
             "target": target,
             "content": normalized,
             "entries": entries,
-            "usage": {"chars": len(normalized), "limit": limit},
+            "usage": {"chars": len(normalized), "limit": TARGETS[target][1]},
+            "version": _version(normalized),
         }
 
     @staticmethod
@@ -136,7 +180,7 @@ class MemoryStore:
         action: str, target: str, content: str | None, old_text: str | None
     ) -> None:
         errors = []
-        if action not in COMMIT_ACTIONS:
+        if action not in ACTIONS:
             errors.append({"field": "action", "message": "必须是 add、replace 或 remove"})
         if target not in TARGETS:
             errors.append({"field": "target", "message": "必须是 user 或 memory"})
@@ -151,7 +195,11 @@ class MemoryStore:
 
     @staticmethod
     def _change(
-        entries: list[str], action: str, content: str | None, old_text: str | None
+        entries: list[str],
+        action: str,
+        content: str | None,
+        old_text: str | None,
+        exact: bool,
     ) -> tuple[bool, str | None]:
         """返回（是否有有效修改, 被替换或移除的原条目）；新增没有原条目。"""
         normalized = (content or "").strip()
@@ -162,7 +210,10 @@ class MemoryStore:
             return True, None
 
         needle = (old_text or "").strip()
-        matches = [index for index, entry in enumerate(entries) if needle in entry]
+        if exact:
+            matches = [index for index, entry in enumerate(entries) if entry == needle]
+        else:
+            matches = [index for index, entry in enumerate(entries) if needle in entry]
         if len(matches) != 1:
             reason = "没有找到匹配条目" if not matches else "匹配到多个条目，请提供更具体的片段"
             raise MemoryValidationError([{"field": "old_text", "message": reason}])
@@ -194,96 +245,20 @@ class MemoryStore:
     def _path(self, target: str) -> Path:
         return self.memory_dir / TARGETS[target][0]
 
-    def _result(
-        self,
-        target: str,
-        action: str,
-        changed: bool,
-        entries: list[str],
-        commit: str,
-        old: str | None,
-    ) -> dict:
-        content = self._serialize(entries)
-        return {
-            "target": target,
-            "action": action,
-            "changed": changed,
-            "entries": entries,
-            "usage": {"chars": len(content), "limit": TARGETS[target][1]},
-            "commit": commit,
-            "old": old,
-        }
-
-    def _commit(self, path: Path, action: str, target: str) -> str:
-        relative = self._relative(path)
-        self._git("add", "--", relative)
-        try:
-            self._git(
-                "commit",
-                "--quiet",
-                "--only",
-                "-m",
-                f"[Memory] {COMMIT_ACTIONS[action]} {target} entry",
-                "--",
-                relative,
-            )
-        except MemoryStoreUnavailableError:
-            raise
-        return self._head()
-
-    def _restore(self, path: Path, previous: bytes) -> None:
-        try:
-            self._atomic_write_bytes(path, previous)
-            self._git("add", "--", self._relative(path))
-        except Exception as rollback_error:
-            raise MemoryStoreUnavailableError(
-                "长期记忆保存失败，且无法恢复原文件"
-            ) from rollback_error
-
-    def _git_changed(self, *paths: Path) -> bool:
-        result = self._git_raw(
-            "diff", "--cached", "--quiet", "--", *(self._relative(path) for path in paths)
-        )
-        if result.returncode not in {0, 1}:
-            raise MemoryStoreUnavailableError("无法检查长期记忆版本状态")
-        return result.returncode == 1
-
-    def _head(self) -> str:
-        return self._git("rev-parse", "HEAD").stdout.strip()
-
-    def _relative(self, path: Path) -> str:
-        return str(path.relative_to(self.data_dir))
-
-    def _git(self, *args: str) -> subprocess.CompletedProcess[str]:
-        result = self._git_raw(*args)
-        if result.returncode != 0:
-            raise MemoryStoreUnavailableError("无法更新长期记忆版本历史")
-        return result
-
-    def _git_raw(self, *args: str) -> subprocess.CompletedProcess[str]:
-        try:
-            return subprocess.run(
-                ["git", "-C", str(self.data_dir), *args],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError as error:
-            raise MemoryStoreUnavailableError("本机 Git 不可用") from error
-
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
-        MemoryStore._atomic_write_bytes(path, content.encode("utf-8"))
-
-    @staticmethod
-    def _atomic_write_bytes(path: Path, content: bytes) -> None:
         descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
         try:
             with os.fdopen(descriptor, "wb") as handle:
-                handle.write(content)
+                handle.write(content.encode("utf-8"))
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, path)
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
+
+
+def _version(content: str) -> str:
+    """文件内容的版本号：规范化后的内容哈希，与写入方式无关。"""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]

@@ -1,4 +1,4 @@
-"""真实 Qoder 模型的后台记忆回顾验收：真实 MCP 环回 + 只新增工具 + 周期触发。
+"""真实 Qoder 模型的后台记忆回顾验收：真实 MCP 环回 + 回顾工具集 + 周期触发。
 
 显式运行，不进入 pytest。同时验证一次性回顾会话在带工具时 include_partial_messages=False 可用。
 """
@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
-import subprocess
 import tempfile
 from pathlib import Path
 from uuid import uuid4
@@ -60,16 +59,6 @@ def available_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def git_log(data_dir: Path) -> list[str]:
-    result = subprocess.run(
-        ["git", "-C", str(data_dir), "log", "--format=%s"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.splitlines()
-
-
 def seed_round(conn, task_id: str, user_text: str, assistant_text: str) -> None:
     run_id = str(uuid4())
     runs_repo.insert(
@@ -83,11 +72,15 @@ def seed_round(conn, task_id: str, user_text: str, assistant_text: str) -> None:
     timeline.append_assistant_text(conn, task_id, run_id, assistant_text)
 
 
-def timeline_count(task_id: str, path: Path) -> int:
+def timeline_items(task_id: str, path: Path) -> list[dict]:
     with session(path) as conn:
-        return conn.execute(
-            "SELECT COUNT(*) AS n FROM task_timeline_items WHERE task_id = ?", (task_id,)
-        ).fetchone()["n"]
+        return [
+            dict(row)
+            for row in conn.execute(
+                "SELECT kind, text FROM task_timeline_items WHERE task_id = ? ORDER BY rowid",
+                (task_id,),
+            )
+        ]
 
 
 async def run_review(
@@ -141,9 +134,9 @@ async def verify(root: Path) -> dict:
         calls: list[tuple] = []
         original_apply = memory_store.apply
 
-        def traced_apply(action, target, content, old_text):
+        def traced_apply(action, target, content=None, old_text=None, **options):
             calls.append((action, target, content))
-            return original_apply(action, target, content, old_text)
+            return original_apply(action, target, content, old_text, **options)
 
         memory_store.apply = traced_apply
 
@@ -153,8 +146,7 @@ async def verify(root: Path) -> dict:
             repository.insert_task(conn, review_task, "记忆回顾验收", timestamp())
             for user_text, assistant_text in SEED:
                 seed_round(conn, review_task, user_text, assistant_text)
-        before_items = timeline_count(review_task, root / "pebble.db")
-        before_log = git_log(root)
+        before_items = timeline_items(review_task, root / "pebble.db")
 
         status = await run_review(root, gateway, scheduler, review_task)
 
@@ -164,15 +156,13 @@ async def verify(root: Path) -> dict:
         assert "Hermes" in user_md, f"回顾未把学习方向写入 USER.md：{user_md!r} 调用={calls!r}"
         added = [call for call in calls if call[0] == "add"]
         assert len(added) >= 2, f"回顾新增少于两条：{calls!r}"
-        after_log = git_log(root)
-        add_commits = [s for s in after_log if s not in before_log]
-        assert len(add_commits) == len(added), (
-            f"新增条目数与 Git 提交数不一致：提交={add_commits!r} 调用={added!r}"
-        )
-        assert all("[Memory] Add" in subject for subject in add_commits), add_commits
-        assert timeline_count(review_task, root / "pebble.db") == before_items, (
-            "回顾改动了任务时间线"
-        )
+        after_items = timeline_items(review_task, root / "pebble.db")
+        assert after_items[: len(before_items)] == before_items, "回顾改动了已有时间线"
+        # 回顾只会追加整理提示（修改或删除已有条目时）；从空记忆开始不应出现其他内容。
+        assert all(
+            item["kind"] == "notice" and item["text"].startswith("整理记忆：")
+            for item in after_items[len(before_items) :]
+        ), after_items
         assert status["status"] == "done", status
 
         # ---------- 负例：纯闲聊任务零新增 ----------
@@ -187,15 +177,15 @@ async def verify(root: Path) -> dict:
                 ("还是点外卖算了。", "也行，省事。"),
             ):
                 seed_round(conn, chatter_task, user_text, assistant_text)
-        chatter_before_items = timeline_count(chatter_task, root / "pebble.db")
-        chatter_before_log = git_log(root)
+        chatter_before_items = timeline_items(chatter_task, root / "pebble.db")
+        chatter_before_memory = memory_store.snapshot()
         chatter_calls = len(calls)
 
         chatter_status = await run_review(root, gateway, scheduler, chatter_task)
 
         assert len(calls) == chatter_calls, f"闲聊任务产生了记忆写入：{calls[chatter_calls:]!r}"
-        assert git_log(root) == chatter_before_log, "闲聊任务产生了 Git 提交"
-        assert timeline_count(chatter_task, root / "pebble.db") == chatter_before_items
+        assert memory_store.snapshot() == chatter_before_memory, "闲聊任务改动了长期记忆"
+        assert timeline_items(chatter_task, root / "pebble.db") == chatter_before_items
         assert chatter_status["status"] == "done", chatter_status
 
         return {
@@ -204,7 +194,6 @@ async def verify(root: Path) -> dict:
             "user_md": user_md,
             "memory_md": memory_md,
             "added": added,
-            "commits": add_commits,
         }
     finally:
         server.should_exit = True

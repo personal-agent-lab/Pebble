@@ -176,13 +176,16 @@ def test_memory_tools_are_never_visible_in_foreground_turns(settings, kind):
     assert not {name for name in names if name.startswith("memory")}
 
 
-def test_review_options_expose_only_add_tool_in_fresh_session(settings):
+def test_review_options_expose_review_tools_in_fresh_session(settings):
     gateway = make_gateway(settings)
     options = gateway._oneshot_options(
         "回顾指令", f"{MCP_MOUNT_PATH}/{TURN_TOKEN}", gateway.review_tools
     )
 
-    assert options.allowed_tools == [f"mcp__{TOOL_SERVER_NAME}__memory_add"]
+    assert options.allowed_tools == [
+        f"mcp__{TOOL_SERVER_NAME}__{name}"
+        for name in ("memory_add", "memory_replace", "memory_remove")
+    ]
     assert options.tools == []
     assert options.setting_sources == []
     assert options.mcp_servers == {
@@ -652,7 +655,7 @@ def test_judge_memory_records_structured_errors(settings, monkeypatch):
 
     assert records[0]["error"] == {
         "error": "memory_full",
-        "message": "user 记忆需要 1376 个字符，上限为 1375",
+        "message": "“关于你”放不下：保存后需要 1376 个字符，上限为 1375",
         "target": "user",
         "used": 1376,
         "limit": 1375,

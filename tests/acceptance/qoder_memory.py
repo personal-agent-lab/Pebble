@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -53,16 +52,6 @@ async def run_turn(gateway: QoderGateway, prompt: str) -> dict:
     return {"session_id": session_id, "text": "".join(texts).strip()}
 
 
-def commit_count(data_dir: Path) -> int:
-    result = subprocess.run(
-        ["git", "-C", str(data_dir), "rev-list", "--count", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return int(result.stdout.strip())
-
-
 async def verify(root: Path) -> dict:
     base = Settings()
     if base.qoder_token is None:
@@ -91,7 +80,6 @@ async def verify(root: Path) -> dict:
         await asyncio.sleep(0.01)
 
     try:
-        before = commit_count(root)
         saved = await run_turn(
             gateway,
             f"请记住：我偏好在完成清单末尾写上 {CODE}。"
@@ -101,8 +89,8 @@ async def verify(root: Path) -> dict:
         stored = snapshot["user"]["content"] + snapshot["memory"]["content"]
         if CODE not in stored:
             raise AssertionError(f"模型未把测试代号写入长期记忆：{snapshot!r}")
-        if commit_count(root) != before + 1:
-            raise AssertionError("记忆写入没有产生且仅产生一个 Git 提交")
+        if stored.count(CODE) != 1:
+            raise AssertionError(f"测试代号在长期记忆中重复保存：{snapshot!r}")
         if CODE not in saved["text"]:
             raise AssertionError(f"保存后的回答没有展示实际内容：{saved['text']!r}")
 
@@ -113,7 +101,6 @@ async def verify(root: Path) -> dict:
             raise AssertionError("回忆验证错误地复用了写入时的 SDK 会话")
         return {
             "memory_write": "passed",
-            "git_commit": "passed",
             "saved_reply": saved["text"],
             "fresh_session_recall": recalled["text"],
         }

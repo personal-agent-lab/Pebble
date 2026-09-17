@@ -27,7 +27,7 @@ class FakeAgentGateway:
         self.title_calls: list[str] = []
         self.review_calls: list[dict[str, Any]] = []
         self.judge_calls: list[dict[str, Any]] = []
-        # 可替换的一次性记忆回顾实现；缺省记录调用并返回“无”。
+        # 可替换的一次性记忆回顾实现；缺省记录调用并返回空工具记录（无改动）。
         self.review_handler = None
         # 可替换的每轮记忆判断实现；缺省记录调用并返回空工具记录（无变化）。
         self.judge_handler = None
@@ -50,14 +50,16 @@ class FakeAgentGateway:
             self.title_calls.append(text)
         return self.title
 
-    async def review_memory(self, task_id: str, instructions: str, transcript: str) -> str:
+    async def review_memory(
+        self, task_id: str, instructions: str, transcript: str
+    ) -> list[dict]:
         with self._lock:
             self.review_calls.append(
                 {"task_id": task_id, "instructions": instructions, "transcript": transcript}
             )
         if self.review_handler is not None:
             return await self.review_handler(task_id, instructions, transcript)
-        return "无"
+        return []
 
     async def judge_memory(self, task_id: str, instructions: str, message: str) -> list[dict]:
         with self._lock:

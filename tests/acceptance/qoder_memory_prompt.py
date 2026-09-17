@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -46,16 +45,6 @@ async def run_turn(gateway: QoderGateway, prompt: str) -> str:
     return "".join(texts).strip()
 
 
-def git_log(data_dir: Path) -> list[str]:
-    result = subprocess.run(
-        ["git", "-C", str(data_dir), "log", "--format=%s"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.splitlines()
-
-
 def read_memory(root: Path, filename: str) -> str:
     path = root / "memory" / filename
     return path.read_text(encoding="utf-8") if path.exists() else ""
@@ -92,12 +81,11 @@ async def verify(root: Path) -> dict:
         calls: list[tuple] = []
         original_apply = memory_store.apply
 
-        def traced_apply(action, target, content, old_text):
+        def traced_apply(action, target, content=None, old_text=None, **options):
             calls.append((action, target, content))
-            return original_apply(action, target, content, old_text)
+            return original_apply(action, target, content, old_text, **options)
 
         memory_store.apply = traced_apply
-        before = len(git_log(root))
         reply = await run_turn(
             gateway,
             "我最近正在学习 Hermes Agent（一个开源个人助理项目）的设计，"
@@ -110,14 +98,12 @@ async def verify(root: Path) -> dict:
                 f"模型未当轮把学习方向写入 USER.md：USER.md={user_md!r} "
                 f"MEMORY.md={memory_md!r} 工具调用={calls!r} 回复={reply!r}"
             )
-        subjects = git_log(root)
-        if subjects.count("[Memory] Add user entry") != len(subjects) - before:
-            raise AssertionError(f"USER.md 写入没有对应唯一提交：{subjects!r}")
+        if user_md.count("Hermes") != 1:
+            raise AssertionError(f"USER.md 中学习方向重复保存：{user_md!r}")
         return {
             "user_md": user_md,
             "reply": reply,
             "memory_calls": calls,
-            "commits": subjects[before:],
         }
     finally:
         server.should_exit = True

@@ -199,7 +199,7 @@ def test_targeted_turn_can_only_update_selected_draft(settings):
     asyncio.run(scenario())
 
 
-def test_review_endpoint_exposes_only_add_tool(settings):
+def test_review_endpoint_exposes_review_tools(settings):
     init_db()
     store = MemoryStore(settings.data_dir)
     tools = build_tools(
@@ -215,7 +215,11 @@ def test_review_endpoint_exposes_only_add_tool(settings):
             mcp_session(server, f"{BASE_URL}{path}") as session,
         ):
             listed = await session.list_tools()
-            assert [tool.name for tool in listed.tools] == ["memory_add"]
+            assert [tool.name for tool in listed.tools] == [
+                "memory_add",
+                "memory_replace",
+                "memory_remove",
+            ]
 
             saved = await session.call_tool(
                 "memory_add", {"target": "user", "content": "用户在研究记忆机制"}
@@ -223,11 +227,8 @@ def test_review_endpoint_exposes_only_add_tool(settings):
             assert saved.isError is False
             assert tool_payload(saved)["changed"] is True
 
-            # 前台 memory 工具在回顾会话不存在：无法表达替换或删除。
-            blocked = await session.call_tool(
-                "memory",
-                {"action": "replace", "target": "user", "content": "x", "old_text": "y"},
-            )
+            # 回顾没有提问的对象：追问工具只在每轮判断会话中存在。
+            blocked = await session.call_tool("memory_ask", {"question": "要改哪一条？"})
             assert blocked.isError is True
             assert tool_payload(blocked)["error"] == "unknown_tool"
 

@@ -1,8 +1,9 @@
 """实例数据目录的共享协调点：进程内串行锁与版本仓库忽略规则。
 
-`memory/`、`kb/`、`skills/` 同属数据目录里**同一个**本地 Git 仓库。不同域的写入必须
-串行，否则并发提交会争用 `git index.lock`；忽略规则也必须一致，否则各域会写出不同的
-`.gitignore`。这里只放这两样真正需要共享的东西，各域自己的 Git/原子写小函数留在各自模块。
+`kb/`、`skills/` 同属数据目录里**同一个**本地 Git 仓库；`memory/` 不做版本管理，但与它们
+共用同一把锁。不同域的写入必须串行，否则并发提交会争用 `git index.lock`；忽略规则也必须
+一致，否则各域会写出不同的 `.gitignore`。这里只放这两样真正需要共享的东西，各域自己的
+Git/原子写小函数留在各自模块。
 """
 
 from __future__ import annotations
@@ -13,8 +14,6 @@ from pathlib import Path
 # 忽略一切，再逐项放行内容目录：SQLite、凭证、SDK 会话与日志都不进版本管理。
 GITIGNORE = """*
 !.gitignore
-!memory/
-!memory/**
 !kb/
 !kb/**
 !skills/

@@ -151,7 +151,7 @@ class QoderGateway:
         # 两者必须指向同一目录，否则重启后读不到会话。
         os.environ[CONFIG_DIR_ENV] = str(config_dir)
         self.tools = build_tools(replace(deps, memory_store=self.memory_store))
-        # 后台记忆回顾的一次性会话只用只新增工具，不与前台工具混在同一个注册表。
+        # 后台记忆回顾的一次性会话用回顾工具集（新增、替换、删除），不与前台工具混在一起。
         self.review_tools = build_tools(
             replace(deps, memory_store=self.memory_store), registry=review_registry
         )
@@ -184,37 +184,26 @@ class QoderGateway:
                     return "".join(parts).strip()
         raise AgentProtocolError(NO_TERMINAL_MESSAGE)
 
-    async def review_memory(self, task_id: str, instructions: str, transcript: str) -> str:
-        """一次性记忆回顾：只带只新增的记忆工具，不接续会话，也不进入任何任务历史。"""
-        parts: list[str] = []
-        # memory_add 不发草稿事件，队列恒为空，仅为满足端点签名传入。
-        queued: asyncio.Queue = asyncio.Queue()
-        async with self.tool_server.serve(
-            self.review_tools, task_id=task_id, queued=queued
-        ) as path:
-            options = self._oneshot_options(instructions, path, self.review_tools)
-            async with QoderSDKClient(options) as client:
-                await client.query(transcript)
-                async for message in client.receive_response():
-                    if isinstance(message, AssistantMessage):
-                        for block in message.content:
-                            if isinstance(block, TextBlock) and block.text.strip():
-                                parts.append(block.text)
-                    elif isinstance(message, ResultMessage):
-                        if message.is_error:
-                            detail = (message.result or "").strip() or MODEL_ERROR_MESSAGE
-                            raise AgentProtocolError(detail)
-                        return "".join(parts).strip()
-        raise AgentProtocolError(NO_TERMINAL_MESSAGE)
+    async def review_memory(self, task_id: str, instructions: str, transcript: str) -> list[dict]:
+        """一次性记忆回顾：带回顾工具集，不接续会话，也不进入任何任务历史。
+
+        返回按调用顺序记录的工具调用与结果，整理提示由调用方按这些真实记录生成。
+        """
+        return await self._memory_session(self.review_tools, task_id, instructions, transcript)
 
     async def judge_memory(self, task_id: str, instructions: str, message: str) -> list[dict]:
         """一次性记忆判断：带判断工具集，不接续会话；返回按调用顺序记录的工具调用与结果。
 
         判断对用户可见的提示由调用方按这些真实记录生成，不使用模型的文本回复。
         """
+        return await self._memory_session(self.judge_tools, task_id, instructions, message)
+
+    async def _memory_session(
+        self, definitions: list[ToolDefinition], task_id: str, instructions: str, message: str
+    ) -> list[dict]:
         records: list[dict] = []
-        tools = [_recording(definition, records) for definition in self.judge_tools]
-        # 判断工具不发草稿事件，队列恒为空，仅为满足端点签名传入。
+        tools = [_recording(definition, records) for definition in definitions]
+        # 记忆工具不发草稿事件，队列恒为空，仅为满足端点签名传入。
         queued: asyncio.Queue = asyncio.Queue()
         async with self.tool_server.serve(tools, task_id=task_id, queued=queued) as path:
             options = self._oneshot_options(instructions, path, tools)

@@ -53,6 +53,9 @@ class MemoryValidationError(Exception):
         super().__init__(str(errors))
 
 
+MEMORY_LABELS = {"user": "关于你", "memory": "事实与约定"}
+
+
 class MemoryFullError(Exception):
     """长期记忆文件超过该目标的字符容量。"""
 
@@ -60,11 +63,12 @@ class MemoryFullError(Exception):
         self.target = target
         self.used = used
         self.limit = limit
-        super().__init__(f"{target} 记忆需要 {used} 个字符，上限为 {limit}")
+        label = MEMORY_LABELS.get(target, target)
+        super().__init__(f"“{label}”放不下：保存后需要 {used} 个字符，上限为 {limit}")
 
 
 class MemoryStoreUnavailableError(Exception):
-    """长期记忆文件或本地版本仓库当前不可用。"""
+    """长期记忆文件当前不可读写。"""
 
 
 class HistoryValidationError(Exception):

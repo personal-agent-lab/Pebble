@@ -98,8 +98,8 @@ def test_build_judge_message_renders_materials(store):
     assert message.startswith(JUDGE_MESSAGE_HEADER)
     assert "## 用户刚发的消息\n我对历史感兴趣" in message
     assert "## 近期对话\n用户：你好\n助手：你好！" in message
-    assert "## 当前长期记忆：关于你\n已有画像" in message
-    assert "## 当前长期记忆：事实与约定\n（空）" in message
+    assert "## 当前长期记忆：关于你（已用 4 / 上限 1375 字）\n已有画像" in message
+    assert "## 当前长期记忆：事实与约定（已用 0 / 上限 2200 字）\n（空）" in message
 
 
 def test_build_judge_message_with_empty_context_and_memory(store):
@@ -178,7 +178,7 @@ def test_notice_texts_report_actual_results():
     assert notice_texts(records) == [
         "已记住：用户对历史感兴趣",
         "已修改：用户对历史感兴趣 → 用户偏好通俗历史读物",
-        "已停止使用这条记忆：用户偏好通俗历史读物。原对话和版本历史仍保留。",
+        "已删除这条记忆：用户偏好通俗历史读物。原对话仍保留。",
         "这条内容已经在记忆里。",
         "想确认：要改哪一条？",
     ]
@@ -189,7 +189,10 @@ def test_notice_texts_show_only_real_failures():
         {
             "tool": "memory_add",
             "arguments": {"target": "user", "content": "一条"},
-            "error": {"error": "memory_full", "message": "user 记忆需要 1400 个字符，上限为 1375"},
+            "error": {
+                "error": "memory_full",
+                "message": "“关于你”放不下：保存后需要 1400 个字符，上限为 1375",
+            },
         },
         {
             "tool": "memory_add",
@@ -209,7 +212,29 @@ def test_notice_texts_show_only_real_failures():
         },
     ]
     assert notice_texts(records) == [
-        "记忆保存失败：user 记忆需要 1400 个字符，上限为 1375",
+        "记忆保存失败：“关于你”放不下：保存后需要 1400 个字符，上限为 1375",
         "记忆保存失败：无法读取 USER.md",
         "记忆保存失败：工具执行失败",
+    ]
+
+
+def test_notice_texts_hide_capacity_failure_resolved_by_consolidation():
+    full = {
+        "error": "memory_full",
+        "message": "“关于你”放不下：保存后需要 1400 个字符，上限为 1375",
+    }
+    records = [
+        {"tool": "memory_add", "arguments": {"target": "user", "content": "新偏好"}, "error": full},
+        {
+            "tool": "memory_replace",
+            "arguments": {"target": "user", "content": "合并后的条目", "old_text": "旧"},
+            "result": {"action": "replace", "changed": True, "old": "旧条目"},
+        },
+        added("新偏好"),
+        {"tool": "memory_add", "arguments": {"target": "user", "content": "放不下"}, "error": full},
+    ]
+    assert notice_texts(records) == [
+        "已修改：旧条目 → 合并后的条目",
+        "已记住：新偏好",
+        "记忆保存失败：“关于你”放不下：保存后需要 1400 个字符，上限为 1375",
     ]

@@ -146,20 +146,18 @@ def all_run_kinds(task_id: str):
     return {row["kind"] for row in rows}
 
 
-def timeline_count(task_id: str):
-    return query(
-        "SELECT COUNT(*) AS n FROM task_timeline_items WHERE task_id = ?", (task_id,)
-    )[0]["n"]
+def timeline_texts(task_id: str):
+    return [
+        (row["kind"], row["text"])
+        for row in query(
+            "SELECT kind, text FROM task_timeline_items WHERE task_id = ? ORDER BY rowid",
+            (task_id,),
+        )
+    ]
 
 
-def memory_commit_hashes():
-    result = subprocess.run(
-        ["git", "-C", str(REPO_ROOT / ".data"), "rev-list", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.split()
+def is_review_notice(kind, text) -> bool:
+    return kind == "notice" and (text or "").startswith("整理记忆：")
 
 
 def log(step, **fields):
@@ -218,8 +216,7 @@ def phase_a(service: Service) -> dict:
         send_and_wait(service, task_id, message)
     run_ids = message_run_ids(task_id)
     assert all_run_kinds(task_id) == {"message"}, all_run_kinds(task_id)
-    items_after_messages = timeline_count(task_id)
-    hashes_before_review = memory_commit_hashes()
+    items_after_messages = timeline_texts(task_id)
     user_md_before = (REPO_ROOT / ".data" / "memory" / "USER.md").read_text(encoding="utf-8")
 
     log("A/5 五轮完成，等待周期复盘执行")
@@ -233,24 +230,27 @@ def phase_a(service: Service) -> dict:
     assert review["origin"] == "interval", review
 
     listener.close()
-    log("A/5 校验复盘不可见")
-    assert timeline_count(task_id) == items_after_messages, "复盘改动了任务时间线"
+    log("A/5 校验复盘只追加整理提示")
+    items_after_review = timeline_texts(task_id)
+    assert items_after_review[: len(items_after_messages)] == items_after_messages, (
+        "复盘改动了已有时间线"
+    )
+    # 复盘只可能追加整理提示（修改或删除已有条目时），新增不通知。
+    appended = items_after_review[len(items_after_messages) :]
+    assert all(is_review_notice(*item) for item in appended), appended
     assert all_run_kinds(task_id) == {"message"}, "复盘产生了新的 agent_runs 行"
     stray = [e for e in listener.collected if e.get("run_id") not in run_ids]
-    assert not stray, f"复盘产生了 SSE 事件：{stray!r}"
+    assert not stray, f"复盘产生了挂在对话轮之外的 SSE 事件：{stray!r}"
     detail = service.request(f"/tasks/{task_id}")[1]
     assert detail["latest_run"]["kind"] == "message", detail["latest_run"]
 
     user_md = (REPO_ROOT / ".data" / "memory" / "USER.md").read_text(encoding="utf-8")
     assert "Hermes" in user_md, user_md
-    hashes_after_review = memory_commit_hashes()
-    new_commits = [h for h in hashes_after_review if h not in hashes_before_review]
-    # 内容已在实例记忆中时（重复运行）回顾可以零新增；首次运行必须有新提交。
-    if "Hermes" not in user_md_before:
-        assert new_commits, "回顾既未写入新内容也未产生提交"
+    memory_changed = user_md != user_md_before
     log(
-        "A/5 PASS 周期触发完成且零可见副作用",
-        new_commits=len(new_commits),
+        "A/5 PASS 周期触发完成，只追加整理提示",
+        memory_changed=memory_changed,
+        notices=len(appended),
         events=len(listener.collected),
     )
 
@@ -265,7 +265,7 @@ def phase_a(service: Service) -> dict:
     assert service.request("/tasks/missing-task/memory-review", {})[0] == 404
     log("A/5 PASS 手动触发 202 + 未知任务 404")
 
-    return {"task_id": task_id, "review": review, "new_commits": new_commits}
+    return {"task_id": task_id, "review": review, "memory_changed": memory_changed}
 
 
 def phase_b(service: Service) -> str:

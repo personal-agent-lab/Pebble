@@ -297,9 +297,12 @@ class GatewayRuntime:
             if self.reviews.claim(review_id) is None:
                 return
             try:
-                await self.reviews.run(review_id, self.gateway)
+                notices = await self.reviews.run(review_id, self.gateway)
             except Exception as error:
                 self.reviews.fail(review_id, f"记忆回顾失败：{error}")
+                return
+            for notice in notices:
+                self.events.publish(task_id, {**notice, "type": "notice"})
         finally:
             self._review_tasks.pop(task_id, None)
             self.kick()

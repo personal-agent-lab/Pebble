@@ -71,22 +71,24 @@ def seed_round(conn, task_id: str, text: str) -> str:
 # ---------- 只新增工具 ----------
 
 
-def test_review_registry_binds_only_add_tool(store):
-    tools = review_tools(store)
-    assert [tool.name for tool in tools] == ["memory_add"]
+def test_review_registry_binds_add_replace_and_remove(store):
+    tools = {tool.name: tool for tool in review_tools(store)}
+    assert list(tools) == ["memory_add", "memory_replace", "memory_remove"]
 
-    result = tools[0]("user", "用户在研究记忆机制")
-    assert result["changed"] is True
-    assert "用户在研究记忆机制" in store.snapshot()["user"]["content"]
+    assert tools["memory_add"]("user", "用户在研究记忆机制")["changed"] is True
+    assert tools["memory_add"]("user", "用户在研究 Hermes")["changed"] is True
+    merged = tools["memory_replace"]("user", "用户在研究记忆机制与 Hermes", "记忆机制")
+    removed = tools["memory_remove"]("user", "研究 Hermes")
+    assert merged["old"] == "用户在研究记忆机制" and removed["old"] == "用户在研究 Hermes"
+    assert store.snapshot()["user"]["entries"] == ["用户在研究记忆机制与 Hermes"]
 
 
-def test_add_tool_rejects_duplicates_without_commit(store):
+def test_add_tool_rejects_duplicates(store):
     tools = review_tools(store)
     first = tools[0]("memory", "项目使用 SQLite")
     second = tools[0]("memory", "项目使用 SQLite")
     assert first["changed"] is True and second["changed"] is False
-    subjects = store._git("log", "--format=%s").stdout.splitlines()
-    assert subjects.count("[Memory] Add memory entry") == 1
+    assert store.snapshot()["memory"]["entries"] == ["项目使用 SQLite"]
 
 
 def test_review_registry_has_no_foreground_memory_tool():
@@ -262,8 +264,8 @@ def test_build_review_message_renders_materials(store):
     message = build_review_message("用户：新信息", store.snapshot())
     assert message.startswith(REVIEW_MESSAGE_HEADER)
     assert "## 自上次回顾以来的任务对话\n用户：新信息" in message
-    assert "## 当前长期记忆：关于你\n已有画像" in message
-    assert "## 当前长期记忆：事实与约定\n（空）" in message
+    assert "## 当前长期记忆：关于你（已用 4 / 上限 1375 字）\n已有画像" in message
+    assert "## 当前长期记忆：事实与约定（已用 0 / 上限 2200 字）\n（空）" in message
 
 
 def test_build_review_message_with_empty_transcript_and_memory(store):
@@ -276,12 +278,13 @@ def test_build_review_message_with_empty_transcript_and_memory(store):
 
 
 class RecordingGateway:
-    def __init__(self):
+    def __init__(self, records=None):
         self.calls = []
+        self.records = records or []
 
     async def review_memory(self, task_id, instructions, transcript):
         self.calls.append((task_id, instructions, transcript))
-        return "无"
+        return self.records
 
 
 def test_run_finishes_without_model_call_when_window_is_empty(scheduler):
@@ -317,6 +320,75 @@ def test_run_passes_window_and_memory_snapshot_to_gateway(scheduler):
             "SELECT status FROM memory_reviews WHERE review_id = ?", (row["review_id"],)
         ).fetchone()
     assert status["status"] == "done"
+
+
+def test_run_writes_notices_only_for_changed_existing_entries(scheduler):
+    with session() as conn:
+        task_id = make_task(conn)
+        seed_round(conn, task_id, "一")
+        last_run = seed_round(conn, task_id, "二")
+    row = scheduler.enqueue_manual(task_id)
+    scheduler.claim(row["review_id"])
+    records = [
+        {
+            "tool": "memory_add",
+            "arguments": {"target": "user", "content": "新增不提示"},
+            "result": {"changed": True, "old": None},
+        },
+        {
+            "tool": "memory_replace",
+            "arguments": {"target": "user", "content": "回答先给结论", "old_text": "结论"},
+            "result": {"changed": True, "old": "先给结论"},
+        },
+        {
+            "tool": "memory_replace",
+            "arguments": {"target": "user", "content": "没有变化", "old_text": "没有"},
+            "result": {"changed": False, "old": "没有变化"},
+        },
+        {
+            "tool": "memory_remove",
+            "arguments": {"target": "memory", "old_text": "重复"},
+            "result": {"changed": True, "old": "重复的约定"},
+        },
+        {
+            "tool": "memory_remove",
+            "arguments": {"target": "memory", "old_text": "不存在"},
+            "error": {"error": "invalid_memory", "message": "没有找到匹配条目"},
+        },
+    ]
+    published = asyncio.run(scheduler.run(row["review_id"], RecordingGateway(records)))
+
+    assert [notice["text"] for notice in published] == [
+        "整理记忆：已修改：先给结论 → 回答先给结论",
+        "整理记忆：已删除：重复的约定",
+    ]
+    assert {notice["run_id"] for notice in published} == {last_run}
+    with session() as conn:
+        notices = [
+            dict(item)
+            for item in conn.execute(
+                "SELECT item_id, run_id, text FROM task_timeline_items "
+                "WHERE task_id = ? AND kind = 'notice' ORDER BY rowid",
+                (task_id,),
+            )
+        ]
+    assert notices == [
+        {"item_id": n["item_id"], "run_id": n["run_id"], "text": n["text"]} for n in published
+    ]
+
+
+def test_run_without_changes_writes_no_notice(scheduler):
+    with session() as conn:
+        task_id = make_task(conn)
+        seed_round(conn, task_id, "一")
+    row = scheduler.enqueue_manual(task_id)
+    scheduler.claim(row["review_id"])
+    assert asyncio.run(scheduler.run(row["review_id"], RecordingGateway())) == []
+    with session() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) AS n FROM task_timeline_items WHERE kind = 'notice'"
+        ).fetchone()["n"]
+    assert count == 0
 
 
 def test_claim_and_finish_transition(scheduler):
