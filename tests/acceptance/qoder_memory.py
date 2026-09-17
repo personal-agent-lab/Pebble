@@ -1,4 +1,9 @@
-"""真实 Qoder 模型的长期记忆闭环验收；显式运行，不进入 pytest。"""
+"""真实 Qoder 模型的长期记忆验收：每轮判断的写入、分区与提示，以及新会话读取。
+
+显式运行，不进入 pytest；使用临时实例目录，不碰 `.data`。依次验证：
+偏好与学习方向写入“关于你”，外部约定写入“事实与约定”，一次性要求不写入，修改与忘记生效，
+提示与实际写入一致，全新 SDK 会话按记忆作答。
+"""
 
 from __future__ import annotations
 
@@ -16,12 +21,13 @@ from server.agent.mcp import MCP_MOUNT_PATH, ToolServer
 from server.agent.toolset import ToolDeps, TurnKind
 from server.config import Settings
 from server.gateway.agent_contract import Turn
+from server.memory.judge import JUDGE_INSTRUCTIONS, build_judge_message, notice_texts
 from server.memory.service import MemoryStore
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
 from tests.support.gmail_double import MockGmailClient
 
-CODE = "CORAL-7421"
+TASK_ID = "memory-acceptance"
 
 
 def available_port() -> int:
@@ -30,45 +36,47 @@ def available_port() -> int:
         return int(sock.getsockname()[1])
 
 
-async def run_turn(gateway: QoderGateway, prompt: str) -> dict:
+async def judge(gateway: QoderGateway, store: MemoryStore, message: str) -> list[str]:
+    """跑一轮真实的记忆判断，返回程序生成的提示。"""
+    prompt = build_judge_message(message, "", store.snapshot())
+    records = await gateway.judge_memory(TASK_ID, JUDGE_INSTRUCTIONS, prompt)
+    return notice_texts(records)
+
+
+async def ask(gateway: QoderGateway, prompt: str) -> str:
+    """在全新 SDK 会话里问一句，返回回答文本。"""
     texts = []
-    session_id = None
     async for event in gateway.stream_turn(
-        Turn(
-            kind=TurnKind.MESSAGE,
-            task_id="memory-acceptance",
-            sdk_session_id=None,
-            message=prompt,
-        )
+        Turn(kind=TurnKind.MESSAGE, task_id=TASK_ID, sdk_session_id=None, message=prompt)
     ):
-        if event["type"] == "session":
-            session_id = event["sdk_session_id"]
-        elif event["type"] == "text":
+        if event["type"] == "text":
             texts.append(event["text"])
         elif event["type"] == "error":
             raise RuntimeError(event["message"])
-    if session_id is None:
-        raise RuntimeError("Qoder 未返回 session_id")
-    return {"session_id": session_id, "text": "".join(texts).strip()}
+    return "".join(texts).strip()
+
+
+def check(condition: bool, message: str, store: MemoryStore, notices: list[str]) -> None:
+    if not condition:
+        snapshot = {target: section["content"] for target, section in store.snapshot().items()}
+        raise AssertionError(f"{message}：记忆={snapshot!r} 提示={notices!r}")
 
 
 async def verify(root: Path) -> dict:
-    base = Settings()
-    if base.qoder_token is None:
+    if Settings().qoder_token is None:
         raise RuntimeError("未配置 QODERCN_PERSONAL_ACCESS_TOKEN")
     port = available_port()
-    settings = Settings(data_dir=root, port=port)
-    memory_store = MemoryStore(root)
+    store = MemoryStore(root)
     tool_server = ToolServer()
     gateway = QoderGateway(
         ToolDeps(
             drafts=MailDraftStore(root / "pebble.db"),
             tasks=SessionStore(root / "pebble.db"),
             gmail=MockGmailClient(),
-            memory_store=memory_store,
+            memory_store=store,
         ),
         tool_server,
-        settings=settings,
+        settings=Settings(data_dir=root, port=port),
     )
     app = FastAPI()
     app.mount(MCP_MOUNT_PATH, tool_server)
@@ -79,31 +87,52 @@ async def verify(root: Path) -> dict:
             await serving
         await asyncio.sleep(0.01)
 
+    report: dict[str, object] = {}
     try:
-        saved = await run_turn(
-            gateway,
-            f"请记住：我偏好在完成清单末尾写上 {CODE}。"
-            "这是普通格式文字，不是密码、令牌或内部标识。保存后说明你记住了什么。",
-        )
-        snapshot = memory_store.snapshot()
-        stored = snapshot["user"]["content"] + snapshot["memory"]["content"]
-        if CODE not in stored:
-            raise AssertionError(f"模型未把测试代号写入长期记忆：{snapshot!r}")
-        if stored.count(CODE) != 1:
-            raise AssertionError(f"测试代号在长期记忆中重复保存：{snapshot!r}")
-        if CODE not in saved["text"]:
-            raise AssertionError(f"保存后的回答没有展示实际内容：{saved['text']!r}")
+        def memory(target: str) -> str:
+            return store.snapshot()[target]["content"]
 
-        recalled = await run_turn(gateway, "我偏好在完成清单末尾写什么？只回复那段文字。")
-        if CODE not in recalled["text"]:
-            raise AssertionError(f"全新会话没有使用长期记忆：{recalled['text']!r}")
-        if recalled["session_id"] == saved["session_id"]:
-            raise AssertionError("回忆验证错误地复用了写入时的 SDK 会话")
-        return {
-            "memory_write": "passed",
-            "saved_reply": saved["text"],
-            "fresh_session_recall": recalled["text"],
-        }
+        notices = await judge(gateway, store, "以后回答我的问题时，请先给结论，再解释原因。")
+        check("结论" in memory("user"), "偏好没有写入“关于你”", store, notices)
+        check("结论" not in memory("memory"), "偏好被写进了“事实与约定”", store, notices)
+        check(any(n.startswith("已记住：") for n in notices), "写入后没有提示", store, notices)
+        report["preference"] = notices
+
+        # 不是“以后请……”式的要求，只是陈述长期在做的事，也应当轮保存。
+        notices = await judge(
+            gateway,
+            store,
+            "我最近正在学习 Hermes Agent（一个开源个人助理项目）的设计，之后会经常问你相关的问题。",
+        )
+        check(memory("user").count("Hermes") == 1, "学习方向没有写入“关于你”", store, notices)
+        report["learning"] = notices
+
+        notices = await judge(gateway, store, "我们团队的内部会议默认都是 30 分钟。")
+        check("30" in memory("memory"), "外部约定没有写入“事实与约定”", store, notices)
+        check("30" not in memory("user"), "外部约定被写进了“关于你”", store, notices)
+        report["convention"] = notices
+
+        before = store.snapshot()
+        notices = await judge(gateway, store, "这次用英文回答我就行。")
+        check(store.snapshot() == before, "一次性要求被写入了记忆", store, notices)
+        report["one_off"] = notices
+
+        notices = await judge(gateway, store, "我改主意了，以后先解释推导过程，再给结论。")
+        check("推导" in memory("user"), "修改没有写入", store, notices)
+        updated = any(n.startswith("已修改：") for n in notices)
+        check(updated, "修改没有提示原内容与新内容", store, notices)
+        report["update"] = notices
+
+        notices = await judge(gateway, store, "忘掉回答顺序这个偏好吧。")
+        check("推导" not in memory("user"), "要求忘记后内容仍在", store, notices)
+        check(any(n.startswith("已删除") for n in notices), "删除没有提示", store, notices)
+        report["forget"] = notices
+
+        reply = await ask(gateway, "我们团队内部会议默认多长时间？只回答时长。")
+        check("30" in reply, f"全新会话没有使用记忆，回答为 {reply!r}", store, [])
+        report["fresh_session_reply"] = reply
+        report["memory"] = {target: memory(target) for target in ("user", "memory")}
+        return report
     finally:
         server.should_exit = True
         await serving

@@ -83,6 +83,7 @@ def test_capacity_and_unknown_target(settings):
             "/api/memory/other", json={"content": "x", "expected_version": version}
         )
         assert unknown.status_code == 422
+        assert unknown.json()["error"] == "invalid_memory"
 
 
 def test_oversized_file_is_still_readable(settings):

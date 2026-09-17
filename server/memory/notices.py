@@ -1,15 +1,18 @@
 """记忆会话的共用部分：给模型的当前记忆材料，以及按真实工具结果生成的用户提示。
 
 提示只依据记录到的工具调用与结果生成，模型自述不作为事实来源。每轮判断的每项结果都
-提示；后台回顾只提示修改与删除（整理动了用户已有的内容），新增不打扰用户。
+提示；后台回顾只提示修改、删除与跨分区移动（整理动了用户已有的内容），新增不打扰用户。
 """
 
 from __future__ import annotations
+
+import re
 
 from server.agent.context import Material
 
 EMPTY_MEMORY = "（空）"
 MEMORY_TITLES = (("user", "关于你"), ("memory", "事实与约定"))
+MEMORY_LABELS = dict(MEMORY_TITLES)
 
 # 判断失败才提示用户的错误；invalid_memory 是模型可自行修正的参数问题，不打扰用户。
 NOTICE_FAILURE_ERRORS = {"memory_full", "memory_store_unavailable", "unexpected"}
@@ -30,6 +33,7 @@ def memory_materials(snapshot: dict) -> tuple[Material, ...]:
 def notice_texts(records: list[dict]) -> list[str]:
     """每轮判断的实际工具调用与结果映射为用户可见的提示，按调用顺序；多处编辑逐处提示。"""
     notices = []
+    moved = _moves(records)
     for index, record in enumerate(records):
         if "error" in record:
             error = record["error"]
@@ -43,27 +47,69 @@ def notice_texts(records: list[dict]) -> list[str]:
         if record["tool"] == "memory_ask":
             notices.append(f"想确认：{record['result']['question']}")
             continue
-        for edit in record["result"]["applied"]:
-            notices.append(_change_text(edit) if edit["changed"] else "这条内容已经在记忆里。")
+        for target, edit in _edits([record]):
+            if not edit["changed"]:
+                notices.append("这条内容已经在记忆里。")
+            elif (text := _change_text(target, edit, moved)) is not None:
+                notices.append(text)
     return notices
 
 
 def review_notice_texts(records: list[dict]) -> list[str]:
-    """后台回顾的提示：只列出实际生效的修改与删除。"""
+    """后台回顾的提示：只列出实际生效的修改、删除与跨分区移动，新增不提示。"""
+    moved = _moves(records)
+    notices = []
+    for target, edit in _edits(records):
+        if not edit["changed"] or not edit["old_text"]:
+            continue
+        if (text := _change_text(target, edit, moved, review=True)) is not None:
+            notices.append(REVIEW_PREFIX + text)
+    return notices
+
+
+def _edits(records: list[dict]) -> list[tuple[str, dict]]:
     return [
-        REVIEW_PREFIX + _change_text(edit, review=True)
+        (record["arguments"].get("target"), edit)
         for record in records
         for edit in record.get("result", {}).get("applied", [])
-        if edit["changed"] and edit["old_text"]
     ]
 
 
-def _change_text(edit: dict, *, review: bool = False) -> str:
+def _bare(text: str) -> str:
+    """比较移动时忽略列表符号：删除时常连同 “- ” 取整行，追加时可能不带。"""
+    return re.sub(r"^\s*(?:[-*+]|\d+\.)\s+", "", text.strip(), flags=re.MULTILINE)
+
+
+def _moves(records: list[dict]) -> dict[tuple[str, str], str]:
+    """同一次会话里从一个分区删掉、又原样追加到另一分区的内容，视为移动。
+
+    返回以（分区, 文字）为键的表：删除一侧映射到目标分区，追加一侧映射到空串（不单独提示）。
+    """
+    edits = [(target, edit) for target, edit in _edits(records) if edit["changed"]]
+    removed = [(t, e["old_text"]) for t, e in edits if e["old_text"] and not e["new_text"]]
+    added = [(t, e["new_text"]) for t, e in edits if not e["old_text"]]
+    moves: dict[tuple[str, str], str] = {}
+    for source, old in removed:
+        for destination, new in added:
+            if destination == source or (destination, new) in moves:
+                continue
+            if _bare(new) == _bare(old):
+                moves[(source, old)] = destination
+                moves[(destination, new)] = ""
+                break
+    return moves
+
+
+def _change_text(
+    target: str, edit: dict, moved: dict[tuple[str, str], str], *, review: bool = False
+) -> str | None:
     old, new = edit["old_text"], edit["new_text"]
     if not old:
-        return f"已记住：{new}"
+        return None if (target, new) in moved else f"已记住：{new}"
     if new:
         return f"已修改：{old} → {new}"
+    if (destination := moved.get((target, old))) is not None:
+        return f"已移到“{MEMORY_LABELS[destination]}”：{_bare(old)}"
     return f"已删除：{old}" if review else f"已删除这条记忆：{old}。原对话仍保留。"
 
 

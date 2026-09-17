@@ -272,9 +272,6 @@ def history_search(
 # 写入沿用资料库自身的版本校验，保存、移动与删除都要带上读取时的 version。
 
 
-MemoryTarget = Literal["user", "memory"]
-
-
 class MemoryDocumentWrite(BaseModel):
     content: str
     expected_version: str = Field(min_length=1)
@@ -295,8 +292,8 @@ def memory_current(memory: Memory) -> dict:
 
 
 @router.put("/memory/{target}", tags=["memory"])
-def memory_write(target: MemoryTarget, body: MemoryDocumentWrite, memory: Memory) -> dict:
-    """整份保存一块记忆：读取之后文件被改过时返回 409，不覆盖。"""
+def memory_write(target: str, body: MemoryDocumentWrite, memory: Memory) -> dict:
+    """整份保存一块记忆：读取之后文件被改过时返回 409，不覆盖；未知分区返回 invalid_memory。"""
     result = memory.write(target, body.content, expected_version=body.expected_version)
     return {"target": target, "changed": result["changed"], **memory_section(result)}
 

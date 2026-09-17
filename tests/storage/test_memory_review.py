@@ -9,6 +9,7 @@ import pytest
 from server.agent.toolset import ToolDeps, build_tools
 from server.db import init_db, session, write
 from server.errors import NotFoundError
+from server.memory.notices import review_notice_texts
 from server.memory.review import (
     REVIEW_MESSAGE_HEADER,
     MemoryReviewScheduler,
@@ -402,3 +403,37 @@ def test_claim_and_finish_transition(scheduler):
         ).fetchone()
     assert record["status"] == "error"
     assert "记忆回顾失败" in record["error"]
+
+
+def move(source, destination, text, added=None):
+    """把一段内容从一个分区删掉、追加到另一分区的两次调用。"""
+    return [
+        {
+            "tool": "memory_edit",
+            "arguments": {"target": source, "old_text": text},
+            "result": {"changed": True, "applied": [
+                {"old_text": text, "new_text": "", "changed": True}
+            ]},
+        },
+        {
+            "tool": "memory_edit",
+            "arguments": {"target": destination, "new_text": added or text},
+            "result": {"changed": True, "applied": [
+                {"old_text": "", "new_text": added or text, "changed": True}
+            ]},
+        },
+    ]
+
+
+def test_review_notices_report_moves_but_not_additions():
+    records = [
+        *move("user", "memory", "- 内部会议默认 30 分钟"),
+        *move("memory", "user", "用户偏好先给结论", added="- 用户偏好先给结论"),
+        edited({"target": "user", "new_text": "新增不提示"}),
+        edited({"target": "user", "old_text": "- 旧的偏好", "new_text": ""}),
+    ]
+    assert review_notice_texts(records) == [
+        "整理记忆：已移到“事实与约定”：内部会议默认 30 分钟",
+        "整理记忆：已移到“关于你”：用户偏好先给结论",
+        "整理记忆：已删除：- 旧的偏好",
+    ]

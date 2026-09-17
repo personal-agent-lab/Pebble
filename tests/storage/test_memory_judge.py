@@ -257,3 +257,39 @@ def test_notice_texts_hide_capacity_failure_resolved_by_consolidation():
         "已记住：新偏好",
         f"记忆保存失败：{FULL}",
     ]
+
+
+def move(source, destination, text, added=None):
+    """把一段内容从一个分区删掉、追加到另一分区的两次调用。"""
+    return [
+        {
+            "tool": "memory_edit",
+            "arguments": {"target": source, "old_text": text},
+            "result": {"changed": True, "applied": [
+                {"old_text": text, "new_text": "", "changed": True}
+            ]},
+        },
+        {
+            "tool": "memory_edit",
+            "arguments": {"target": destination, "new_text": added or text},
+            "result": {"changed": True, "applied": [
+                {"old_text": "", "new_text": added or text, "changed": True}
+            ]},
+        },
+    ]
+
+
+def test_notice_texts_merge_a_move_between_partitions():
+    records = [
+        *move("user", "memory", "- 内部会议默认 30 分钟", added="内部会议默认 30 分钟"),
+        edited({"target": "memory", "new_text": "“工作”日历用于内部会议"}),
+    ]
+    assert notice_texts(records) == [
+        "已移到“事实与约定”：内部会议默认 30 分钟",
+        "已记住：“工作”日历用于内部会议",
+    ]
+    # 删掉的内容与追加的内容不同、或在同一分区里，不算移动。
+    assert notice_texts(move("user", "user", "偏好先给结论")) == [
+        "已删除这条记忆：偏好先给结论。原对话仍保留。",
+        "已记住：偏好先给结论",
+    ]
