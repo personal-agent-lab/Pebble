@@ -323,7 +323,16 @@ def test_run_passes_window_and_memory_snapshot_to_gateway(scheduler):
 
 
 def edited(arguments, changed=True):
-    return {"tool": "memory_edit", "arguments": arguments, "result": {"changed": changed}}
+    edit = {
+        "old_text": arguments.get("old_text", ""),
+        "new_text": arguments.get("new_text", ""),
+        "changed": changed,
+    }
+    return {
+        "tool": "memory_edit",
+        "arguments": arguments,
+        "result": {"changed": changed, "applied": [edit]},
+    }
 
 
 def test_run_writes_notices_only_for_changed_existing_content(scheduler):

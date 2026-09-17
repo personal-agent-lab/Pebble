@@ -43,10 +43,80 @@ def test_edit_appends_replaces_and_removes_fragments(settings):
     removed = store.edit("user", "- 默认使用中文")
 
     assert added["changed"] is True and added["content"] == "- 回答先给结论"
-    assert duplicate == {**added, "changed": False}
+    assert duplicate["changed"] is False and duplicate["version"] == added["version"]
+    assert duplicate["applied"] == [{"old_text": "", "new_text": "回答先给结论", "changed": False}]
     assert replaced["content"] == "- 回答先解释推导\n\n- 默认使用中文"
     assert removed["content"] == "- 回答先解释推导"
     assert (settings.data_dir / "memory" / "USER.md").read_text() == "- 回答先解释推导"
+
+
+def test_batch_edits_apply_in_order_and_check_capacity_on_final_result(settings):
+    store = MemoryStore(settings.data_dir)
+    store.write("user", "- " + "甲" * 1300 + "\n- 回答先给结论", expected_version=_empty(store))
+
+    # 单独追加会超限；同一批里先精简旧内容再追加，最终结果在上限内即可保存。
+    with pytest.raises(MemoryFullError):
+        store.edit("user", new_text="- " + "乙" * 80)
+    result = store.edit(
+        "user",
+        operations=[
+            {"old_text": "甲" * 1300, "new_text": "甲" * 10},
+            {"old_text": "", "new_text": "- " + "乙" * 80},
+            {"old_text": "", "new_text": "回答先给结论"},
+        ],
+    )
+
+    assert result["changed"] is True
+    assert [edit["changed"] for edit in result["applied"]] == [True, True, False]
+    assert result["content"] == "- " + "甲" * 10 + "\n- 回答先给结论\n\n- " + "乙" * 80
+
+
+def test_failed_batch_writes_nothing(settings):
+    store = MemoryStore(settings.data_dir)
+    store.edit("memory", new_text="- 内部会议三十分钟")
+    before = (settings.data_dir / "memory" / "MEMORY.md").read_bytes()
+
+    with pytest.raises(MemoryValidationError, match="第 2 处编辑"):
+        store.edit(
+            "memory",
+            operations=[
+                {"old_text": "三十分钟", "new_text": "四十五分钟"},
+                {"old_text": "不存在的原文", "new_text": ""},
+            ],
+        )
+    with pytest.raises(MemoryFullError):
+        store.edit(
+            "memory",
+            operations=[
+                {"old_text": "- 内部会议三十分钟", "new_text": ""},
+                {"old_text": "", "new_text": "乙" * 2201},
+            ],
+        )
+    with pytest.raises(MemoryValidationError):
+        store.edit("memory", "三十分钟", operations=[{"old_text": "", "new_text": "x"}])
+    with pytest.raises(MemoryValidationError):
+        store.edit("memory", operations=[])
+    assert (settings.data_dir / "memory" / "MEMORY.md").read_bytes() == before
+
+
+def test_batch_that_cancels_out_reports_no_change(settings):
+    store = MemoryStore(settings.data_dir)
+    store.edit("user", new_text="回答先给结论")
+
+    result = store.edit(
+        "user",
+        operations=[
+            {"old_text": "先给结论", "new_text": "先解释推导"},
+            {"old_text": "先解释推导", "new_text": "先给结论"},
+        ],
+    )
+
+    assert result["changed"] is False
+    assert [edit["changed"] for edit in result["applied"]] == [False, False]
+
+
+def _empty(store):
+    return store.snapshot()["user"]["version"]
 
 
 def test_edit_inside_a_list_keeps_document_structure(settings):

@@ -145,7 +145,16 @@ def test_recent_text_items_include_notices(settings):
 
 
 def edited(arguments, changed=True):
-    return {"tool": "memory_edit", "arguments": arguments, "result": {"changed": changed}}
+    edit = {
+        "old_text": arguments.get("old_text", ""),
+        "new_text": arguments.get("new_text", ""),
+        "changed": changed,
+    }
+    return {
+        "tool": "memory_edit",
+        "arguments": arguments,
+        "result": {"changed": changed, "applied": [edit]},
+    }
 
 
 def test_notice_texts_report_actual_results():
@@ -203,11 +212,44 @@ def test_notice_texts_show_only_real_failures():
     ]
 
 
+def test_notice_texts_list_each_edit_of_a_batch():
+    operations = [
+        {"old_text": "- 旧条目", "new_text": "- 合并后的条目"},
+        {"old_text": "- 重复条目", "new_text": ""},
+        {"old_text": "", "new_text": "- 新偏好"},
+        {"old_text": "", "new_text": "- 已有偏好"},
+    ]
+    record = {
+        "tool": "memory_edit",
+        "arguments": {"target": "user", "operations": operations},
+        "result": {
+            "changed": True,
+            "applied": [{**edit, "changed": index != 3} for index, edit in enumerate(operations)],
+        },
+    }
+    assert notice_texts([record]) == [
+        "已修改：- 旧条目 → - 合并后的条目",
+        "已删除这条记忆：- 重复条目。原对话仍保留。",
+        "已记住：- 新偏好",
+        "这条内容已经在记忆里。",
+    ]
+
+
 def test_notice_texts_hide_capacity_failure_resolved_by_consolidation():
+    batch = {
+        "tool": "memory_edit",
+        "arguments": {"target": "user", "operations": []},
+        "result": {
+            "changed": True,
+            "applied": [
+                {"old_text": "旧条目", "new_text": "合并后的条目", "changed": True},
+                {"old_text": "", "new_text": "新偏好", "changed": True},
+            ],
+        },
+    }
     records = [
         failed({"target": "user", "new_text": "新偏好"}, "memory_full", FULL),
-        edited({"target": "user", "old_text": "旧条目", "new_text": "合并后的条目"}),
-        edited({"target": "user", "new_text": "新偏好"}),
+        batch,
         failed({"target": "user", "new_text": "放不下"}, "memory_full", FULL),
     ]
     assert notice_texts(records) == [

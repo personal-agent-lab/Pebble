@@ -52,33 +52,84 @@ class MemoryStore:
         with self._lock:
             return {target: self._target_snapshot(target) for target in TARGETS}
 
-    def edit(self, target: str, old_text: str = "", new_text: str = "") -> dict:
+    def edit(
+        self,
+        target: str,
+        old_text: str = "",
+        new_text: str = "",
+        operations: list[dict] | None = None,
+    ) -> dict:
         """模型的片段编辑：`old_text` 为空时追加，`new_text` 为空时删除，都有时替换。
 
-        `old_text` 必须在文档中恰好出现一次；要追加的内容已经原样在文档里时不写入。
+        `operations` 是一组编辑，按顺序作用在同一份文档上，整体生效或整体失败，容量只按
+        最终结果检查：整理旧内容与保存新内容可以放在一次调用里。每处编辑的 `old_text`
+        必须在当时的文档中恰好出现一次；要追加的内容已经原样在文档里时这一处不写入。
+        结果的 `applied` 按顺序列出每处编辑与它是否实际改变了文档。
         """
-        old, new = (old_text or "").strip(), (new_text or "").strip()
-        errors = [TARGET_ERROR] if target not in TARGETS else []
-        if not old and not new:
-            errors.append({"field": "new_text", "message": "old_text 与 new_text 不能都为空"})
-        if errors:
-            raise MemoryValidationError(errors)
+        edits = self._edits(target, old_text, new_text, operations)
         with self._lock:
             current = self._target_snapshot(target)
             content = current["content"]
-            if not old:
-                if new in content:
-                    return self._result(current, changed=False)
-                return self._save(current, f"{content}\n\n{new}" if content else new)
-            count = content.count(old)
-            if count != 1:
-                reason = (
-                    "没有找到这段原文" if count == 0 else "这段原文出现了多次，请给出更长的片段"
-                )
-                raise MemoryValidationError([{"field": "old_text", "message": reason}])
-            if old == new:
-                return self._result(current, changed=False)
-            return self._save(current, content.replace(old, new))
+            applied = []
+            for index, (old, new) in enumerate(edits):
+                content, changed = self._apply_edit(content, old, new, index, len(edits))
+                applied.append({"old_text": old, "new_text": new, "changed": changed})
+            result = self._save(current, content)
+            if not result["changed"]:
+                # 几处编辑互相抵消、文档没有变化时，不报告任何一处生效。
+                applied = [{**item, "changed": False} for item in applied]
+            return {**result, "applied": applied}
+
+    @staticmethod
+    def _edits(
+        target: str, old_text: str, new_text: str, operations: list[dict] | None
+    ) -> list[tuple[str, str]]:
+        errors = [TARGET_ERROR] if target not in TARGETS else []
+        single = bool((old_text or "").strip() or (new_text or "").strip())
+        if operations is not None and single:
+            errors.append(
+                {"field": "operations", "message": "operations 与 old_text、new_text 不能同时使用"}
+            )
+        raw = operations if operations is not None else [
+            {"old_text": old_text, "new_text": new_text}
+        ]
+        if not raw:
+            errors.append({"field": "operations", "message": "至少需要一处编辑"})
+        edits = []
+        for index, item in enumerate(raw):
+            field = "operations" if operations is not None else "new_text"
+            if not isinstance(item, dict) or not all(
+                isinstance(item.get(key, ""), str | None) for key in ("old_text", "new_text")
+            ):
+                errors.append({"field": field, "message": f"第 {index + 1} 处编辑格式不正确"})
+                continue
+            old = (item.get("old_text") or "").strip()
+            new = (item.get("new_text") or "").strip()
+            if not old and not new:
+                message = "old_text 与 new_text 不能都为空"
+                if operations is not None:
+                    message = f"第 {index + 1} 处编辑的 {message}"
+                errors.append({"field": field, "message": message})
+            edits.append((old, new))
+        if errors:
+            raise MemoryValidationError(errors)
+        return edits
+
+    @staticmethod
+    def _apply_edit(content: str, old: str, new: str, index: int, total: int) -> tuple[str, bool]:
+        if not old:
+            if new in content:
+                return content, False
+            return (f"{content}\n\n{new}" if content else new), True
+        count = content.count(old)
+        if count != 1:
+            reason = "没有找到这段原文" if count == 0 else "这段原文出现了多次，请给出更长的片段"
+            if total > 1:
+                reason = f"第 {index + 1} 处编辑：{reason}"
+            raise MemoryValidationError([{"field": "old_text", "message": reason}])
+        if old == new:
+            return content, False
+        return _normalize(content.replace(old, new)), True
 
     def write(self, target: str, content: str, *, expected_version: str) -> dict:
         """管理页整份保存：文件在读取之后被改过即拒绝，不覆盖别人的修改。"""

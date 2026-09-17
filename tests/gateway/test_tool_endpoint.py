@@ -216,6 +216,8 @@ def test_review_endpoint_exposes_review_tools(settings):
         ):
             listed = await session.list_tools()
             assert [tool.name for tool in listed.tools] == ["memory_edit"]
+            operations = listed.tools[0].inputSchema["properties"]["operations"]
+            assert operations["items"]["properties"].keys() == {"old_text", "new_text"}
 
             saved = await session.call_tool(
                 "memory_edit", {"target": "user", "new_text": "用户在研究记忆机制"}
@@ -223,13 +225,26 @@ def test_review_endpoint_exposes_review_tools(settings):
             assert saved.isError is False
             assert tool_payload(saved)["changed"] is True
 
+            batch = await session.call_tool(
+                "memory_edit",
+                {
+                    "target": "user",
+                    "operations": [
+                        {"old_text": "记忆机制", "new_text": "长期记忆机制"},
+                        {"old_text": "", "new_text": "用户偏好先给结论"},
+                    ],
+                },
+            )
+            assert batch.isError is False
+            assert [edit["changed"] for edit in tool_payload(batch)["applied"]] == [True, True]
+
             # 回顾没有提问的对象：追问工具只在每轮判断会话中存在。
             blocked = await session.call_tool("memory_ask", {"question": "要改哪一条？"})
             assert blocked.isError is True
             assert tool_payload(blocked)["error"] == "unknown_tool"
 
     asyncio.run(scenario())
-    assert "用户在研究记忆机制" in store.snapshot()["user"]["content"]
+    assert store.snapshot()["user"]["content"] == "用户在研究长期记忆机制\n\n用户偏好先给结论"
 
 
 def test_judge_endpoint_exposes_judgment_tools(settings):

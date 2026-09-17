@@ -27,17 +27,8 @@ def memory_materials(snapshot: dict) -> tuple[Material, ...]:
     return tuple(materials)
 
 
-def edit_kind(arguments: dict) -> str:
-    """片段编辑的含义：追加、修改或删除，由参数是否为空决定。"""
-    old = (arguments.get("old_text") or "").strip()
-    new = (arguments.get("new_text") or "").strip()
-    if not old:
-        return "add"
-    return "remove" if not new else "replace"
-
-
 def notice_texts(records: list[dict]) -> list[str]:
-    """每轮判断的实际工具调用与结果映射为用户可见的提示，按调用顺序。"""
+    """每轮判断的实际工具调用与结果映射为用户可见的提示，按调用顺序；多处编辑逐处提示。"""
     notices = []
     for index, record in enumerate(records):
         if "error" in record:
@@ -49,42 +40,50 @@ def notice_texts(records: list[dict]) -> list[str]:
                 continue
             notices.append(f"记忆保存失败：{error['message']}")
             continue
-        name, result, arguments = record["tool"], record["result"], record["arguments"]
-        if name == "memory_ask":
-            notices.append(f"想确认：{result['question']}")
-        elif not result["changed"]:
-            notices.append("这条内容已经在记忆里。")
-        else:
-            notices.append(_change_text(arguments))
+        if record["tool"] == "memory_ask":
+            notices.append(f"想确认：{record['result']['question']}")
+            continue
+        for edit in record["result"]["applied"]:
+            notices.append(_change_text(edit) if edit["changed"] else "这条内容已经在记忆里。")
     return notices
 
 
 def review_notice_texts(records: list[dict]) -> list[str]:
     """后台回顾的提示：只列出实际生效的修改与删除。"""
     return [
-        REVIEW_PREFIX + _change_text(record["arguments"], review=True)
+        REVIEW_PREFIX + _change_text(edit, review=True)
         for record in records
-        if record.get("result", {}).get("changed")
-        and edit_kind(record["arguments"]) != "add"
+        for edit in record.get("result", {}).get("applied", [])
+        if edit["changed"] and edit["old_text"]
     ]
 
 
-def _change_text(arguments: dict, *, review: bool = False) -> str:
-    old = (arguments.get("old_text") or "").strip()
-    new = (arguments.get("new_text") or "").strip()
-    kind = edit_kind(arguments)
-    if kind == "add":
+def _change_text(edit: dict, *, review: bool = False) -> str:
+    old, new = edit["old_text"], edit["new_text"]
+    if not old:
         return f"已记住：{new}"
-    if kind == "replace":
+    if new:
         return f"已修改：{old} → {new}"
     return f"已删除：{old}" if review else f"已删除这条记忆：{old}。原对话仍保留。"
 
 
+def _requested_texts(arguments: dict) -> set[str]:
+    """一次失败调用想写入的新文字；operations 格式不对时按没有处理。"""
+    operations = arguments.get("operations")
+    edits = operations if isinstance(operations, list) else [arguments]
+    return {
+        (edit.get("new_text") or "").strip()
+        for edit in edits
+        if isinstance(edit, dict) and isinstance(edit.get("new_text"), str)
+    } - {""}
+
+
 def _saved_later(failed: dict, later: list[dict]) -> bool:
-    content = (failed["arguments"].get("new_text") or "").strip()
-    return any(
-        record["tool"] == failed["tool"]
-        and record.get("result", {}).get("changed")
-        and (record["arguments"].get("new_text") or "").strip() == content
+    wanted = _requested_texts(failed["arguments"])
+    saved = {
+        edit["new_text"]
         for record in later
-    )
+        for edit in record.get("result", {}).get("applied", [])
+        if edit["changed"]
+    }
+    return bool(wanted) and wanted <= saved
