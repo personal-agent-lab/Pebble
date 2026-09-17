@@ -73,6 +73,8 @@ test("两个分区各显示整份内容与容量，只打开不出现保存", as
   expect(editor.value).toBe("## 表达\n\n- 回答先给结论\n- 默认使用简体中文");
   expect(within(section("关于你")).getByText(`${USER_DOC.length} / 1375 字`)).toBeTruthy();
   expect(within(section("事实与约定")).getByText("0 / 2200 字")).toBeTruthy();
+  expect(within(section("关于你")).getByText(/你本人/)).toBeTruthy();
+  expect(within(section("事实与约定")).getByText(/你以外的事实/)).toBeTruthy();
   expect(screen.queryByRole("button", { name: "保存" })).toBeNull();
   expect(screen.getAllByRole("link", { name: /记忆/ })[0].getAttribute("href")).toBe("/memory");
 });

@@ -761,8 +761,10 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 /* 两个分区各是一份 Markdown 文档：标题与容量条一行，下面是渲染后可直接编辑的正文。 */
 .memory-content { display: flex; flex-direction: column; gap: var(--spacing-lg); max-width: var(--feed-col); }
 .memory-section { display: flex; flex-direction: column; gap: 10px; }
-.memory-head { display: flex; align-items: center; gap: 16px; }
-.memory-head h3 { flex: 1; min-width: 0; margin: 0; font-size: var(--text-md); font-weight: 600; }
+.memory-head { display: flex; align-items: flex-end; gap: 16px; }
+.memory-head-text { flex: 1; min-width: 0; }
+.memory-head h3 { margin: 0; font-size: var(--text-md); font-weight: 600; }
+.memory-hint { margin-top: 2px; font-size: var(--text-xs); color: var(--color-muted); }
 
 .memory-usage { flex: none; display: flex; align-items: center; gap: 8px; font-size: var(--text-xs); color: var(--color-muted); }
 .memory-meter {
@@ -779,7 +781,7 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .kb-editor.memory-editor { min-height: 120px; }
 .kb-editor.memory-editor .ProseMirror { min-height: 88px; }
 .kb-editor.memory-editor .ProseMirror > p:only-child:has(> br:only-child)::before {
-  content: "还没有内容。对话中明确说出的偏好会自动记在这里，也可以直接写。";
+  content: "还没有内容。对话中提到的相关信息会自动记在这里，也可以直接写。";
 }
 
 .memory-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
