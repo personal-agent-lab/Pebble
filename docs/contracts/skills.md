@@ -2,7 +2,7 @@
 
 状态：**Memory 已实现，Skills 尚未实现**。SDK 侧的 `skills` 配置插孔与每轮上下文装配已存在，生效名单当前为空。本文定义文件格式、存储布局、沉淀来源、审核与加载边界。实现与本文冲突时先改本文。
 
-Memory 保存“关于用户的精简背景、偏好、长期目标与约定”，每轮常驻上下文；个人知识库保存“具体资料”，按需检索，两者分开，见 `personal-kb.md`。记忆条目不记录出处。
+Memory 保存“关于用户的精简背景、偏好、长期目标与约定”，每轮常驻上下文；个人知识库保存“具体资料”，按需检索，两者分开，见 `personal-kb.md`。记忆不记录出处。
 
 ## 1. 存储布局
 
@@ -18,14 +18,16 @@ Memory 保存“关于用户的精简背景、偏好、长期目标与约定”�
 ## 2. Memory 文件格式
 
 ```markdown
-默认使用简体中文。
+## 会议
 
-§
+- 内部会议默认 30 分钟；对外邀请按对方给出的时长。
 
-内部会议默认 30 分钟；对外邀请按对方给出的时长。
+## 语言
+
+- 默认使用简体中文。
 ```
 
-每条记忆以独立一行 `§` 分隔，条目本身可包含多行。`USER.md` 最多 1375 个 Unicode 字符，`MEMORY.md` 最多 2200 个；使写入后内容超限且变大的写入整体拒绝，不截断旧内容。文件被直接编辑到超限时照常读取，只接受让它变小的写入。写入是原子替换，不做版本管理；每块记忆的版本号 `version` 是规范化内容的哈希，只用于管理页的冲突检查。
+每个文件是一份完整的 Markdown 文档，写法不限，不按条分隔。内容按规范化后计数：统一换行、去掉首尾空白、连续空行合并为一个。旧格式中独立一行的 `§` 分隔符在启动时换成空行，原条目变为段落。`USER.md` 最多 1375 个 Unicode 字符，`MEMORY.md` 最多 2200 个；使写入后内容超限且变大的写入整体拒绝，不截断旧内容。文件被直接编辑到超限时照常读取，只接受让它变小的写入。写入是原子替换，不做版本管理；每块记忆的版本号 `version` 是规范化内容的哈希，只用于管理页的冲突检查。
 
 每轮上下文重新读取文件：`USER.md` 作为 `## 关于你`，`MEMORY.md` 作为 `## 事实与约定`，资料目录（`personal-kb.md` 第 7 节）作为 `## 资料目录`，放在本轮触发材料之前。空文件不生成材料块。这三块构成常驻上下文，总量受各自容量上限约束；历史对话、资料正文、邮件与日程不自动注入，由 Agent 按需检索。规则不得覆盖外部写确认约束：该约束由程序（每轮工具可见范围与 Confirmation）保证，不依赖规则文本或模型自律。
 
@@ -124,22 +126,20 @@ Memory 不向前台对话暴露工具，写入集中在两个独立的一次性�
 
 | 会话 | 时机 | 工具 |
 | --- | --- | --- |
-| 每轮记忆判断 | 每个用户消息轮与主回答并行 | `memory_add`、`memory_replace`、`memory_remove`、`memory_ask` |
-| 后台记忆回顾 | 每攒够若干个已完成消息轮，找跨轮模式并整理 | `memory_add`、`memory_replace`、`memory_remove` |
+| 每轮记忆判断 | 每个用户消息轮与主回答并行 | `memory_edit`、`memory_ask` |
+| 后台记忆回顾 | 每攒够若干个已完成消息轮，找跨轮模式并整理 | `memory_edit` |
 
-`target` 取 `user` 或 `memory`。`memory_add` 输入 `target` 与非空 `content`；`memory_replace` 另要求 `old_text` 只匹配一个现有条目；`memory_remove` 只输入 `target` 与 `old_text`。完全相同的新增不重复写入。成功输出 `target`、`action`、`changed`、`entries`、`usage`、当前 `version`，替换与删除另附原条目 `old`。`memory_ask` 输入一句确认问题，不做任何写入，问题由程序作为提示展示给用户。两个会话收到的当前记忆材料标题附带已用与上限字数，容量不足时先用替换与删除整理再保存。每轮判断的写入结果与追问、后台回顾实际生效的替换与删除，由程序按记录到的工具结果渲染成用户可见的提示（见 `memory-spec.md` §5.3），模型自述不作为事实来源；回顾的新增不提示。回顾提示以 `notice` 写入任务时间线，挂在回顾窗口内最后一个调用上，并经 SSE 推送。
+`memory_edit` 输入 `target`（`user` 或 `memory`）、`old_text`、`new_text`，两者去掉首尾空白后不能都为空：`old_text` 为空时把 `new_text` 追加到文末（与已有内容以空行分隔），`new_text` 已原样出现在文档中时不写入；两者都有时把文档中恰好出现一次的 `old_text` 替换为 `new_text`；`new_text` 为空时删除 `old_text`。`old_text` 找不到或出现多次时返回 `invalid_memory`，不写入。成功输出 `target`、`changed`、`content`（全文）、`usage`、当前 `version`；提示所需的原文与新文取自调用参数。`memory_ask` 输入一句确认问题，不做任何写入，问题由程序作为提示展示给用户。两个会话收到的当前记忆材料标题附带已用与上限字数，容量不足时先用片段替换与删除整理再保存。每轮判断的写入结果与追问、后台回顾实际生效的替换与删除，由程序按记录到的工具结果渲染成用户可见的提示（见 `memory-spec.md` §5.3），模型自述不作为事实来源；回顾的新增不提示。回顾提示以 `notice` 写入任务时间线，挂在回顾窗口内最后一个调用上，并经 SSE 推送。
 
 管理页面的 HTTP 接口：
 
 | 接口 | 输入 | 输出 |
 | --- | --- | --- |
-| `GET /api/memory` | — | `user`、`memory` 各含 `entries[]`、`usage`（`chars`、`limit`）、`version` |
-| `POST /api/memory/entries/add` | `target`、`content`、`expected_version` | `target`、`changed`、`entries`、`usage`、`version` |
-| `POST /api/memory/entries/update` | `target`、`old`（条目全文）、`content`、`expected_version` | 同上 |
-| `POST /api/memory/entries/remove` | `target`、`old`（条目全文）、`expected_version` | 同上 |
+| `GET /api/memory` | — | `user`、`memory` 各含 `content`（全文）、`usage`（`chars`、`limit`）、`version` |
+| `PUT /api/memory/{target}` | `content`（整份文档，可为空）、`expected_version` | `target`、`changed`、`content`、`usage`、`version` |
 
-页面按条目全文精确匹配，不用片段；`expected_version` 与当前内容不一致时返回 409 `version_conflict`，附 `current_version`，不写入。
+页面整份保存；`expected_version` 与当前内容不一致时返回 409 `version_conflict`，附 `current_version`，不写入。内容规范化后与当前一致时 `changed` 为假，不写文件。
 
 ## 8. 错误
 
-Memory 字段或匹配失败返回 `invalid_memory` 并附 `errors[]`（HTTP 422）；容量超限返回 `memory_full`，附 `target`、`used` 与 `limit`（HTTP 422）；文件不可读写返回 `memory_store_unavailable`（HTTP 503）。失败不保留文件的半完成修改。Skills 字段校验仍使用 `SkillValidationError`，附 `errors[]`。
+Memory 字段校验或片段匹配失败返回 `invalid_memory` 并附 `errors[]`（HTTP 422）；容量超限返回 `memory_full`，附 `target`、`used` 与 `limit`（HTTP 422）；文件不可读写返回 `memory_store_unavailable`（HTTP 503）。失败不保留文件的半完成修改。Skills 字段校验仍使用 `SkillValidationError`，附 `errors[]`。
