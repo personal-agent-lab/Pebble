@@ -275,28 +275,14 @@ def history_search(
 MemoryTarget = Literal["user", "memory"]
 
 
-class MemoryEntryAdd(BaseModel):
-    target: MemoryTarget
+class MemoryDocumentWrite(BaseModel):
     content: str
-    expected_version: str = Field(min_length=1)
-
-
-class MemoryEntryUpdate(BaseModel):
-    target: MemoryTarget
-    old: str
-    content: str
-    expected_version: str = Field(min_length=1)
-
-
-class MemoryEntryRemove(BaseModel):
-    target: MemoryTarget
-    old: str
     expected_version: str = Field(min_length=1)
 
 
 def memory_section(result: dict) -> dict:
     return {
-        "entries": result["entries"],
+        "content": result["content"],
         "usage": result["usage"],
         "version": result["version"],
     }
@@ -304,35 +290,15 @@ def memory_section(result: dict) -> dict:
 
 @router.get("/memory", tags=["memory"])
 def memory_current(memory: Memory) -> dict:
-    """两块长期记忆的当前条目、容量与版本；超出容量的文件照常返回。"""
+    """两块长期记忆的当前全文、容量与版本；超出容量的文件照常返回。"""
     return {target: memory_section(section) for target, section in memory.snapshot().items()}
 
 
-@router.post("/memory/entries/add", tags=["memory"])
-def memory_add(body: MemoryEntryAdd, memory: Memory) -> dict:
-    result = memory.apply("add", body.target, body.content, expected_version=body.expected_version)
-    return {"target": body.target, "changed": result["changed"], **memory_section(result)}
-
-
-@router.post("/memory/entries/update", tags=["memory"])
-def memory_update(body: MemoryEntryUpdate, memory: Memory) -> dict:
-    result = memory.apply(
-        "replace",
-        body.target,
-        body.content,
-        body.old,
-        exact=True,
-        expected_version=body.expected_version,
-    )
-    return {"target": body.target, "changed": result["changed"], **memory_section(result)}
-
-
-@router.post("/memory/entries/remove", tags=["memory"])
-def memory_remove(body: MemoryEntryRemove, memory: Memory) -> dict:
-    result = memory.apply(
-        "remove", body.target, None, body.old, exact=True, expected_version=body.expected_version
-    )
-    return {"target": body.target, "changed": result["changed"], **memory_section(result)}
+@router.put("/memory/{target}", tags=["memory"])
+def memory_write(target: MemoryTarget, body: MemoryDocumentWrite, memory: Memory) -> dict:
+    """整份保存一块记忆：读取之后文件被改过时返回 409，不覆盖。"""
+    result = memory.write(target, body.content, expected_version=body.expected_version)
+    return {"target": target, "changed": result["changed"], **memory_section(result)}
 
 
 class KbDocumentCreate(BaseModel):

@@ -79,13 +79,13 @@ async def verify(root: Path) -> dict:
 
     try:
         calls: list[tuple] = []
-        original_apply = memory_store.apply
+        original_edit = memory_store.edit
 
-        def traced_apply(action, target, content=None, old_text=None, **options):
-            calls.append((action, target, content))
-            return original_apply(action, target, content, old_text, **options)
+        def traced_edit(target, old_text="", new_text=""):
+            calls.append((target, old_text, new_text))
+            return original_edit(target, old_text, new_text)
 
-        memory_store.apply = traced_apply
+        memory_store.edit = traced_edit
         reply = await run_turn(
             gateway,
             "我最近正在学习 Hermes Agent（一个开源个人助理项目）的设计，"

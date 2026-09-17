@@ -63,37 +63,34 @@ def seed_round(conn, task_id: str, text: str) -> str:
 # ---------- 判断工具契约 ----------
 
 
-def test_judge_registry_exposes_four_judgment_tools(store):
+def test_judge_registry_exposes_edit_and_ask(store):
     tools = judge_tools(store)
-    assert set(tools) == {"memory_add", "memory_replace", "memory_remove", "memory_ask"}
+    assert set(tools) == {"memory_edit", "memory_ask"}
     # 前台的 memory 工具不出现在判断会话中。
     assert judge_registry.get_tool("memory") is None
 
 
-def test_judge_tools_apply_through_store(store):
-    tools = judge_tools(store)
-    assert tools["memory_add"]("user", "用户对历史感兴趣")["changed"] is True
-    assert (
-        tools["memory_replace"]("user", "用户偏好通俗的历史读物", "对历史感兴趣")["changed"]
-        is True
-    )
+def test_judge_edit_tool_writes_through_store(store):
+    edit = judge_tools(store)["memory_edit"]
+    assert edit("user", new_text="用户对历史感兴趣")["changed"] is True
+    assert edit("user", "对历史感兴趣", "偏好通俗的历史读物")["changed"] is True
     assert "通俗" in store.snapshot()["user"]["content"]
-    assert tools["memory_remove"]("user", "历史读物")["changed"] is True
-    assert store.snapshot()["user"]["entries"] == []
+    assert edit("user", "用户偏好通俗的历史读物")["changed"] is True
+    assert store.snapshot()["user"]["content"] == ""
 
 
 def test_judge_ask_records_question_without_writing(store):
     tools = judge_tools(store)
     assert tools["memory_ask"]("你想改的是哪一条？") == {"question": "你想改的是哪一条？"}
-    assert store.snapshot()["user"]["entries"] == []
-    assert store.snapshot()["memory"]["entries"] == []
+    assert store.snapshot()["user"]["content"] == ""
+    assert store.snapshot()["memory"]["content"] == ""
 
 
 # ---------- 输入组装 ----------
 
 
 def test_build_judge_message_renders_materials(store):
-    store.apply("add", "user", "已有画像")
+    store.edit("user", new_text="已有画像")
     message = build_judge_message("我对历史感兴趣", "用户：你好\n助手：你好！", store.snapshot())
     assert message.startswith(JUDGE_MESSAGE_HEADER)
     assert "## 用户刚发的消息\n我对历史感兴趣" in message
@@ -147,28 +144,18 @@ def test_recent_text_items_include_notices(settings):
 # ---------- 提示文案 ----------
 
 
-def added(content, changed=True):
-    return {
-        "tool": "memory_add",
-        "arguments": {"target": "user", "content": content},
-        "result": {"action": "add", "changed": changed, "old": None},
-    }
+def edited(arguments, changed=True):
+    return {"tool": "memory_edit", "arguments": arguments, "result": {"changed": changed}}
 
 
 def test_notice_texts_report_actual_results():
     records = [
-        added("用户对历史感兴趣"),
-        {
-            "tool": "memory_replace",
-            "arguments": {"target": "user", "content": "用户偏好通俗历史读物", "old_text": "历史"},
-            "result": {"action": "replace", "changed": True, "old": "用户对历史感兴趣"},
-        },
-        {
-            "tool": "memory_remove",
-            "arguments": {"target": "user", "old_text": "历史"},
-            "result": {"action": "remove", "changed": True, "old": "用户偏好通俗历史读物"},
-        },
-        added("用户对历史感兴趣", changed=False),
+        edited({"target": "user", "new_text": "用户对历史感兴趣"}),
+        edited(
+            {"target": "user", "old_text": "用户对历史感兴趣", "new_text": "用户偏好通俗历史读物"}
+        ),
+        edited({"target": "user", "old_text": "用户偏好通俗历史读物", "new_text": ""}),
+        edited({"target": "user", "new_text": "用户对历史感兴趣"}, changed=False),
         {
             "tool": "memory_ask",
             "arguments": {"question": "要改哪一条？"},
@@ -184,57 +171,47 @@ def test_notice_texts_report_actual_results():
     ]
 
 
+def failed(arguments, error, message):
+    return {
+        "tool": "memory_edit",
+        "arguments": arguments,
+        "error": {"error": error, "message": message},
+    }
+
+
+FULL = "“关于你”放不下：保存后需要 1400 个字符，上限为 1375"
+
+
 def test_notice_texts_show_only_real_failures():
     records = [
-        {
-            "tool": "memory_add",
-            "arguments": {"target": "user", "content": "一条"},
-            "error": {
-                "error": "memory_full",
-                "message": "“关于你”放不下：保存后需要 1400 个字符，上限为 1375",
-            },
-        },
-        {
-            "tool": "memory_add",
-            "arguments": {"target": "user", "content": "另一条"},
-            "error": {"error": "memory_store_unavailable", "message": "无法读取 USER.md"},
-        },
-        {
-            "tool": "memory_add",
-            "arguments": {"target": "user", "content": "第三条"},
-            "error": {"error": "unexpected", "message": "工具执行失败"},
-        },
+        failed({"target": "user", "new_text": "一条"}, "memory_full", FULL),
+        failed(
+            {"target": "user", "new_text": "另一条"},
+            "memory_store_unavailable",
+            "无法读取 USER.md",
+        ),
+        failed({"target": "user", "new_text": "第三条"}, "unexpected", "工具执行失败"),
         # invalid_memory 是模型可自行修正的参数问题，不生成提示。
-        {
-            "tool": "memory_replace",
-            "arguments": {"target": "user", "content": "x", "old_text": "不存在"},
-            "error": {"error": "invalid_memory", "message": "长期记忆操作未通过校验"},
-        },
+        failed(
+            {"target": "user", "old_text": "不存在"}, "invalid_memory", "长期记忆操作未通过校验"
+        ),
     ]
     assert notice_texts(records) == [
-        "记忆保存失败：“关于你”放不下：保存后需要 1400 个字符，上限为 1375",
+        f"记忆保存失败：{FULL}",
         "记忆保存失败：无法读取 USER.md",
         "记忆保存失败：工具执行失败",
     ]
 
 
 def test_notice_texts_hide_capacity_failure_resolved_by_consolidation():
-    full = {
-        "error": "memory_full",
-        "message": "“关于你”放不下：保存后需要 1400 个字符，上限为 1375",
-    }
     records = [
-        {"tool": "memory_add", "arguments": {"target": "user", "content": "新偏好"}, "error": full},
-        {
-            "tool": "memory_replace",
-            "arguments": {"target": "user", "content": "合并后的条目", "old_text": "旧"},
-            "result": {"action": "replace", "changed": True, "old": "旧条目"},
-        },
-        added("新偏好"),
-        {"tool": "memory_add", "arguments": {"target": "user", "content": "放不下"}, "error": full},
+        failed({"target": "user", "new_text": "新偏好"}, "memory_full", FULL),
+        edited({"target": "user", "old_text": "旧条目", "new_text": "合并后的条目"}),
+        edited({"target": "user", "new_text": "新偏好"}),
+        failed({"target": "user", "new_text": "放不下"}, "memory_full", FULL),
     ]
     assert notice_texts(records) == [
         "已修改：旧条目 → 合并后的条目",
         "已记住：新偏好",
-        "记忆保存失败：“关于你”放不下：保存后需要 1400 个字符，上限为 1375",
+        f"记忆保存失败：{FULL}",
     ]

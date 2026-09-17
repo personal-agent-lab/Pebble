@@ -151,7 +151,7 @@ class QoderGateway:
         # 两者必须指向同一目录，否则重启后读不到会话。
         os.environ[CONFIG_DIR_ENV] = str(config_dir)
         self.tools = build_tools(replace(deps, memory_store=self.memory_store))
-        # 后台记忆回顾的一次性会话用回顾工具集（新增、替换、删除），不与前台工具混在一起。
+        # 后台记忆回顾的一次性会话用回顾工具集（片段编辑，不能追问），不与前台工具混在一起。
         self.review_tools = build_tools(
             replace(deps, memory_store=self.memory_store), registry=review_registry
         )

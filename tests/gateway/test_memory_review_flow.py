@@ -114,35 +114,30 @@ async def test_review_runs_after_five_done_messages_and_writes_nothing_visible(r
 async def test_review_consolidation_notice_reaches_timeline_and_events(review_flow):
     task_id = review_flow.tasks.create_task("闲聊")["task_id"]
     store = review_flow.service.memory_store
-    store.apply("add", "user", "回答先给结论")
-    store.apply("add", "user", "回答要先说结论")
+    store.edit("user", new_text="- 回答先给结论")
+    store.edit("user", new_text="- 回答要先说结论")
 
     async def consolidating_review(task_id, instructions, transcript):
-        removed = store.apply("remove", "user", old_text="要先说结论")
-        return [
-            {
-                "tool": "memory_remove",
-                "arguments": {"target": "user", "old_text": "要先说结论"},
-                "result": removed,
-            }
-        ]
+        arguments = {"target": "user", "old_text": "- 回答要先说结论"}
+        removed = store.edit(**arguments)
+        return [{"tool": "memory_edit", "arguments": arguments, "result": removed}]
 
     review_flow.gateway.review_handler = consolidating_review
     await send(review_flow, task_id, "一", "二", "三", "四")
     subscription = review_flow.service.events.subscribe(task_id)
     await send(review_flow, task_id, "五")
 
-    assert store.snapshot()["user"]["entries"] == ["回答先给结论"]
+    assert store.snapshot()["user"]["content"] == "- 回答先给结论"
     items = review_flow.service.get_timeline(task_id)["items"]
     assert items[-1]["kind"] == "notice"
-    assert items[-1]["text"] == "整理记忆：已删除：回答要先说结论"
+    assert items[-1]["text"] == "整理记忆：已删除：- 回答要先说结论"
     events = []
     while not subscription.empty():
         events.append(subscription.get_nowait())
     notice = events[-1]
     assert (notice["type"], notice["text"], notice["item_id"]) == (
         "notice",
-        "整理记忆：已删除：回答要先说结论",
+        "整理记忆：已删除：- 回答要先说结论",
         items[-1]["item_id"],
     )
     assert notice["run_id"] == review_flow.service.latest_run(task_id)["run_id"]

@@ -1,7 +1,8 @@
 """两个 Markdown 文件组成的长期记忆。
 
-记忆不做版本管理：条目简短、由模型持续整理，变化本身已经体现在对话里的记忆提示中。
-文件只保存当前有效内容；写入是原子替换，版本号取文件内容的哈希，供管理页做冲突检查。
+每个目标就是一份完整的 Markdown 文档，写法不限（段落、列表、小标题）。记忆不做版本管理：
+内容简短、由模型持续整理，变化本身已经体现在对话里的记忆提示中。文件只保存当前有效内容；
+写入是原子替换，版本号取文件内容的哈希，供管理页做冲突检查。
 """
 
 from __future__ import annotations
@@ -22,13 +23,14 @@ from server.errors import (
 from server.storage.datarepo import GITIGNORE
 from server.storage.datarepo import lock_for as _lock_for
 
-ENTRY_DELIMITER = "\n\n§\n\n"
 TARGETS = {
     "user": ("USER.md", 1375),
     "memory": ("MEMORY.md", 2200),
 }
-ACTIONS = ("add", "replace", "remove")
 UNTRACK_MESSAGE = "[Memory] Stop versioning memory files"
+# 旧格式按条保存时的分隔：启动时换成空行，每条变成一段。
+LEGACY_DELIMITER = "\n\n§\n\n"
+TARGET_ERROR = {"field": "target", "message": "必须是 user 或 memory"}
 
 
 class MemoryStore:
@@ -50,47 +52,62 @@ class MemoryStore:
         with self._lock:
             return {target: self._target_snapshot(target) for target in TARGETS}
 
-    def apply(
-        self,
-        action: str,
-        target: str,
-        content: str | None = None,
-        old_text: str | None = None,
-        *,
-        exact: bool = False,
-        expected_version: str | None = None,
-    ) -> dict:
-        """新增、替换或删除一个条目。
+    def edit(self, target: str, old_text: str = "", new_text: str = "") -> dict:
+        """模型的片段编辑：`old_text` 为空时追加，`new_text` 为空时删除，都有时替换。
 
-        `exact` 为真时 `old_text` 必须等于某个条目全文（管理页），否则按片段唯一匹配（模型）。
-        给出 `expected_version` 时，文件在读取之后被改过即拒绝，不覆盖别人的修改。
+        `old_text` 必须在文档中恰好出现一次；要追加的内容已经原样在文档里时不写入。
         """
-        self._validate_request(action, target, content, old_text)
+        old, new = (old_text or "").strip(), (new_text or "").strip()
+        errors = [TARGET_ERROR] if target not in TARGETS else []
+        if not old and not new:
+            errors.append({"field": "new_text", "message": "old_text 与 new_text 不能都为空"})
+        if errors:
+            raise MemoryValidationError(errors)
         with self._lock:
             current = self._target_snapshot(target)
-            if expected_version is not None and expected_version != current["version"]:
+            content = current["content"]
+            if not old:
+                if new in content:
+                    return self._result(current, changed=False)
+                return self._save(current, f"{content}\n\n{new}" if content else new)
+            count = content.count(old)
+            if count != 1:
+                reason = (
+                    "没有找到这段原文" if count == 0 else "这段原文出现了多次，请给出更长的片段"
+                )
+                raise MemoryValidationError([{"field": "old_text", "message": reason}])
+            if old == new:
+                return self._result(current, changed=False)
+            return self._save(current, content.replace(old, new))
+
+    def write(self, target: str, content: str, *, expected_version: str) -> dict:
+        """管理页整份保存：文件在读取之后被改过即拒绝，不覆盖别人的修改。"""
+        if target not in TARGETS:
+            raise MemoryValidationError([TARGET_ERROR])
+        with self._lock:
+            current = self._target_snapshot(target)
+            if expected_version != current["version"]:
                 raise VersionConflictError(current["version"])
-            entries = list(current["entries"])
-            changed, old = self._change(entries, action, content, old_text, exact)
-            serialized = self._serialize(entries)
-            limit = TARGETS[target][1]
-            # 已经超限的文件允许变小：整理本身不能因为容量被拒绝。
-            if len(serialized) > limit and len(serialized) > current["usage"]["chars"]:
-                raise MemoryFullError(target, len(serialized), limit)
-            if changed:
-                try:
-                    self._atomic_write(self._path(target), serialized)
-                except OSError as error:
-                    raise MemoryStoreUnavailableError("长期记忆保存失败") from error
-            return {
-                "target": target,
-                "action": action,
-                "changed": changed,
-                "entries": entries,
-                "usage": {"chars": len(serialized), "limit": limit},
-                "version": _version(serialized),
-                "old": old,
-            }
+            return self._save(current, content)
+
+    def _save(self, current: dict, content: str) -> dict:
+        target = current["target"]
+        normalized = _normalize(content)
+        if normalized == current["content"]:
+            return self._result(current, changed=False)
+        limit = TARGETS[target][1]
+        # 已经超限的文件允许变小：整理本身不能因为容量被拒绝。
+        if len(normalized) > limit and len(normalized) > current["usage"]["chars"]:
+            raise MemoryFullError(target, len(normalized), limit)
+        try:
+            self._atomic_write(self._path(target), normalized)
+        except OSError as error:
+            raise MemoryStoreUnavailableError("长期记忆保存失败") from error
+        return self._result(self._describe(target, normalized), changed=True)
+
+    @staticmethod
+    def _result(snapshot: dict, *, changed: bool) -> dict:
+        return {**snapshot, "changed": changed}
 
     def _initialize(self) -> None:
         try:
@@ -99,7 +116,11 @@ class MemoryStore:
                 path = self._path(target)
                 if not path.exists():
                     self._atomic_write(path, "")
-        except OSError as error:
+                    continue
+                content = path.read_text(encoding="utf-8")
+                if LEGACY_DELIMITER in content:
+                    self._atomic_write(path, _normalize(content.replace(LEGACY_DELIMITER, "\n\n")))
+        except (OSError, UnicodeError) as error:
             raise MemoryStoreUnavailableError("无法初始化长期记忆文件") from error
         self._stop_versioning()
 
@@ -157,7 +178,7 @@ class MemoryStore:
 
     def _target_snapshot(self, target: str) -> dict:
         if target not in TARGETS:
-            raise MemoryValidationError([{"field": "target", "message": "必须是 user 或 memory"}])
+            raise MemoryValidationError([TARGET_ERROR])
         path = self._path(target)
         try:
             content = path.read_text(encoding="utf-8")
@@ -165,82 +186,16 @@ class MemoryStore:
             content = ""
         except (OSError, UnicodeError) as error:
             raise MemoryStoreUnavailableError(f"无法读取 {path.name}") from error
-        entries = self._parse(content)
-        normalized = self._serialize(entries)
+        return self._describe(target, _normalize(content))
+
+    @staticmethod
+    def _describe(target: str, content: str) -> dict:
         return {
             "target": target,
-            "content": normalized,
-            "entries": entries,
-            "usage": {"chars": len(normalized), "limit": TARGETS[target][1]},
-            "version": _version(normalized),
+            "content": content,
+            "usage": {"chars": len(content), "limit": TARGETS[target][1]},
+            "version": _version(content),
         }
-
-    @staticmethod
-    def _validate_request(
-        action: str, target: str, content: str | None, old_text: str | None
-    ) -> None:
-        errors = []
-        if action not in ACTIONS:
-            errors.append({"field": "action", "message": "必须是 add、replace 或 remove"})
-        if target not in TARGETS:
-            errors.append({"field": "target", "message": "必须是 user 或 memory"})
-        if action in {"add", "replace"} and not (content or "").strip():
-            errors.append({"field": "content", "message": "新增或替换内容不能为空"})
-        if action in {"replace", "remove"} and not (old_text or "").strip():
-            errors.append({"field": "old_text", "message": "替换或删除必须提供原内容片段"})
-        if content is not None and any(line.strip() == "§" for line in content.splitlines()):
-            errors.append({"field": "content", "message": "内容不能包含独立的 § 分隔行"})
-        if errors:
-            raise MemoryValidationError(errors)
-
-    @staticmethod
-    def _change(
-        entries: list[str],
-        action: str,
-        content: str | None,
-        old_text: str | None,
-        exact: bool,
-    ) -> tuple[bool, str | None]:
-        """返回（是否有有效修改, 被替换或移除的原条目）；新增没有原条目。"""
-        normalized = (content or "").strip()
-        if action == "add":
-            if normalized in entries:
-                return False, None
-            entries.append(normalized)
-            return True, None
-
-        needle = (old_text or "").strip()
-        if exact:
-            matches = [index for index, entry in enumerate(entries) if entry == needle]
-        else:
-            matches = [index for index, entry in enumerate(entries) if needle in entry]
-        if len(matches) != 1:
-            reason = "没有找到匹配条目" if not matches else "匹配到多个条目，请提供更具体的片段"
-            raise MemoryValidationError([{"field": "old_text", "message": reason}])
-        index = matches[0]
-        old = entries[index]
-        if action == "remove":
-            entries.pop(index)
-            return True, old
-        if old == normalized:
-            return False, old
-        entries.pop(index)
-        if normalized not in entries:
-            entries.insert(index, normalized)
-        return True, old
-
-    @staticmethod
-    def _parse(content: str) -> list[str]:
-        normalized = content.replace("\r\n", "\n").strip()
-        if not normalized:
-            return []
-        return [
-            entry.strip() for entry in re.split(r"(?m)^[ \t]*§[ \t]*$", normalized) if entry.strip()
-        ]
-
-    @staticmethod
-    def _serialize(entries: list[str]) -> str:
-        return ENTRY_DELIMITER.join(entry.strip() for entry in entries if entry.strip())
 
     def _path(self, target: str) -> Path:
         return self.memory_dir / TARGETS[target][0]
@@ -257,6 +212,12 @@ class MemoryStore:
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
+
+
+def _normalize(content: str) -> str:
+    """统一换行、去掉首尾空白，删除片段后留下的多余空行合并为一个。"""
+    text = content.replace("\r\n", "\n").strip()
+    return re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", text)
 
 
 def _version(content: str) -> str:

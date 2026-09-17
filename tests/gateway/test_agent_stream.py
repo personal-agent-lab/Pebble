@@ -184,7 +184,7 @@ def test_review_options_expose_review_tools_in_fresh_session(settings):
 
     assert options.allowed_tools == [
         f"mcp__{TOOL_SERVER_NAME}__{name}"
-        for name in ("memory_add", "memory_replace", "memory_remove")
+        for name in ("memory_edit",)
     ]
     assert options.tools == []
     assert options.setting_sources == []
@@ -209,7 +209,7 @@ def test_judge_options_expose_judgment_tools_in_fresh_session(settings):
 
     assert options.allowed_tools == [
         f"mcp__{TOOL_SERVER_NAME}__{name}"
-        for name in ("memory_add", "memory_replace", "memory_remove", "memory_ask")
+        for name in ("memory_edit", "memory_ask")
     ]
     assert options.tools == []
     assert options.system_prompt == "判断指令"
@@ -306,14 +306,14 @@ def test_resumed_turn_injects_fresh_material_without_changing_base_prompt(settin
 
 def test_memory_is_reloaded_and_precedes_turn_materials(settings):
     gateway = make_gateway(settings)
-    gateway.memory_store.apply("add", "user", "回答先给结论")
+    gateway.memory_store.edit("user", new_text="回答先给结论")
     first = options_for(
         gateway,
         TurnKind.MESSAGE,
         materials=(Material("本轮材料", "只对本轮有效"),),
     )
-    gateway.memory_store.apply("replace", "user", "回答先解释推导", "先给结论")
-    gateway.memory_store.apply("add", "memory", "Pebble 使用 Python")
+    gateway.memory_store.edit("user", "先给结论", "先解释推导")
+    gateway.memory_store.edit("memory", new_text="Pebble 使用 Python")
     second = options_for(
         gateway,
         TurnKind.MESSAGE,
@@ -339,7 +339,7 @@ def test_kb_catalog_is_injected_after_memory_and_before_turn_materials(settings)
         ToolServer(),
         settings=configured(settings),
     )
-    gateway.memory_store.apply("add", "user", "回答先给结论")
+    gateway.memory_store.edit("user", new_text="回答先给结论")
     assert injected_context(options_for(gateway, TurnKind.MESSAGE)) == "## 关于你\n回答先给结论"
 
     kb.save(title="星云验收纪要", body="通过。", path="项目/验收", summary="二期验收结论")
@@ -631,15 +631,15 @@ def test_judge_memory_records_real_tool_results(settings, monkeypatch):
     records = run_judge(
         gateway,
         monkeypatch,
-        ToolCall("memory_add", {"target": "user", "content": "默认使用中文"}),
+        ToolCall("memory_edit", {"target": "user", "new_text": "默认使用中文"}),
         ToolCall("memory_ask", {"question": "要改哪一条？"}),
     )
 
-    assert [record["tool"] for record in records] == ["memory_add", "memory_ask"]
+    assert [record["tool"] for record in records] == ["memory_edit", "memory_ask"]
     first = records[0]
-    assert first["arguments"] == {"target": "user", "content": "默认使用中文"}
+    assert first["arguments"] == {"target": "user", "new_text": "默认使用中文"}
     assert first["result"]["changed"] is True
-    assert first["result"]["entries"] == ["默认使用中文"]
+    assert first["result"]["content"] == "默认使用中文"
     assert records[1]["result"] == {"question": "要改哪一条？"}
     assert (settings.data_dir / "memory" / "USER.md").read_text() == "默认使用中文"
 
@@ -650,7 +650,7 @@ def test_judge_memory_records_structured_errors(settings, monkeypatch):
     records = run_judge(
         gateway,
         monkeypatch,
-        ToolCall("memory_add", {"target": "user", "content": "甲" * 1376}),
+        ToolCall("memory_edit", {"target": "user", "new_text": "甲" * 1376}),
     )
 
     assert records[0]["error"] == {
@@ -660,7 +660,7 @@ def test_judge_memory_records_structured_errors(settings, monkeypatch):
         "used": 1376,
         "limit": 1375,
     }
-    assert gateway.memory_store.snapshot()["user"]["entries"] == []
+    assert gateway.memory_store.snapshot()["user"]["content"] == ""
 
 
 def test_draft_saved_precedes_following_text(settings, monkeypatch):

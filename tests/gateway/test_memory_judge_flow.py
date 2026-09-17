@@ -87,14 +87,9 @@ async def test_judgment_runs_in_parallel_and_notice_reaches_timeline(judge_flow)
 
     async def blocked_judge(task_id, instructions, message):
         await release.wait()
-        result = judge_flow.store.apply("add", "user", "用户周末常去徒步")
-        return [
-            {
-                "tool": "memory_add",
-                "arguments": {"target": "user", "content": "用户周末常去徒步"},
-                "result": result,
-            }
-        ]
+        arguments = {"target": "user", "new_text": "用户周末常去徒步"}
+        result = judge_flow.store.edit(**arguments)
+        return [{"tool": "memory_edit", "arguments": arguments, "result": result}]
 
     judge_flow.gateway.judge_handler = blocked_judge
     subscription = judge_flow.service.events.subscribe(task_id)
@@ -127,7 +122,7 @@ async def test_judgment_runs_in_parallel_and_notice_reaches_timeline(judge_flow)
             "text": "已记住：用户周末常去徒步",
         }
     ]
-    assert judge_flow.store.snapshot()["user"]["entries"] == ["用户周末常去徒步"]
+    assert judge_flow.store.snapshot()["user"]["content"] == "用户周末常去徒步"
 
 
 async def test_no_change_produces_no_notice(judge_flow):

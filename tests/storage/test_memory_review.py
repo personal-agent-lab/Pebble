@@ -68,27 +68,27 @@ def seed_round(conn, task_id: str, text: str) -> str:
     return run_id
 
 
-# ---------- 只新增工具 ----------
+# ---------- 回顾工具 ----------
 
 
-def test_review_registry_binds_add_replace_and_remove(store):
+def test_review_registry_binds_only_the_edit_tool(store):
     tools = {tool.name: tool for tool in review_tools(store)}
-    assert list(tools) == ["memory_add", "memory_replace", "memory_remove"]
+    assert list(tools) == ["memory_edit"]
+    edit = tools["memory_edit"]
 
-    assert tools["memory_add"]("user", "用户在研究记忆机制")["changed"] is True
-    assert tools["memory_add"]("user", "用户在研究 Hermes")["changed"] is True
-    merged = tools["memory_replace"]("user", "用户在研究记忆机制与 Hermes", "记忆机制")
-    removed = tools["memory_remove"]("user", "研究 Hermes")
-    assert merged["old"] == "用户在研究记忆机制" and removed["old"] == "用户在研究 Hermes"
-    assert store.snapshot()["user"]["entries"] == ["用户在研究记忆机制与 Hermes"]
+    assert edit("user", new_text="- 用户在研究记忆机制")["changed"] is True
+    assert edit("user", new_text="- 用户在研究 Hermes")["changed"] is True
+    assert edit("user", "记忆机制", "记忆机制与 Hermes")["changed"] is True
+    assert edit("user", "- 用户在研究 Hermes")["changed"] is True
+    assert store.snapshot()["user"]["content"] == "- 用户在研究记忆机制与 Hermes"
 
 
-def test_add_tool_rejects_duplicates(store):
-    tools = review_tools(store)
-    first = tools[0]("memory", "项目使用 SQLite")
-    second = tools[0]("memory", "项目使用 SQLite")
+def test_edit_tool_skips_duplicate_appends(store):
+    edit = review_tools(store)[0]
+    first = edit("memory", new_text="项目使用 SQLite")
+    second = edit("memory", new_text="项目使用 SQLite")
     assert first["changed"] is True and second["changed"] is False
-    assert store.snapshot()["memory"]["entries"] == ["项目使用 SQLite"]
+    assert store.snapshot()["memory"]["content"] == "项目使用 SQLite"
 
 
 def test_review_registry_has_no_foreground_memory_tool():
@@ -260,7 +260,7 @@ def test_render_transcript_labels_roles():
 
 
 def test_build_review_message_renders_materials(store):
-    store.apply("add", "user", "已有画像")
+    store.edit("user", new_text="已有画像")
     message = build_review_message("用户：新信息", store.snapshot())
     assert message.startswith(REVIEW_MESSAGE_HEADER)
     assert "## 自上次回顾以来的任务对话\n用户：新信息" in message
@@ -313,7 +313,7 @@ def test_run_passes_window_and_memory_snapshot_to_gateway(scheduler):
     asyncio.run(scheduler.run(row["review_id"], gateway))
     (called_task, instructions, transcript), = gateway.calls
     assert called_task == task_id
-    assert "memory_add" in instructions
+    assert "memory_edit" in instructions
     assert "我最近正在学习 Hermes 的设计" in transcript
     with session() as conn:
         status = conn.execute(
@@ -322,7 +322,11 @@ def test_run_passes_window_and_memory_snapshot_to_gateway(scheduler):
     assert status["status"] == "done"
 
 
-def test_run_writes_notices_only_for_changed_existing_entries(scheduler):
+def edited(arguments, changed=True):
+    return {"tool": "memory_edit", "arguments": arguments, "result": {"changed": changed}}
+
+
+def test_run_writes_notices_only_for_changed_existing_content(scheduler):
     with session() as conn:
         task_id = make_task(conn)
         seed_round(conn, task_id, "一")
@@ -330,37 +334,21 @@ def test_run_writes_notices_only_for_changed_existing_entries(scheduler):
     row = scheduler.enqueue_manual(task_id)
     scheduler.claim(row["review_id"])
     records = [
+        edited({"target": "user", "new_text": "新增不提示"}),
+        edited({"target": "user", "old_text": "先给结论", "new_text": "回答先给结论"}),
+        edited({"target": "user", "old_text": "没有变化", "new_text": "没有变化"}, False),
+        edited({"target": "memory", "old_text": "- 重复的约定", "new_text": ""}),
         {
-            "tool": "memory_add",
-            "arguments": {"target": "user", "content": "新增不提示"},
-            "result": {"changed": True, "old": None},
-        },
-        {
-            "tool": "memory_replace",
-            "arguments": {"target": "user", "content": "回答先给结论", "old_text": "结论"},
-            "result": {"changed": True, "old": "先给结论"},
-        },
-        {
-            "tool": "memory_replace",
-            "arguments": {"target": "user", "content": "没有变化", "old_text": "没有"},
-            "result": {"changed": False, "old": "没有变化"},
-        },
-        {
-            "tool": "memory_remove",
-            "arguments": {"target": "memory", "old_text": "重复"},
-            "result": {"changed": True, "old": "重复的约定"},
-        },
-        {
-            "tool": "memory_remove",
+            "tool": "memory_edit",
             "arguments": {"target": "memory", "old_text": "不存在"},
-            "error": {"error": "invalid_memory", "message": "没有找到匹配条目"},
+            "error": {"error": "invalid_memory", "message": "没有找到这段原文"},
         },
     ]
     published = asyncio.run(scheduler.run(row["review_id"], RecordingGateway(records)))
 
     assert [notice["text"] for notice in published] == [
         "整理记忆：已修改：先给结论 → 回答先给结论",
-        "整理记忆：已删除：重复的约定",
+        "整理记忆：已删除：- 重复的约定",
     ]
     assert {notice["run_id"] for notice in published} == {last_run}
     with session() as conn:

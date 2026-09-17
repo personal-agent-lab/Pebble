@@ -215,14 +215,10 @@ def test_review_endpoint_exposes_review_tools(settings):
             mcp_session(server, f"{BASE_URL}{path}") as session,
         ):
             listed = await session.list_tools()
-            assert [tool.name for tool in listed.tools] == [
-                "memory_add",
-                "memory_replace",
-                "memory_remove",
-            ]
+            assert [tool.name for tool in listed.tools] == ["memory_edit"]
 
             saved = await session.call_tool(
-                "memory_add", {"target": "user", "content": "用户在研究记忆机制"}
+                "memory_edit", {"target": "user", "new_text": "用户在研究记忆机制"}
             )
             assert saved.isError is False
             assert tool_payload(saved)["changed"] is True
@@ -239,7 +235,7 @@ def test_review_endpoint_exposes_review_tools(settings):
 def test_judge_endpoint_exposes_judgment_tools(settings):
     init_db()
     store = MemoryStore(settings.data_dir)
-    store.apply("add", "user", "用户在研究记忆机制")
+    store.edit("user", new_text="用户在研究记忆机制")
     tools = build_tools(
         ToolDeps(drafts=None, tasks=None, gmail=None, memory_store=store),
         registry=judge_registry,
@@ -253,20 +249,11 @@ def test_judge_endpoint_exposes_judgment_tools(settings):
             mcp_session(server, f"{BASE_URL}{path}") as session,
         ):
             listed = await session.list_tools()
-            assert [tool.name for tool in listed.tools] == [
-                "memory_add",
-                "memory_replace",
-                "memory_remove",
-                "memory_ask",
-            ]
+            assert [tool.name for tool in listed.tools] == ["memory_edit", "memory_ask"]
 
             replaced = await session.call_tool(
-                "memory_replace",
-                {
-                    "target": "user",
-                    "content": "用户在研究长期记忆机制",
-                    "old_text": "记忆机制",
-                },
+                "memory_edit",
+                {"target": "user", "old_text": "记忆机制", "new_text": "长期记忆机制"},
             )
             assert replaced.isError is False
             assert tool_payload(replaced)["changed"] is True
@@ -279,7 +266,7 @@ def test_judge_endpoint_exposes_judgment_tools(settings):
             assert tool_payload(blocked)["error"] == "unknown_tool"
 
     asyncio.run(scenario())
-    assert store.snapshot()["user"]["entries"] == ["用户在研究长期记忆机制"]
+    assert store.snapshot()["user"]["content"] == "用户在研究长期记忆机制"
 
 
 def test_kb_destructive_tools_emit_notices_and_trigger_turns_can_only_save(settings):

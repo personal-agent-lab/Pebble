@@ -132,13 +132,13 @@ async def verify(root: Path) -> dict:
         scheduler = MemoryReviewScheduler(memory_store=memory_store, path=root / "pebble.db")
 
         calls: list[tuple] = []
-        original_apply = memory_store.apply
+        original_edit = memory_store.edit
 
-        def traced_apply(action, target, content=None, old_text=None, **options):
-            calls.append((action, target, content))
-            return original_apply(action, target, content, old_text, **options)
+        def traced_edit(target, old_text="", new_text=""):
+            calls.append((target, old_text, new_text))
+            return original_edit(target, old_text, new_text)
 
-        memory_store.apply = traced_apply
+        memory_store.edit = traced_edit
 
         # ---------- 正例：5 轮含稳定信息的对话 ----------
         review_task = str(uuid4())
@@ -154,11 +154,11 @@ async def verify(root: Path) -> dict:
         user_md = snapshot["user"]["content"]
         memory_md = snapshot["memory"]["content"]
         assert "Hermes" in user_md, f"回顾未把学习方向写入 USER.md：{user_md!r} 调用={calls!r}"
-        added = [call for call in calls if call[0] == "add"]
-        assert len(added) >= 2, f"回顾新增少于两条：{calls!r}"
+        added = [call for call in calls if call[2]]
+        assert added, f"回顾没有写入内容：{calls!r}"
         after_items = timeline_items(review_task, root / "pebble.db")
         assert after_items[: len(before_items)] == before_items, "回顾改动了已有时间线"
-        # 回顾只会追加整理提示（修改或删除已有条目时）；从空记忆开始不应出现其他内容。
+        # 回顾只会追加整理提示（修改或删除已有内容时）；从空记忆开始不应出现其他内容。
         assert all(
             item["kind"] == "notice" and item["text"].startswith("整理记忆：")
             for item in after_items[len(before_items) :]
