@@ -13,15 +13,17 @@
 | `gmail_prepare_reply` | 本地写 | `source_message_id`、`to[]`、`subject`、`body` | `operation_id`、`version`、`status: "pending"`、`presented_to_user: true` |
 | `gmail_prepare_email` | 本地写 | `to[]`（可以为空）、`subject`、`body` | 同上 |
 | `gmail_read_draft` | 只读 | `operation_id` | 草稿全部字段：`operation_id`、`kind`（`reply` \| `new`）、`version`、`status`、`to`、`subject`、`body`；回复另有 `source_message_id`、`thread_id` |
-| `gmail_update_draft` | 本地写 | `operation_id`、`expected_version`、`to[]`、`subject`、`body` | 同 `prepare` |
+| `gmail_update_draft` | 本地写 | `operation_id`、`expected_version`、`to[]`、`subject`、`body` | 同 `prepare`；另起新草稿时 `operation_id` 是新草稿的 |
 
 邮件字段：`message_id`、`thread_id`、`rfc_message_id`、`from`、`to[]`、`cc[]`、`subject`、`snippet`、`received_at`（带时区的 ISO 8601）、`attachments[]`（`attachment_id`、`filename`、`mime_type`、`size`）。读取详情失败时整次失败，不返回一半的结果。
 
 规则：
 
-- `thread_id` 由工具按原邮件读取，不由 Agent 传入。同一原邮件已有回复操作时复用它并关联到当前任务，不用候选内容覆盖已保存的草稿（复用时候选内容也不参与校验）。例外是用户取消过的回复：以本次候选内容校验后另存一版，并恢复为 `pending`。
+- `thread_id` 由工具按原邮件读取，不由 Agent 传入。同一原邮件已有回复操作时复用它并关联到当前任务，不用候选内容覆盖已保存的草稿（复用时候选内容也不参与校验）。用户取消过的回复不再复用：再为同一原邮件起草时新建操作，在当前位置出现新卡片，已取消的那份原样保留。
 - `prepare_email` 每次调用都新建一份草稿；收件人可以稍后在卡片上补填。
 - `presented_to_user: true` 表示草稿已由系统以卡片展示给用户，Agent 不必复述内容。
+- 用户在对话框里发出消息（不带 `target`）时，该任务里全部 `pending` 草稿随消息登记立即改为 `cancelled`；卡片上的修改要求只定向那一份，不取消任何草稿。
+- `gmail_update_draft` 对 `pending` 草稿原地另存一版；对 `cancelled` 草稿以它为底另起一份新草稿（回复沿用原邮件与往来），时间线在当前位置出现新卡片，原卡片保持已取消。同一原邮件已有未取消的回复时拒绝另起。
 - 只能读取和修改与当前任务关联的草稿，其余按不存在处理。只有 `pending` 草稿可以修改；版本不匹配时拒绝。用户在卡片上的直接编辑走同一套版本规则。
 - 轮次可见范围见 `v1-design.md` §3：新邮件触发轮只能读邮件，用户明确要求后才起草；发送不注册给模型。定向修改某张卡片的轮次只能读取和更新该草稿，不能新建操作。
 

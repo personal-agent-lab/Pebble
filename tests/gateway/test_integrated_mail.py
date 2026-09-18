@@ -160,11 +160,17 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
             app.state.agent.accept_new_mail, "msg_invite_001", "thread_invite_001"
         )
         assert duplicate["task_id"] == tid
-        for message in ["帮我写一封回信", "询问会议链接"]:
-            response = http.post(f"/api/tasks/{tid}/messages", data={"message": message})
-            assert response.status_code == 202
-            wait()
+        response = http.post(f"/api/tasks/{tid}/messages", data={"message": "帮我写一封回信"})
+        assert response.status_code == 202
+        wait()
         oid = operation["operation_id"]
+        # 卡片上的修改要求定向这份草稿：原地另存一版，不另起卡片。
+        target = json.dumps({"kind": "mail_draft", "operation_id": oid})
+        response = http.post(
+            f"/api/tasks/{tid}/messages", data={"message": "询问会议链接", "target": target}
+        )
+        assert response.status_code == 202
+        wait()
         current = drafts.get_draft(oid)
         assert current["version"] == 2
         assert "会议链接" in current["body"]

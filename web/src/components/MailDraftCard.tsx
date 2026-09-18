@@ -65,6 +65,7 @@ export default function MailDraftCard({ taskId, item, sendMessage, onChanged }: 
   const savedRef = useRef<Form>(formOf(item));
   const versionRef = useRef(item.draft.version);
   const flightRef = useRef<Promise<number> | null>(null);
+  const askRef = useRef<HTMLDivElement>(null);
   const subjectRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   formRef.current = form;
@@ -80,6 +81,18 @@ export default function MailDraftCard({ taskId, item, sendMessage, onChanged }: 
     versionRef.current = item.draft.version;
     setForm(formOf(item));
   }, [item.draft.version]);
+
+  // 点在修改要求输入框之外就收起，恢复成按钮；已输入的文字保留，再点开还在。
+  // 用 pointerdown 而不是 blur：Safari 点按钮不给焦点，blur 分不清点的是不是框里的提交按钮。
+  useEffect(() => {
+    if (!asking) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (askRef.current?.contains(event.target as Node)) return;
+      setAsking(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [asking]);
 
   // 主题和正文都随内容撑高：长主题要能折行，卡片里也不出现内层滚动条。
   // 用 layout effect 量：先置 auto 再读 scrollHeight 会让输入框瞬间塌回一行，
@@ -178,7 +191,7 @@ export default function MailDraftCard({ taskId, item, sendMessage, onChanged }: 
     <section className="mail-card" data-component="MailDraftCard">
       <div className={`mail-toolbar${editable ? " with-actions" : ""}`}>
         {asking ? (
-          <div className="mail-ask">
+          <div className="mail-ask" ref={askRef}>
             <input
               value={request}
               autoFocus

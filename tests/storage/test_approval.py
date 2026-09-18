@@ -777,31 +777,26 @@ def test_verified_result_reuses_unfinished_delivery(stores):
     }
 
 
-def test_reply_to_cancelled_draft_reopens_with_new_content(stores):
-    """用户取消过的回复，再为同一原邮件起草时以新内容另存一版并恢复为待确认。"""
+def test_reply_after_cancelled_draft_creates_new_operation(stores):
+    """用户取消过的回复不再复用：再为同一原邮件起草时新建操作，已取消的那份原样保留。"""
     tasks, drafts = stores
     task, operation = prepare(stores)
     oid = operation["operation_id"]
     ConfirmationService(Sender()).cancel(task["task_id"], oid, 1)
-    assert drafts.get_draft(oid)["status"] == "cancelled"
 
-    other = tasks.create_task("重新回复")
-    reopened = drafts.save_reply_draft(
-        other["task_id"], "m1", "thread-1", to=["alice@example.com"], subject="改", body="新正文"
+    fresh = drafts.save_reply_draft(
+        task["task_id"], "m1", "thread-1", to=["alice@example.com"], subject="改", body="新正文"
     )
 
-    assert reopened == {
-        "operation_id": oid,
-        "version": 2,
-        "status": "pending",
-        "presented_to_user": True,
-    }
-    latest = drafts.get_draft(oid)
-    assert (latest["subject"], latest["body"]) == ("改", "新正文")
-    assert drafts.get_draft(oid, 1)["body"] == FINAL["body"]
+    assert fresh["operation_id"] != oid
+    assert (fresh["version"], fresh["status"]) == (1, "pending")
+    assert drafts.get_draft(fresh["operation_id"])["body"] == "新正文"
+    old = drafts.get_draft(oid)
+    assert (old["status"], old["version"], old["body"]) == ("cancelled", 1, FINAL["body"])
 
-    # 未取消的回复照旧复用，不以候选内容覆盖。
+    # 未取消的那份照旧复用，不以候选内容覆盖。
     again = drafts.save_reply_draft(
-        other["task_id"], "m1", "thread-1", to=["x@example.com"], subject="再改", body="x"
+        task["task_id"], "m1", "thread-1", to=["x@example.com"], subject="再改", body="x"
     )
-    assert again["version"] == 2
+    assert again["operation_id"] == fresh["operation_id"]
+    assert drafts.get_draft(fresh["operation_id"])["body"] == "新正文"

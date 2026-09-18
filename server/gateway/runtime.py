@@ -245,7 +245,11 @@ class GatewayRuntime:
         try:
             with session(self.path) as conn, write(conn):
                 operations.task(conn, task_id)
-                row = self._insert_message(conn, task_id, message, prepared, target, timestamp())
+                now = timestamp()
+                # 对话框里发出的消息让之前待确认的内容失效；定向某张卡片的修改要求只改那张。
+                if target is None:
+                    operations.cancel_pending(conn, task_id, now)
+                row = self._insert_message(conn, task_id, message, prepared, target, now)
         except BaseException:
             self._attachments.discard(task_id, prepared)
             raise

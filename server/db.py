@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import default_model, get_settings
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -265,6 +265,18 @@ SCHEMA_V15 = (
     "ALTER TABLE operations_new RENAME TO operations",
 )
 
+# 同一原邮件的回复被用户取消后，再起草时新建操作与卡片，不复用已取消的那份：
+# 原邮件标识不再唯一，“每封原邮件至多一份未取消的回复”由保存草稿的写事务保证。
+SCHEMA_V16 = (
+    SCHEMA_V4[0]
+    .replace("CREATE TABLE mail_drafts", "CREATE TABLE mail_drafts_new")
+    .replace("source_message_id TEXT UNIQUE", "source_message_id TEXT"),
+    "INSERT INTO mail_drafts_new SELECT * FROM mail_drafts",
+    "DROP TABLE mail_drafts",
+    "ALTER TABLE mail_drafts_new RENAME TO mail_drafts",
+    "CREATE INDEX mail_drafts_source ON mail_drafts(source_message_id)",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -281,6 +293,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     13: SCHEMA_V13,
     14: SCHEMA_V14,
     15: SCHEMA_V15,
+    16: SCHEMA_V16,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

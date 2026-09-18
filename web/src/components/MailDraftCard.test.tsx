@@ -41,6 +41,16 @@ test("修改要求按钮就地展开输入，发送绑定 operation_id 的新一
   await waitFor(() => expect(screen.queryByLabelText("针对这封邮件提出修改要求")).toBeNull());
 });
 
+test("点在修改要求输入框之外收起成按钮，已输入的文字保留", async () => {
+  render(<MailDraftCard taskId="task-1" item={item} sendMessage={vi.fn()} onChanged={vi.fn()} />);
+  await userEvent.click(screen.getByRole("button", { name: "修改要求" }));
+  await userEvent.type(screen.getByLabelText("针对这封邮件提出修改要求"), "短一点");
+  await userEvent.click(screen.getByLabelText("正文"));
+  expect(screen.queryByLabelText("针对这封邮件提出修改要求")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "修改要求" }));
+  expect((screen.getByLabelText("针对这封邮件提出修改要求") as HTMLInputElement).value).toBe("短一点");
+});
+
 test("收件人折叠成一行，点击后就地变成输入", async () => {
   render(<MailDraftCard taskId="task-1" item={item} sendMessage={vi.fn()} onChanged={vi.fn()} />);
   expect(screen.queryByLabelText("收件人")).toBeNull();

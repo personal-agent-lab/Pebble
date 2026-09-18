@@ -171,7 +171,12 @@ function TaskDetailView({ taskId, placeholder, models }: {
 
     <div className="msg-composer"><div className="composer-wrap">
       <Composer placeholder="随心输入" sending={detail.sending} model={detail.task?.model ?? placeholder?.model ?? ""}
-        models={models ?? []} modelsPending={models === null} modelLocked onSubmit={(text, files) => detail.send(text, null, files)} />
+        models={models ?? []} modelsPending={models === null} modelLocked onSubmit={async (text, files) => {
+          // 对话框里的消息让待确认的草稿失效：侧栏圆点跟着立即更新，不等下一次轮询。
+          const error = await detail.send(text, null, files);
+          if (error === null) void tasks.reload();
+          return error;
+        }} />
     </div></div>
   </AppShell>;
 }

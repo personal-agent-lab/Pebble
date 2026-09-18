@@ -7,8 +7,9 @@ import httpx
 
 from server.agent.mcp import ToolServer
 from server.agent.toolset import ALLOWED_EFFECTS, ToolDeps, TurnKind, build_tools, exposed_tools
-from server.db import init_db
+from server.db import init_db, session, write
 from server.memory.service import MemoryStore
+from server.sessions.repository import cancel_pending
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
 from server.tools.memory.tools import judge_registry, review_registry
@@ -198,6 +199,52 @@ def test_targeted_turn_can_only_update_selected_draft(settings):
             assert tool_payload(updated)["version"] == 2
 
     asyncio.run(scenario())
+
+
+def test_update_of_cancelled_draft_creates_new_one(settings):
+    """对话轮开始时草稿已取消：按意见保存时以它为底另起新草稿，新卡片由 draft_saved 带出。"""
+    tools, tasks = build(settings)
+    drafts = MailDraftStore()
+    task_id = tasks.create_task("写一封通知")["task_id"]
+    original = drafts.save_email_draft(task_id, ["a@example.com"], "主题", "正文")
+    with session() as conn, write(conn):
+        cancel_pending(conn, task_id, "2026-09-18T00:00:00Z")
+    server = ToolServer()
+    drafting = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
+    queued: asyncio.Queue = asyncio.Queue()
+    revision = {
+        "operation_id": original["operation_id"],
+        "expected_version": 1,
+        "to": ["a@example.com"],
+        "subject": "更正式的主题",
+        "body": "正文",
+    }
+
+    async def scenario():
+        async with (
+            server.serve(drafting, task_id=task_id, queued=queued) as path,
+            mcp_session(server, f"{BASE_URL}{path}") as session_,
+        ):
+            first = tool_payload(await session_.call_tool("gmail_update_draft", revision))
+            # 同一轮再改新草稿：它还是待确认，原地另存一版，不再另起卡片。
+            again = tool_payload(
+                await session_.call_tool(
+                    "gmail_update_draft",
+                    {**revision, "operation_id": first["operation_id"], "body": "正文二"},
+                )
+            )
+            return first, again
+
+    first, again = asyncio.run(scenario())
+    assert first["operation_id"] != original["operation_id"]
+    assert (first["version"], first["status"]) == (1, "pending")
+    assert queued.get_nowait()["operation_id"] == first["operation_id"]
+    assert (again["operation_id"], again["version"]) == (first["operation_id"], 2)
+    old = drafts.get_draft(original["operation_id"])
+    assert (old["status"], old["version"], old["subject"]) == ("cancelled", 1, "主题")
+    assert drafts.get_draft(first["operation_id"])["body"] == "正文二"
+    linked = {item["operation_id"] for item in tasks.list_task_operations(task_id)}
+    assert linked == {original["operation_id"], first["operation_id"]}
 
 
 def test_review_endpoint_exposes_review_tools(settings):

@@ -175,8 +175,10 @@ def read_draft(
 @tool(
     name="gmail_update_draft",
     description=(
-        "按用户修改意见保存邮件草稿的完整新版本，不发送。"
-        "保存成功后系统会把新版本以审阅卡片呈现给用户。"
+        "按用户修改意见保存邮件草稿的完整新内容，不发送。读到的草稿状态是 pending 或 cancelled"
+        "都可以用它保存；cancelled 时系统以一张新卡片呈现，之后以返回的 operation_id 为准。"
+        "保存成功后系统会把草稿以审阅卡片呈现给用户。"
+        "向用户只说明改了什么，不提及原草稿被取消、作废或另起新稿等系统处理。"
     ),
     side_effect=SideEffect.LOCAL_WRITE,
     emits_draft_saved=True,
@@ -193,5 +195,7 @@ def update_draft(
     drafts: MailDraftStore,
     tasks: SessionStore,
 ) -> dict:
-    read_draft(operation_id, task_id=task_id, drafts=drafts, tasks=tasks)
+    current = read_draft(operation_id, task_id=task_id, drafts=drafts, tasks=tasks)
+    if current["status"] == "cancelled":
+        return drafts.supersede_draft(task_id, operation_id, expected_version, to, subject, body)
     return drafts.update_draft(operation_id, expected_version, to, subject, body)

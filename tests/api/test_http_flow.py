@@ -201,22 +201,32 @@ def test_http_sse_flow_and_process_restart(settings, outcome, monkeypatch):
         assert not (settings.data_dir / "sent.jsonl").exists()
         with session() as conn:
             assert conn.execute("SELECT COUNT(*) FROM approval_executions").fetchone()[0] == 0
+        # 两轮修改都从卡片上的修改要求发出：定向这份草稿，原地另存版本。
+        target = json.dumps({"kind": "mail_draft", "operation_id": oid})
         log(
             "4/8 PASS SSE 已断开，后台仍完成草稿；无确认、无发送",
             event=received,
             draft=request(f"/operations/{oid}/draft")[1],
         )
         assert (
-            request(f"/tasks/{tid}/messages", {"message": "第二稿：请写得更正式"}, form=True)[0]
+            request(
+                f"/tasks/{tid}/messages",
+                {"message": "第二稿：请写得更正式", "target": target},
+                form=True,
+            )[0]
             == 202
         )
         wait_for(lambda: request(f"/tasks/{tid}")[1]["latest_run"]["status"] == "done")
         assert (
-            request(f"/tasks/{tid}/messages", {"message": "第三稿：请再简短一些"}, form=True)[0]
+            request(
+                f"/tasks/{tid}/messages",
+                {"message": "第三稿：请再简短一些", "target": target},
+                form=True,
+            )[0]
             == 202
         )
         wait_for(lambda: request(f"/tasks/{tid}")[1]["latest_run"]["status"] == "done")
-        log("5/8 Agent 已完成两轮修改，接下来模拟网页直接编辑")
+        log("5/8 Agent 已按卡片上的两轮修改要求改完，接下来模拟网页直接编辑")
         final = {
             "to": ["b@example.com", "a@example.com"],
             "subject": " 最终主题 ",

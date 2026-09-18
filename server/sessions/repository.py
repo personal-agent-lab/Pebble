@@ -93,6 +93,15 @@ def update_status(conn: sqlite3.Connection, operation_id: str, status: str, now:
     )
 
 
+def cancel_pending(conn: sqlite3.Connection, task_id: str, now: str) -> None:
+    """取消任务里全部待确认的操作：用户在对话里接着说话，之前待确认的内容随之收起。"""
+    conn.execute(
+        "UPDATE operations SET status = 'cancelled', updated_at = ? WHERE status = 'pending' "
+        "AND operation_id IN (SELECT operation_id FROM task_operations WHERE task_id = ?)",
+        (now, task_id),
+    )
+
+
 def has_active_run(conn: sqlite3.Connection, task_id: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM agent_runs WHERE task_id = ? AND status IN ('pending','running') LIMIT 1",
