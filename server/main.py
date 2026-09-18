@@ -6,16 +6,20 @@
 
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 
-from server.agent.mcp import MCP_MOUNT_PATH, ToolServer
+from server.agent.mcp import LOOPBACK_HOST, ToolServer
 from server.agent.models import ModelCatalog
+from server.api.access import AccessGuard, AccessPolicy
 from server.api.errors import install_error_handlers
 from server.api.routes import router
+from server.api.web import WEB_DIST, SpaFiles
 from server.approval.service import ConfirmationService
 from server.attachments import AttachmentStore
+from server.config import get_settings
 from server.db import init_db
 from server.errors import DependencyUnavailableError
 from server.gateway.runtime import GatewayRuntime, MailSource
@@ -48,11 +52,17 @@ def create_app(
     verify_event=None,
     model_catalog: ModelCatalog | None = None,
     attachments: AttachmentStore | None = None,
+    tool_port: int | None = None,
+    access: AccessPolicy | None = None,
+    web_dist: Path | None = None,
 ) -> FastAPI:
     """装配应用。
 
     `tasks` / `drafts` / `confirmations` 供调用方先行构造：Agent 工具与 HTTP 必须共用同一组
     实例，而工具要在构造 gateway 之前绑定依赖。未传入时就地构造。
+
+    `tool_server` 在 `tool_port` 上单独监听回环地址；`access` 为空时不做访问控制，
+    只用于测试与本机开发；`web_dist` 存在构建产物时同源提供前端页面。
     """
     attachments = attachments if attachments is not None else AttachmentStore()
     model_catalog = model_catalog if model_catalog is not None else ModelCatalog()
@@ -77,6 +87,17 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        async with AsyncExitStack() as stack:
+            if tool_server is not None:
+                # 工具端点先于恢复与邮件检测就绪：恢复的调用一开始就要连它。
+                await stack.enter_async_context(
+                    tool_server.listen(LOOPBACK_HOST, tool_port or get_settings().tool_port)
+                )
+            async with run(app):
+                yield
+
+    @asynccontextmanager
+    async def run(app: FastAPI) -> AsyncIterator[None]:
         init_db()
         confirmations.recover_interrupted_executions()
         agent.resume()
@@ -94,9 +115,8 @@ def create_app(
             await model_catalog.close()
 
     app = FastAPI(title="Pebble", lifespan=lifespan)
-    if tool_server is not None:
-        # 工具端点挂在 /api 之外：CLI 子进程按回环地址直连，不经过业务路由与错误处理。
-        app.mount(MCP_MOUNT_PATH, tool_server)
+    if access is not None:
+        app.add_middleware(AccessGuard, policy=access)
     app.state.tasks = tasks
     app.state.drafts = drafts
     app.state.confirmations = confirmations
@@ -111,6 +131,8 @@ def create_app(
     app.state.services = {}
     install_error_handlers(app)
     app.include_router(router, prefix="/api")
+    if web_dist is not None and (web_dist / "index.html").is_file():
+        app.mount("/", SpaFiles(directory=web_dist, html=True), name="web")
     return app
 
 
@@ -144,7 +166,6 @@ def create_production_app() -> FastAPI:
 
     from server.agent.client import QoderGateway
     from server.agent.toolset import ToolDeps
-    from server.config import get_settings
     from server.tools.gmail.sender import send_message, verify_message
     from server.tools.gmail.sync import GmailSource
 
@@ -201,12 +222,26 @@ def create_production_app() -> FastAPI:
         history=history,
         model_catalog=ModelCatalog(settings),
         attachments=attachments,
+        tool_port=settings.tool_port,
+        access=_access_policy(settings),
+        web_dist=WEB_DIST,
     )
     app.state.services = {
         "gmail": _service_state(gmail_reason),
         "calendar": _service_state(calendar_reason),
     }
     return app
+
+
+def _access_policy(settings) -> AccessPolicy | None:
+    """访问控制缺配置时拒绝启动，不静默退回无校验；关闭只能显式声明。"""
+    if settings.auth == "off":
+        logger.warning("访问控制已关闭（PEBBLE_AUTH=off），只应在本机开发时使用")
+        return None
+    try:
+        return AccessPolicy(settings.allowed_logins, settings.public_origin or "")
+    except ValueError as error:
+        raise RuntimeError(f"{error}；本机开发可设置 PEBBLE_AUTH=off") from error
 
 
 def _service_state(reason: str | None) -> dict:
@@ -217,8 +252,6 @@ def _service_state(reason: str | None) -> dict:
 
 if __name__ == "__main__":
     import uvicorn
-
-    from server.config import get_settings
 
     settings = get_settings()
     uvicorn.run(

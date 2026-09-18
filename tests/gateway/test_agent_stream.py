@@ -119,7 +119,7 @@ def test_new_mail_turn_sees_only_readonly_tools(settings):
     assert options.mcp_servers == {
         TOOL_SERVER_NAME: {
             "type": "http",
-            "url": f"http://127.0.0.1:{gateway.settings.port}{MCP_MOUNT_PATH}/{TURN_TOKEN}",
+            "url": f"http://127.0.0.1:{gateway.settings.tool_port}{MCP_MOUNT_PATH}/{TURN_TOKEN}",
         }
     }
     assert options.allowed_mcp_server_names == [TOOL_SERVER_NAME]
@@ -252,7 +252,7 @@ def test_review_options_expose_review_tools_in_fresh_session(settings):
     assert options.mcp_servers == {
         TOOL_SERVER_NAME: {
             "type": "http",
-            "url": f"http://127.0.0.1:{gateway.settings.port}{MCP_MOUNT_PATH}/{TURN_TOKEN}",
+            "url": f"http://127.0.0.1:{gateway.settings.tool_port}{MCP_MOUNT_PATH}/{TURN_TOKEN}",
         }
     }
     assert options.allowed_mcp_server_names == [TOOL_SERVER_NAME]

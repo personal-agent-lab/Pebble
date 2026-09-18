@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +21,16 @@ class Settings(BaseSettings):
     data_dir: Path = REPO_ROOT / ".data"
     host: str = "127.0.0.1"
     port: int = 8000
+    # 工具端点单独监听的回环端口：只供本机 CLI 子进程连接，不经对外转发。
+    tool_port: int = 8001
+
+    # 访问控制：tailscale 只接受经 Tailscale Serve 转发、账号在名单内的请求；
+    # off 不做任何校验，只用于本机开发与测试。
+    auth: Literal["tailscale", "off"] = "tailscale"
+    # 允许访问的 Tailscale 登录名，逗号分隔。
+    allowed_users: str = ""
+    # 对外地址（如 https://mac.example.ts.net），写请求的 Origin 必须与它一致。
+    public_origin: str | None = None
 
     qoder_model: str | None = None
     qoder_token: SecretStr | None = Field(
@@ -42,6 +53,12 @@ class Settings(BaseSettings):
     icloud_account: str | None = None
     icloud_password_path: Path | None = None
     icloud_calendar_url: str | None = None
+
+    @property
+    def allowed_logins(self) -> frozenset[str]:
+        return frozenset(
+            login.strip().lower() for login in self.allowed_users.split(",") if login.strip()
+        )
 
     @property
     def db_path(self) -> Path:

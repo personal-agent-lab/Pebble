@@ -3,6 +3,8 @@
 CLI 只连接真实传输（stdio/sse/http/...），SDK 的进程内 `sdk` 类型不会建立连接，因此工具
 不由 `create_sdk_mcp_server` 装配：应用进程自己提供端点，每轮输入登记一个一次性路径，
 绑定该轮允许的工具、任务标识与草稿事件队列，轮次结束即撤销。
+
+端点单独监听回环端口，不挂在业务应用上：对外转发只覆盖业务端口，工具端点结构上不可达。
 """
 
 from __future__ import annotations
@@ -12,13 +14,16 @@ import base64
 import json
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from uuid import uuid4
 
+import uvicorn
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import BlobResourceContents, CallToolResult, EmbeddedResource, TextContent, Tool
+from starlette.applications import Starlette
 from starlette.responses import Response
+from starlette.routing import Mount
 from starlette.types import Receive, Scope, Send
 
 from server.errors import error_details
@@ -27,6 +32,7 @@ from server.tools.registry import ToolDefinition, ToolFileResult
 logger = logging.getLogger(__name__)
 
 MCP_MOUNT_PATH = "/mcp"
+LOOPBACK_HOST = "127.0.0.1"
 TOOL_SERVER_NAME = "pebble"
 TOOL_ERROR_MESSAGE = "工具执行失败"
 UNKNOWN_TOOL_MESSAGE = "本轮没有这个工具"
@@ -73,6 +79,26 @@ class ToolServer:
             finally:
                 self._turns.pop(token, None)
 
+    @asynccontextmanager
+    async def listen(self, host: str, port: int) -> AsyncIterator[None]:
+        """在 `host:port` 上提供工具端点，退出时停止监听。"""
+        app = Starlette(routes=[Mount(MCP_MOUNT_PATH, app=self)])
+        # log_config=None：不重设全局日志，沿用外层服务的配置。
+        server = _EmbeddedServer(
+            uvicorn.Config(app, host=host, port=port, lifespan="off", log_config=None)
+        )
+        serving = asyncio.create_task(server.serve())
+        while not server.started:
+            if serving.done():
+                # 端口被占用等启动失败时 uvicorn 已记录原因并退出，这里把结果原样抛出。
+                await serving
+            await asyncio.sleep(0.01)
+        try:
+            yield
+        finally:
+            server.should_exit = True
+            await serving
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """ASGI 入口：路径最后一段是本轮令牌，未知令牌按不存在处理。"""
         if scope["type"] != "http":
@@ -83,6 +109,13 @@ class ToolServer:
             await Response("未知工具会话", status_code=404)(scope, receive, send)
             return
         await manager.handle_request(scope, receive, send)
+
+
+class _EmbeddedServer(uvicorn.Server):
+    """随业务应用生命周期运行的内嵌服务：信号交给外层服务处理，不另行接管。"""
+
+    def capture_signals(self):
+        return nullcontext()
 
 
 def build_server(
@@ -160,9 +193,7 @@ async def invoke(
             }
         )
     if definition.notice_renderer is not None:
-        queued.put_nowait(
-            {"type": "notice", "text": definition.notice_renderer(result)}
-        )
+        queued.put_nowait({"type": "notice", "text": definition.notice_renderer(result)})
     if isinstance(result, ToolFileResult):
         metadata = {**result.metadata, "filename": result.filename, "mime_type": result.mime_type}
         return CallToolResult(

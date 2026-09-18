@@ -37,7 +37,7 @@ async def verify(root: Path) -> dict:
     if Settings().qoder_token is None:
         raise RuntimeError("未配置 QODERCN_PERSONAL_ACCESS_TOKEN")
     port = available_port()
-    settings = Settings(data_dir=root, port=port)
+    settings = Settings(data_dir=root, tool_port=port)
     db_path = root / "pebble.db"
     init_db(db_path)
     kb_store = KbStore(root)

@@ -37,7 +37,7 @@ from qodercn_agent_sdk import (
 )
 
 from server.agent import context
-from server.agent.mcp import TOOL_ERROR_MESSAGE, TOOL_SERVER_NAME, ToolServer
+from server.agent.mcp import LOOPBACK_HOST, TOOL_ERROR_MESSAGE, TOOL_SERVER_NAME, ToolServer
 from server.agent.prompt import TITLE_PROMPT
 from server.agent.toolset import (
     ALLOWED_EFFECTS,
@@ -57,7 +57,6 @@ from server.tools.registry import ToolDefinition, activity
 logger = logging.getLogger(__name__)
 
 CONFIG_DIR_ENV = "QODERCN_CONFIG_DIR"
-LOOPBACK_HOST = "127.0.0.1"
 
 # BYOK 供应商标识登记：SDK 目录由 CLI 运行时下发，这里只登记已向目录确认过的标识，
 # 未登记的一律在装配期报错，接入新供应商时补充本表。目录中所有模型的协议风格都是
@@ -511,7 +510,7 @@ class QoderGateway:
         )
 
     def _tool_url(self, path: str) -> str:
-        return f"http://{LOOPBACK_HOST}:{self.settings.port}{path}"
+        return f"http://{LOOPBACK_HOST}:{self.settings.tool_port}{path}"
 
     def _auth(self) -> Any:
         token = self.settings.qoder_token

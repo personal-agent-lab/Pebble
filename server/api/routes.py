@@ -285,7 +285,8 @@ def edit_draft(operation_id: str, body: DraftEdit, drafts: Drafts) -> dict:
     """按邮件契约编辑草稿：输入不含任务标识，同一操作可由任何关联任务的页面编辑。
 
     工具路径另有归属检查，限制模型只能读写本会话任务的草稿，防邮件正文里的指令越界；
-    那不是用户授权检查，与本接口不同是有意的。用户身份检查随正式 Web 接入一起补。
+    那不是用户授权检查，与本接口不同是有意的。单用户实例里草稿都属于同一用户，
+    用户身份与请求来源由访问控制（`server/api/access.py`）统一校验。
     """
     return drafts.update_draft(
         operation_id,

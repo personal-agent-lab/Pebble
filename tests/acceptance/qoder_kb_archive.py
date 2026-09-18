@@ -163,8 +163,8 @@ def main() -> None:
         raise RuntimeError("未配置 QODERCN_PERSONAL_ACCESS_TOKEN")
     with tempfile.TemporaryDirectory(prefix="pebble-qoder-kb-archive-") as directory:
         root = Path(directory)
-        settings = Settings(data_dir=root, port=available_port())
-        report = asyncio.run(verify(root, settings, settings.port))
+        settings = Settings(data_dir=root, tool_port=available_port())
+        report = asyncio.run(verify(root, settings, settings.tool_port))
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 

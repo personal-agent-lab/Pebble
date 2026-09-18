@@ -76,7 +76,7 @@ async def verify(root: Path) -> dict:
             memory_store=store,
         ),
         tool_server,
-        settings=Settings(data_dir=root, port=port),
+        settings=Settings(data_dir=root, tool_port=port),
     )
     app = FastAPI()
     app.mount(MCP_MOUNT_PATH, tool_server)

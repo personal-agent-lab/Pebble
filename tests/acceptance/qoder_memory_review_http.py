@@ -51,7 +51,13 @@ class Service:
         self.process: subprocess.Popen | None = None
 
     def start(self):
-        env = {**os.environ, "PEBBLE_PORT": str(self.port)}
+        env = {
+            **os.environ,
+            "PEBBLE_PORT": str(self.port),
+            "PEBBLE_TOOL_PORT": str(available_port()),
+            # 验收脚本从本机直连，不经 Tailscale Serve。
+            "PEBBLE_AUTH": "off",
+        }
         log_file = REPO_ROOT / ".data" / "memory-review-http.log"
         with log_file.open("a") as output:
             self.process = subprocess.Popen(

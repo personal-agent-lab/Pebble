@@ -8,9 +8,8 @@
 确认操作；任务不依赖始终开启的浏览器页面。新邮件是首版的系统触发源，收到即自动开始处理，
 但邮件只是它能做的事之一。
 
-已接通对话与任务、Gmail、iCloud Calendar、长期记忆、历史对话检索与个人资料库；主题页、Skills、
-认证与 HTTPS 远程访问尚未实现，目前只能本机和同局域网访问。完整的实现状态与已知偏差见
-`docs/status.md`。真实账号验收仍在进行，本地测试通过不代表真实邮件或日程操作成功。
+已接通对话与任务、Gmail、iCloud Calendar、长期记忆、历史对话检索、个人资料库，以及经 Tailscale 的
+HTTPS 远程访问；主题页与 Skills 尚未实现。完整的实现状态与已知偏差见 `docs/status.md`。真实账号验收仍在进行，本地测试通过不代表真实邮件或日程操作成功。
 
 ## 文档
 
@@ -46,7 +45,11 @@ cp .env.example .env
 | 变量 | 含义 |
 | --- | --- |
 | `PEBBLE_DATA_DIR` | 实例数据目录，默认 `<仓库根>/.data` |
-| `PEBBLE_HOST`、`PEBBLE_PORT` | 监听地址与端口，默认 `127.0.0.1:8000` |
+| `PEBBLE_HOST`、`PEBBLE_PORT` | 监听地址与端口，默认 `127.0.0.1:8000`；远程访问时保持回环地址 |
+| `PEBBLE_TOOL_PORT` | 工具端点的回环端口，默认 `8001`，只供本机 CLI 子进程连接 |
+| `PEBBLE_AUTH` | `tailscale`（默认）只接受经 Tailscale Serve 转发、账号在名单内的请求；`off` 关闭校验，只用于本机开发 |
+| `PEBBLE_ALLOWED_USERS` | 允许访问的 Tailscale 登录名，逗号分隔；`tailscale` 模式必填 |
+| `PEBBLE_PUBLIC_ORIGIN` | 对外地址，如 `https://mac.example.ts.net`，写请求的来源必须与它一致；`tailscale` 模式必填 |
 | `QODERCN_PERSONAL_ACCESS_TOKEN` | Qoder CN 访问令牌，注意没有 `PEBBLE_` 前缀 |
 | `PEBBLE_QODER_MODEL` | 新任务默认选中的型号标识（如 `qmodel_38max`），取值见 `GET /api/models` 的 `id`；未配置时默认 `auto` |
 | `PEBBLE_LIGHT_MODEL_PROVIDER`、`PEBBLE_LIGHT_MODEL`、`PEBBLE_LIGHT_MODEL_API_KEY`、`PEBBLE_LIGHT_MODEL_BASE_URL` | 轻量模型（自有 API Key），只用于任务标题、资料说明与资料图片说明生成；图片说明需要所配模型支持图片输入。供应商、型号、密钥必须同时给全，`BASE_URL` 可选；provider 与型号取自账号的 BYOK 目录（如 `deepseek` / `deepseek-flash-pg`）。都不配时沿用 `PEBBLE_QODER_MODEL` |
@@ -64,6 +67,9 @@ Qoder CN 与国际版的 SDK、Token 和配置目录不能混用。
 对话、记忆与个人资料库都能用，只是该服务的工具、新邮件检测与确认执行一并关闭（草稿工具也不交给
 模型，免得起草出发不出去的邮件）；启动日志会说明哪项未接入，`/api/health` 的 `services` 也会列出
 `unconfigured` 与原因。补齐凭证后重启即可启用。仅测试使用不装配真实依赖的 `create_app()`。
+
+访问控制缺配置时服务拒绝启动，不会静默退回无校验。只在本机开发、不做远程访问时，在 `.env` 里写
+`PEBBLE_AUTH=off`。
 
 ## 启动
 
@@ -87,17 +93,46 @@ npm install
 npm run dev
 ```
 
-页面在 `http://127.0.0.1:5173`，Vite 把 `/api` 代理到后端；`host` 已开放局域网，
-手机连同一网络后可用 Vite 打印的 Network 地址直接访问。
+页面在 `http://127.0.0.1:5173`，Vite 把 `/api` 代理到后端，需配合 `PEBBLE_AUTH=off`。`host` 已开放
+局域网，手机连同一网络后可用 Vite 打印的 Network 地址访问；这条路径没有访问控制，只在开发时用。
+
+生产运行不用 Vite：在 `web/` 执行 `npm run build`，后端检测到 `web/dist/` 就同源提供页面，
+页面、接口与 SSE 共用一个端口。
 
 ## 远程访问
 
-规格要求手机不与服务在同一局域网也能完整使用（HTTPS + 单用户认证，见 `docs/v1-spec.md` §4.6）。
-该能力属于交付阶段 6，尚未实现：当前服务只监听本机，认证与来源校验都没有接入，
-因此只能在本机和同局域网内测试，不要暴露到公网。
+经 [Tailscale](https://tailscale.com/) 私有网络访问：服务只监听本机，由 Tailscale Serve 提供带正式证书的
+HTTPS 地址并转发；只有你 tailnet 里的设备能连上，Pebble 再按 Tailscale 账号与请求来源校验
+（`docs/v1-design.md` §6）。服务不暴露在公网，不要开启 Tailscale Funnel。
 
-设计只固定安全要求，不固定传输方案；反向隧道、反向代理加域名或私有网络的选定结果与配置步骤
-会在实现后写回本节。
+1. 服务所在电脑与手机都安装 Tailscale，登录同一账号；管理后台开启 MagicDNS 与 HTTPS Certificates。
+2. 构建前端：`cd web && npm run build`。
+3. `.env` 写入访问控制（登录名见 `tailscale status` 或管理后台，对外地址见下一步输出）：
+
+   ```
+   PEBBLE_AUTH=tailscale
+   PEBBLE_ALLOWED_USERS=you@example.com
+   PEBBLE_PUBLIC_ORIGIN=https://<机器名>.<tailnet>.ts.net
+   ```
+
+4. 启动后端（见“启动”），再让 Tailscale Serve 转发业务端口：
+
+   ```bash
+   tailscale serve --bg http://127.0.0.1:8000
+   ```
+
+5. 手机打开 `https://<机器名>.<tailnet>.ts.net`。`tailscale serve status` 查看转发，`tailscale serve reset`
+   撤销。
+
+撤销访问：在 Tailscale 管理后台移除设备或让其密钥过期，该设备立即连不上。
+
+注意事项：
+
+- 只转发业务端口；工具端点单独监听 `PEBBLE_TOOL_PORT`，不要转发它。
+- 手机同一时间只能开一个 VPN 类 App，开着其他代理时连不上 Pebble。
+- 电脑同时使用 Clash 等代理时，让 `*.ts.net` 与 `100.64.0.0/10` 直连；TUN 模式还要把该网段排除出
+  TUN 路由，并把 `ts.net` 交给 `100.100.100.100` 解析。
+- 本机进程可以绕过 Serve 直连后端并伪造身份头，这在防护范围之外（本机进程本就能读数据目录）。
 
 ## 检查
 

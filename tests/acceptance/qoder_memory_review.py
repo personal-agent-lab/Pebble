@@ -105,7 +105,7 @@ async def verify(root: Path) -> dict:
     if base.qoder_token is None:
         raise RuntimeError("未配置 QODERCN_PERSONAL_ACCESS_TOKEN")
     port = available_port()
-    settings = Settings(data_dir=root, port=port)
+    settings = Settings(data_dir=root, tool_port=port)
     memory_store = MemoryStore(root)
     tool_server = ToolServer()
     gateway = QoderGateway(

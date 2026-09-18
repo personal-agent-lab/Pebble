@@ -75,7 +75,7 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
 
         async def call(self, name, fields):
             url = self.options.mcp_servers[TOOL_SERVER_NAME]["url"]
-            async with mcp_session(app, url) as session:
+            async with mcp_session(tool_server, url) as session:
                 result = await session.call_tool(name, fields)
             assert result.isError is False, result
             return tool_payload(result)
@@ -137,7 +137,6 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
         send_message=partial(send_message, client=gmail),
         tasks=tasks,
         drafts=drafts,
-        tool_server=tool_server,
     )
     with TestClient(app) as http:
         task = http.portal.call(
