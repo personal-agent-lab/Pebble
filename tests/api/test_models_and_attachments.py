@@ -122,6 +122,51 @@ def test_attachment_only_and_delete_cleanup(settings):
         assert not workspace.exists()
 
 
+def test_client_task_id_makes_creation_idempotent(settings):
+    gateway = FakeAgentGateway()
+    app = create_app(gateway=gateway, model_catalog=StaticCatalog())
+    task_id = "3f1c8a52-7d4e-4b6a-9c0e-2a5b7d9e1f30"
+    with TestClient(app) as client:
+        first = client.post(
+            "/api/tasks",
+            data={"model": "model-a", "message": "你好", "task_id": task_id},
+            files={"files": ("a.txt", b"one", "text/plain")},
+        )
+        assert first.status_code == 201, first.text
+        assert first.json()["task"]["task_id"] == task_id
+        assert wait_done(client, task_id)["status"] == "done"
+
+        # 网络中断后重试同一标识：返回已创建的任务，不新建、不重复登记调用或附件。
+        replay = client.post(
+            "/api/tasks",
+            data={"model": "model-a", "message": "你好", "task_id": task_id},
+            files={"files": ("a.txt", b"one", "text/plain")},
+        )
+        assert replay.status_code == 200
+        assert replay.json()["task"]["task_id"] == task_id
+        assert replay.json()["run"]["run_id"] == first.json()["run"]["run_id"]
+        assert [task["task_id"] for task in client.get("/api/tasks").json()] == [task_id]
+        assert len(gateway.calls_of("message")) == 1
+        users = [
+            item
+            for item in client.get(f"/api/tasks/{task_id}/timeline").json()["items"]
+            if item.get("role") == "user"
+        ]
+        assert len(users) == 1 and len(users[0]["attachments"]) == 1
+
+        # 标识被非用户任务占用时不当作重复提交；格式不对直接拒绝。
+        other = app.state.tasks.create_task("另一个任务", model="model-a")["task_id"]
+        taken = client.post(
+            "/api/tasks", data={"model": "model-a", "message": "x", "task_id": other}
+        )
+        assert taken.status_code == 409
+        assert taken.json()["error"] == "task_id_conflict"
+        malformed = client.post(
+            "/api/tasks", data={"model": "model-a", "message": "x", "task_id": "abc"}
+        )
+        assert malformed.status_code == 422
+
+
 def test_rejects_invalid_model_files_and_entire_batch(settings):
     app = create_app(gateway=FakeAgentGateway(), model_catalog=StaticCatalog())
     with TestClient(app) as client:

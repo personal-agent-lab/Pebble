@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -30,6 +31,8 @@ from server.errors import (
 )
 from server.sessions.service import timestamp
 from server.storage.datarepo import GITIGNORE, lock_for
+from server.storage.line_edit import LineEditError, apply_operations, parse_operations, render
+from server.tools.personal_kb.assets import ASSET_TYPES, ASSETS_DIR, MAX_ASSET_SIZE, sniff
 from server.tools.personal_kb.catalog import CatalogEntry, render_catalog
 from server.tools.personal_kb.index import (
     IndexDocument,
@@ -39,15 +42,22 @@ from server.tools.personal_kb.index import (
 )
 
 ID_PREFIX = "kb_"
-DEFAULT_DIR = "inbox"
 ARCHIVE_DIR = "archive"
 INDEX_FILENAME = "kb-index.sqlite3"
 MAX_RESULTS_DEFAULT = 10
 MAX_RESULTS_LIMIT = 20
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n?(.*)\Z", re.DOTALL)
-FIELD_ORDER = ("id", "title", "summary", "tags", "created_at", "updated_at")
+FIELD_ORDER = ("id", "title", "summary", "created_at", "updated_at")
+MAX_FILE_STEM = 60
+# 按行编辑时正文这一部分的名称，参与锚点计算。
+BODY = "body"
 
 logger = logging.getLogger(__name__)
+
+
+def anchored_body(body: str) -> str:
+    """正文给模型看的带锚点形式：有文字的行写成“锚点| 原文”，供 `operations` 定位。"""
+    return render({BODY: body})[BODY]
 
 
 class KbStore:
@@ -69,11 +79,18 @@ class KbStore:
         title: str,
         body: str,
         path: str | None = None,
-        tags: list[str] | None = None,
         summary: str | None = None,
+        directory: str | None = None,
+        name: str | None = None,
     ) -> dict:
-        """新建一份资料文件并提交；返回 id、相对路径、版本（commit）与引用。"""
+        """新建一份资料文件并提交；返回 id、相对路径、版本（commit）与引用。
+
+        不给 `path` 时文件名取 `name`（省略时取标题），放在 `directory` 下，同名时依次编号；
+        `directory` 省略或为空串时放在资料库根目录。
+        """
         errors = []
+        if path and directory is not None:
+            errors.append({"field": "directory", "message": "path 与 directory 只能给一个"})
         if not (title or "").strip():
             errors.append({"field": "title", "message": "资料标题不能为空"})
         if not (body or "").strip():
@@ -84,14 +101,19 @@ class KbStore:
         doc_id = f"{ID_PREFIX}{uuid4().hex}"
         with self._lock:
             self._intake()
-            rel = self._normalize_rel(path) if path else self._default_rel(title, doc_id)
+            if path:
+                rel = self._normalize_rel(path)
+            else:
+                folder = self._normalize_directory(directory)
+                self._reject_assets(folder, "directory")
+                rel = self._available_rel(folder, self._file_stem(name or title))
             target = self.data_dir / rel
             if target.exists():
                 raise KbValidationError(
                     [{"field": "path", "message": "目标文件已存在，请改用 kb_update 修改"}]
                 )
             now = timestamp()
-            meta = self._build_meta(doc_id, title.strip(), now, now, tags, summary)
+            meta = self._build_meta(doc_id, title.strip(), now, now, summary)
             tree_before = self._kb_tree()
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
@@ -139,7 +161,6 @@ class KbStore:
                 "id": doc_id,
                 "path": rel,
                 "title": meta.get("title"),
-                "tags": meta.get("tags"),
                 "summary": meta.get("summary"),
                 "created_at": meta.get("created_at"),
                 "updated_at": meta.get("updated_at"),
@@ -154,7 +175,6 @@ class KbStore:
         self,
         *,
         query: str,
-        tag: str | None = None,
         max_results: int | None = None,
     ) -> dict:
         """按关键词检索分节；返回摘要与引用，不返回整篇正文。"""
@@ -180,7 +200,7 @@ class KbStore:
             except Exception as error:
                 # 索引跟不上资料时宁可说不可检索，也不拿可能过期的旧索引回答。
                 raise KbIndexUnavailableError("资料索引不可用，无法检索") from error
-            hits = self._index.search(terms=terms, tag=tag, max_results=limit)
+            hits = self._index.search(terms=terms, max_results=limit)
         return {"query": query, "results": [self._hit_payload(hit) for hit in hits]}
 
     def list(self, *, directory: str | None = None, deleted: bool = False) -> dict:
@@ -206,11 +226,90 @@ class KbStore:
                         "path": rel,
                         "title": meta.get("title"),
                         "summary": meta.get("summary"),
-                        "tags": meta.get("tags"),
+                        "updated_at": meta.get("updated_at"),
                         "version": self._file_commit(rel),
                     }
                 )
             return {"directory": prefix, "documents": documents}
+
+    def folders(self) -> list[str]:
+        """`kb/` 下全部子目录的相对路径（不含 `kb/` 前缀），含空目录，跳过隐藏目录。"""
+        with self._lock:
+            found = []
+            for current, dirs, _ in os.walk(self.kb_dir):
+                dirs[:] = sorted(name for name in dirs if not name.startswith("."))
+                base = Path(current)
+                if base == self.kb_dir and ASSETS_DIR in dirs:
+                    dirs.remove(ASSETS_DIR)
+                for name in dirs:
+                    found.append(str((base / name).relative_to(self.kb_dir)).replace(os.sep, "/"))
+            return sorted(found)
+
+    def create_folder(self, path: str) -> dict:
+        """新建空文件夹。文件夹只是目录结构，不进版本历史；里面有资料后随资料一起提交。"""
+        if not (path or "").strip():
+            raise KbValidationError([{"field": "path", "message": "文件夹名称不能为空"}])
+        if path.strip().startswith(("/", "\\")):
+            raise KbValidationError([{"field": "path", "message": "文件夹必须位于资料库内"}])
+        rel = self._normalize_directory(path)
+        if rel == "kb" or any(part.startswith(".") for part in rel.split("/")[1:]):
+            raise KbValidationError([{"field": "path", "message": "文件夹名称不能以 . 开头"}])
+        self._reject_assets(rel, "path")
+        with self._lock:
+            target = self.data_dir / rel
+            if target.exists():
+                raise KbValidationError([{"field": "path", "message": "已有同名文件夹或资料"}])
+            try:
+                target.mkdir(parents=True)
+            except OSError as error:
+                raise KbStoreUnavailableError("无法新建文件夹") from error
+            return {"path": rel}
+
+    def save_asset(self, data: bytes) -> dict:
+        """保存一张正文图片并提交；内容相同的图片只存一份，返回相对资料库根目录的路径。"""
+        extension = sniff(data)
+        errors = []
+        if extension is None:
+            errors.append({"field": "file", "message": "只支持 PNG、JPEG、WebP 图片"})
+        if len(data) > MAX_ASSET_SIZE:
+            errors.append({"field": "file", "message": "图片不能超过 10 MB"})
+        if errors:
+            raise KbValidationError(errors)
+        name = f"{hashlib.sha256(data).hexdigest()[:16]}.{extension}"
+        rel = f"kb/{ASSETS_DIR}/{name}"
+        with self._lock:
+            self._intake()
+            target = self.data_dir / rel
+            if not target.exists():
+                tree_before = self._kb_tree()
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    self._atomic_write_bytes(target, data)
+                    self._commit(rel, f"[Kb] Add asset {name}")
+                except Exception as error:
+                    self._discard_new(target, rel)
+                    if isinstance(error, KbStoreUnavailableError):
+                        raise
+                    raise KbStoreUnavailableError("图片保存失败，已撤销") from error
+                # 图片不进索引，只让索引记下新的目录状态，免得下一次检索整体重建。
+                self._sync_index([rel], tree_before)
+            return {"path": f"{ASSETS_DIR}/{name}"}
+
+    def asset(self, name: str) -> tuple[Path, str]:
+        """按文件名读取 `kb/assets/` 下的图片，返回文件与按内容识别的类型。"""
+        missing = NotFoundError("图片不存在")
+        if not name or "/" in name or "\\" in name or name.startswith("."):
+            raise missing
+        target = self.kb_dir / ASSETS_DIR / name
+        try:
+            with target.open("rb") as handle:
+                head = handle.read(16)
+        except OSError as error:
+            raise missing from error
+        extension = sniff(head)
+        if extension is None:
+            raise missing
+        return target, ASSET_TYPES[extension]
 
     def history(self, *, path: str | None = None, doc_id: str | None = None) -> dict:
         """列出一份资料的已有版本（跟随移动，含已删除资料），供读取或恢复历史原文。"""
@@ -239,10 +338,25 @@ class KbStore:
         doc_id: str | None = None,
         title: str | None = None,
         body: str | None = None,
-        tags: list[str] | None = None,
         summary: str | None = None,
+        operations: list[dict] | None = None,
     ) -> dict:
-        """修改已有资料而非新建副本；版本不匹配则拒绝，不静默覆盖。"""
+        """修改已有资料而非新建副本；版本不匹配则拒绝，不静默覆盖。
+
+        正文可以整篇替换（`body`），也可以按行锚点局部修改（`operations`，锚点取自
+        `anchored_body`），二者只能给其一。按行修改只动锚点指到的行，其余原文逐字不变；
+        锚点失效时整次拒绝，并附上带锚点的最新正文。
+        """
+        if body is not None and operations is not None:
+            raise KbValidationError(
+                [{"field": "operations", "message": "body 与 operations 只能给其一"}]
+            )
+        parsed = None
+        if operations is not None:
+            try:
+                parsed = parse_operations(operations, (BODY,))
+            except LineEditError as error:
+                raise KbValidationError(error.errors) from error
         with self._lock:
             self._intake()
             rel = self._locate(path, doc_id)
@@ -250,6 +364,25 @@ class KbStore:
             if expected_version != current:
                 raise VersionConflictError(current)
             meta, old_body = self._parse(self._content_at(rel, None))
+            applied = None
+            if parsed is not None:
+                try:
+                    updated, applied = apply_operations({BODY: old_body}, parsed)
+                except LineEditError as error:
+                    raise KbValidationError(
+                        error.errors,
+                        document={
+                            "path": rel,
+                            "version": current,
+                            "body": anchored_body(old_body),
+                        },
+                    ) from error
+                body = updated[BODY]
+                applied = [
+                    {key: value for key, value in record.items() if key != "target"}
+                    for record in applied
+                ]
+            old_title = meta.get("title")
             if title is not None:
                 if not title.strip():
                     raise KbValidationError([{"field": "title", "message": "资料标题不能为空"}])
@@ -258,11 +391,6 @@ class KbStore:
                 if not body.strip():
                     raise KbValidationError([{"field": "body", "message": "资料正文不能为空"}])
                 old_body = body
-            if tags is not None:
-                if tags:
-                    meta["tags"] = list(tags)
-                else:
-                    meta.pop("tags", None)
             if summary is not None:
                 if summary.strip():
                     meta["summary"] = summary.strip()
@@ -276,14 +404,21 @@ class KbStore:
             try:
                 rendered = self._render(self._order(meta), old_body)
                 self._atomic_write(target, rendered)
-                commit = self._commit(rel, f"[Kb] Update {meta.get('title', rel)}")
+                verb = "Update" if applied is None else f"Edit ({len(applied)} changes)"
+                commit = self._commit(rel, f"[Kb] {verb} {meta.get('title', rel)}")
             except Exception as error:
                 self._restore(target, previous)
                 if isinstance(error, KbStoreUnavailableError):
                     raise
                 raise KbStoreUnavailableError("资料修改失败，文件已恢复") from error
-            index_status = self._sync_index([rel], tree_before)
-            return self._result(
+            paths = [rel]
+            if meta["title"] != old_title:
+                renamed = self._follow_title(rel, meta["title"])
+                if renamed != rel:
+                    paths.append(renamed)
+                    rel, commit = renamed, self._head()
+            index_status = self._sync_index(paths, tree_before)
+            result = self._result(
                 meta.get("id") or doc_id,
                 rel,
                 meta,
@@ -292,6 +427,9 @@ class KbStore:
                 previous_version=current,
                 index_status=index_status,
             )
+            if applied is not None:
+                result["applied"] = applied
+            return result
 
     def catalog(self, limit: int | None = None) -> str:
         """每轮常驻的资料目录：先纳入用户改动，再从文件现算，保证与资料一致。"""
@@ -349,10 +487,13 @@ class KbStore:
         for kind, name in (("original", "原始内容"), ("summary", "总结与执行结果")):
             for label, text in sections[kind]:
                 parts.append(f"## {name}：{label}\n\n{text}" if label else f"## {name}\n\n{text}")
-        doc_id_hint = uuid4().hex[-6:]
         date = timestamp()[:10]
-        path = f"{ARCHIVE_DIR}/{date}-{self._slug(title)}-{doc_id_hint}.md"
-        return self.save(title=title.strip(), body="\n\n".join(parts), path=path)
+        return self.save(
+            title=title.strip(),
+            body="\n\n".join(parts),
+            directory=ARCHIVE_DIR,
+            name=f"{date} {title.strip()}",
+        )
 
     def delete(
         self,
@@ -493,7 +634,7 @@ class KbStore:
     def _initialize(self) -> None:
         try:
             self.data_dir.mkdir(parents=True, exist_ok=True)
-            (self.kb_dir / DEFAULT_DIR).mkdir(parents=True, exist_ok=True)
+            self.kb_dir.mkdir(parents=True, exist_ok=True)
             self._ensure_repository()
             ignore = self.data_dir / ".gitignore"
             if not ignore.exists() or ignore.read_text(encoding="utf-8") != GITIGNORE:
@@ -749,7 +890,16 @@ class KbStore:
             raise KbValidationError([{"field": "path", "message": "path 不能包含空目录段或 .."}])
         if not parts[-1].endswith(".md"):
             parts[-1] += ".md"
-        return "kb/" + "/".join(parts)
+        rel = "kb/" + "/".join(parts)
+        self._reject_assets(rel, "path")
+        return rel
+
+    @staticmethod
+    def _reject_assets(rel: str, field: str) -> None:
+        if rel == f"kb/{ASSETS_DIR}" or rel.startswith(f"kb/{ASSETS_DIR}/"):
+            raise KbValidationError(
+                [{"field": field, "message": f"{ASSETS_DIR}/ 只存放图片，不能放资料或文件夹"}]
+            )
 
     def _normalize_directory(self, directory: str | None) -> str:
         if directory is None or not directory.strip() or directory.strip() == "kb":
@@ -764,13 +914,51 @@ class KbStore:
             )
         return "kb/" + "/".join(parts)
 
-    def _default_rel(self, title: str, doc_id: str) -> str:
-        return f"kb/{DEFAULT_DIR}/{self._slug(title)}-{doc_id[-6:]}.md"
-
     @staticmethod
-    def _slug(title: str) -> str:
-        slug = re.sub(r"[\s/\\:*?\"<>|]+", "-", title.strip()).strip("-")
-        return (slug or "note")[:40]
+    def _file_stem(title: str) -> str:
+        """由标题得到文件名（不含扩展名）：只替换文件系统不允许的字符，用户看得懂。"""
+        stem = re.sub(r"[\x00-\x1f/\\:*?\"<>|]+", "-", title)
+        stem = re.sub(r"\s+", " ", stem).strip().lstrip(".").strip()
+        return stem[:MAX_FILE_STEM].rstrip() or "未命名"
+
+    def _available_rel(self, folder: str, stem: str, current: str | None = None) -> str:
+        """`folder` 下以 `stem` 命名的空闲路径，同名时依次编号为 “stem 2”“stem 3”。
+
+        `current` 是资料自己现在的路径，不算占用。
+        """
+        number = 1
+        while True:
+            name = stem if number == 1 else f"{stem} {number}"
+            rel = f"{folder}/{name}.md"
+            if rel == current or not (self.data_dir / rel).exists():
+                return rel
+            number += 1
+
+    def _follow_title(self, rel: str, title: str) -> str:
+        """改标题后让文件名跟随新标题，文件夹不变；返回资料现在的路径。
+
+        文件名本来就与新标题一致（含同名编号）时不动；只差大小写也不动——大小写不敏感的
+        文件系统上 Git 无法按路径提交这种改名。改名以原内容单独提交，历史能跟随；改名失败
+        只记日志，标题修改已经提交，不因文件名回滚。
+        """
+        folder, _, name = rel.rpartition("/")
+        stem = self._file_stem(title)
+        pattern = re.escape(stem) + r"( \d+)?"
+        if re.fullmatch(pattern, name.removesuffix(".md"), re.IGNORECASE):
+            return rel
+        new_rel = self._available_rel(folder, stem, current=rel)
+        if new_rel == rel:
+            return rel
+        try:
+            self._git("mv", "--", rel, new_rel)
+            self._git("commit", "--quiet", "-m", f"[Kb] Rename {title}", "--", rel, new_rel)
+        except KbStoreUnavailableError:
+            logger.warning("资料改名失败，保留原文件名：%s", rel, exc_info=True)
+            self._git_raw("reset", "--quiet", "--", rel, new_rel)
+            if (self.data_dir / new_rel).exists() and not (self.data_dir / rel).exists():
+                (self.data_dir / new_rel).rename(self.data_dir / rel)
+            return rel
+        return new_rel
 
     def _locate(self, path: str | None, doc_id: str | None) -> str:
         if path:
@@ -846,7 +1034,6 @@ class KbStore:
                         "id": doc_id,
                         "path": rel,
                         "title": meta.get("title"),
-                        "tags": meta.get("tags"),
                         "deleted_at": deleted_at.strip(),
                         "version": last.strip(),
                     }
@@ -904,14 +1091,11 @@ class KbStore:
         title: str,
         created_at: str,
         updated_at: str,
-        tags: list[str] | None,
         summary: str | None = None,
     ) -> dict:
         meta: dict = {"id": doc_id, "title": title}
         if summary and summary.strip():
             meta["summary"] = summary.strip()
-        if tags:
-            meta["tags"] = list(tags)
         meta["created_at"] = created_at
         meta["updated_at"] = updated_at
         return meta
@@ -1055,7 +1239,6 @@ class KbStore:
         return {
             "id": doc_id,
             "title": meta.get("title"),
-            "tags": meta.get("tags"),
             "heading": heading,
             "lines": [start, end],
             "commit": commit,

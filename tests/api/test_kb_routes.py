@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from server.main import create_app
 from server.tools.personal_kb.service import KbStore
+from tests.support.agent_double import FakeAgentGateway
 
 
 def client_for(settings) -> TestClient:
@@ -18,7 +19,6 @@ def test_browse_create_read_save_move_and_delete(settings):
                 "title": "验收纪要",
                 "body": "## 结果\n\n代号 CORAL-7421。",
                 "path": "项目/验收",
-                "tags": ["项目"],
             },
         )
         assert created.status_code == 201
@@ -30,7 +30,7 @@ def test_browse_create_read_save_move_and_delete(settings):
 
         document = client.get("/api/kb/document", params={"path": path}).json()
         assert document["title"] == "验收纪要"
-        assert document["tags"] == ["项目"]
+        assert "tags" not in document
         assert document["body"] == "## 结果\n\n代号 CORAL-7421。"
         assert document["version"] == created.json()["version"]
         assert document["id"] == created.json()["id"]
@@ -56,11 +56,9 @@ def test_browse_create_read_save_move_and_delete(settings):
                 "path": path,
                 "expected_version": document["version"],
                 "body": "## 结果\n\n改过了。",
-                "tags": [],
             },
         )
         assert saved.status_code == 200
-        assert client.get("/api/kb/document", params={"path": path}).json()["tags"] == []
 
         # 旧版本保存被拒绝，不覆盖
         stale = client.post(
@@ -89,6 +87,27 @@ def test_browse_create_read_save_move_and_delete(settings):
         assert client.get("/api/kb/documents").json()["documents"] == []
 
 
+def test_create_folder_and_document_inside_it(settings):
+    with client_for(settings) as client:
+        created = client.post("/api/kb/folders", json={"path": "课程/GSE"})
+        assert created.status_code == 201
+        assert created.json() == {"path": "kb/课程/GSE"}
+        assert client.get("/api/kb/folders").json()["folders"] == ["课程", "课程/GSE"]
+
+        duplicate = client.post("/api/kb/folders", json={"path": "课程/GSE"})
+        assert duplicate.status_code == 422
+        assert duplicate.json()["error"] == "invalid_kb"
+
+        document = client.post(
+            "/api/kb/documents",
+            json={"title": "实验一", "body": "要求。", "directory": "课程/GSE"},
+        )
+        assert document.status_code == 201
+        assert document.json()["path"] == "kb/课程/GSE/实验一.md"
+        listed = client.get("/api/kb/documents").json()["documents"]
+        assert listed[0]["updated_at"]
+
+
 def test_invalid_input_and_missing_store_are_reported(settings):
     with client_for(settings) as client:
         empty = client.post("/api/kb/documents", json={"title": " ", "body": "正文"})
@@ -102,3 +121,93 @@ def test_invalid_input_and_missing_store_are_reported(settings):
         response = client.get("/api/kb/documents")
         assert response.status_code == 503
         assert response.json()["error"] == "unavailable"
+
+
+def test_summary_is_drafted_from_title_and_body_without_saving(settings):
+    gateway = FakeAgentGateway()
+    gateway.text = "“青铜项目周会：二期排期与负责人”"
+    store = KbStore(settings.data_dir)
+    with TestClient(create_app(gateway=gateway, kb_store=store)) as client:
+        drafted = client.post(
+            "/api/kb/summary", json={"title": "青铜周会", "body": "二期排期定在十月。"}
+        )
+        assert drafted.status_code == 200
+        assert drafted.json() == {"summary": "青铜项目周会：二期排期与负责人"}
+        assert "青铜周会" in gateway.text_calls[0]["text"]
+        assert "二期排期定在十月。" in gateway.text_calls[0]["text"]
+        assert store.list()["documents"] == []
+
+        blank = client.post("/api/kb/summary", json={"title": "空", "body": "  "})
+        assert blank.status_code == 422
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+def test_image_is_saved_once_and_served_then_described_separately(settings):
+    gateway = FakeAgentGateway()
+    gateway.image_text = "  表格：第115师 [兵力] 15000余人\n第120师 14000余人 "
+    store = KbStore(settings.data_dir)
+    with TestClient(create_app(gateway=gateway, kb_store=store)) as client:
+        uploaded = client.post("/api/kb/assets", files={"file": ("x.bin", PNG, "text/plain")})
+        assert uploaded.status_code == 201
+        path = uploaded.json()["path"]
+        assert uploaded.json() == {"path": path}
+        assert path.startswith("assets/") and path.endswith(".png")
+        assert gateway.image_calls == []
+
+        again = client.post("/api/kb/assets", files={"file": ("y.png", PNG, "image/png")})
+        assert again.json()["path"] == path
+        assert (settings.data_dir / "kb" / path).read_bytes() == PNG
+
+        described = client.post("/api/kb/assets/describe", json={"path": path})
+        assert described.status_code == 200
+        assert described.json() == {
+            "description": "表格：第115师 （兵力） 15000余人 第120师 14000余人"
+        }
+        assert gateway.image_calls[0]["mime_type"] == "image/png"
+        assert (
+            client.post("/api/kb/assets/describe", json={"path": "assets/none.png"}).status_code
+            == 404
+        )
+        assert client.post("/api/kb/assets/describe", json={"path": "笔记.md"}).status_code == 422
+
+        served = client.get(f"/api/kb/{path}")
+        assert served.status_code == 200
+        assert served.content == PNG
+        assert served.headers["content-type"] == "image/png"
+        assert served.headers["x-content-type-options"] == "nosniff"
+
+        assert client.get("/api/kb/assets/missing.png").status_code == 404
+        assert client.get("/api/kb/assets/..%2F.gitignore").status_code == 404
+        assert "assets" not in client.get("/api/kb/folders").json()["folders"]
+
+
+def test_image_upload_rejects_other_types_and_description_failure_is_empty(settings):
+    gateway = FakeAgentGateway()
+    gateway.image_text = RuntimeError("模型不可用")
+    store = KbStore(settings.data_dir)
+    with TestClient(create_app(gateway=gateway, kb_store=store)) as client:
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+        rejected = client.post("/api/kb/assets", files={"file": ("a.png", svg, "image/png")})
+        assert rejected.status_code == 422
+
+        path = client.post("/api/kb/assets", files={"file": ("a.png", PNG, "image/png")}).json()[
+            "path"
+        ]
+        described = client.post("/api/kb/assets/describe", json={"path": path})
+        assert described.json() == {"description": ""}
+
+        gateway.image_text = "NO_IMAGE"
+        described = client.post("/api/kb/assets/describe", json={"path": path})
+        assert described.json() == {"description": ""}
+
+
+def test_documents_and_folders_cannot_live_in_assets(settings):
+    with client_for(settings) as client:
+        for payload in (
+            {"title": "t", "body": "b", "path": "assets/笔记"},
+            {"title": "t", "body": "b", "directory": "assets"},
+        ):
+            assert client.post("/api/kb/documents", json=payload).status_code == 422
+        assert client.post("/api/kb/folders", json={"path": "assets/sub"}).status_code == 422

@@ -146,7 +146,7 @@ def seed(kb: KbStore) -> dict:
             "## 后续安排\n\n复验安排在两週后，负责人为李工。"
         ),
         path="项目/星云验收.md",
-        tags=["项目", "验收"],
+        summary="星云项目二期验收结论、代号与复验安排",
     )
     meeting = kb.save(
         title="周会纪要",

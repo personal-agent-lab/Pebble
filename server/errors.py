@@ -49,6 +49,14 @@ class TaskActiveError(Exception):
         super().__init__(f"任务仍在运行：{task_id}")
 
 
+class TaskIdConflictError(Exception):
+    """客户端给出的任务标识已被非同类任务占用，不能当作重复提交返回。"""
+
+    def __init__(self, task_id: str):
+        self.task_id = task_id
+        super().__init__(f"任务标识已被占用：{task_id}")
+
+
 class RetryUnavailableError(Exception):
     """最后一轮不是可重试的已中断用户消息。"""
 
@@ -101,10 +109,14 @@ class HistoryValidationError(Exception):
 
 
 class KbValidationError(Exception):
-    """资料库操作的字段或路径不合法；`errors` 为字段与原因列表。"""
+    """资料库操作的字段或路径不合法；`errors` 为字段与原因列表。
 
-    def __init__(self, errors: list[dict[str, str]]):
+    按行修改的锚点失效时，`document` 附上该资料带锚点的最新正文与版本，交回模型重新定位。
+    """
+
+    def __init__(self, errors: list[dict[str, str]], document: dict | None = None):
         self.errors = errors
+        self.document = document
         super().__init__(str(errors))
 
 
@@ -142,6 +154,8 @@ def error_details(error: Exception) -> dict | None:
         return {"error": "session_conflict", "message": "任务已关联不同会话"}
     if isinstance(error, TaskActiveError):
         return {"error": "task_active", "message": "任务正在运行，结束后才能删除"}
+    if isinstance(error, TaskIdConflictError):
+        return {"error": "task_id_conflict", "message": str(error)}
     if isinstance(error, RetryUnavailableError):
         return {"error": "retry_unavailable", "message": str(error)}
     if isinstance(error, DraftValidationError):
@@ -167,7 +181,12 @@ def error_details(error: Exception) -> dict | None:
     if isinstance(error, HistoryValidationError):
         return {"error": "invalid_history", "message": "历史检索未通过校验", "errors": error.errors}
     if isinstance(error, KbValidationError):
-        return {"error": "invalid_kb", "message": "资料库操作未通过校验", "errors": error.errors}
+        return {
+            "error": "invalid_kb",
+            "message": "资料库操作未通过校验",
+            "errors": error.errors,
+            **({"document": error.document} if error.document is not None else {}),
+        }
     if isinstance(error, KbStoreUnavailableError):
         return {"error": "kb_store_unavailable", "message": str(error)}
     if isinstance(error, KbIndexUnavailableError):

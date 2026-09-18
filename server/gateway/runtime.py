@@ -19,7 +19,7 @@ from server.approval.service import ConfirmationService
 from server.attachments import AttachmentStore, PreparedAttachment
 from server.config import default_model, get_settings
 from server.db import session, write
-from server.errors import DependencyUnavailableError, NotFoundError
+from server.errors import DependencyUnavailableError, NotFoundError, TaskIdConflictError
 from server.gateway.agent_contract import (
     AgentEvent,
     AgentGateway,
@@ -144,10 +144,35 @@ class GatewayRuntime:
 
     # ---------- 输入入口 ----------
 
-    def start_task(self, model: str, message: str, attachments: list[PreparedAttachment]) -> dict:
-        """创建用户任务、保存附件并登记首轮调用；失败不留下半个任务。"""
+    def started_task(self, task_id: str) -> dict | None:
+        """按客户端给出的任务标识找已创建的用户任务，供重复提交直接返回；尚未创建为 None。"""
+        with session(self.path) as conn:
+            try:
+                task = operations.task(conn, task_id)
+            except NotFoundError:
+                return None
+            first = next(iter(repo.runs(conn, task_id)), None)
+        if first is None or first["kind"] != repo.KIND_MESSAGE:
+            raise TaskIdConflictError(task_id)
+        return {"task": task, "run": repo.run_response(first)}
+
+    def start_task(
+        self,
+        model: str,
+        message: str,
+        attachments: list[PreparedAttachment],
+        task_id: str | None = None,
+    ) -> dict:
+        """创建用户任务、保存附件并登记首轮调用；失败不留下半个任务。
+
+        `task_id` 由客户端生成时兼作幂等键：同一标识再次提交返回已创建的任务，不再新建。
+        整个方法同步执行，同一进程内的并发重复提交不会交错。
+        """
         self.require_gateway()
-        task_id = str(uuid4())
+        if task_id is None:
+            task_id = str(uuid4())
+        elif (existing := self.started_task(task_id)) is not None:
+            return existing
         goal = message.strip() or attachments[0].filename
         self._attachments.save_files(task_id, attachments)
         try:

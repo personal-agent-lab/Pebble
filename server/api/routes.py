@@ -3,8 +3,10 @@
 import asyncio
 import json
 from typing import Annotated, Literal
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -13,13 +15,15 @@ from server.approval.service import ConfirmationService
 from server.attachments import AttachmentStore, prepare_uploads
 from server.config import get_settings
 from server.db import schema_version, session
-from server.errors import AttachmentValidationError, DependencyUnavailableError
+from server.errors import AttachmentValidationError, DependencyUnavailableError, KbValidationError
 from server.gateway.runtime import GatewayRuntime
 from server.memory.service import MemoryStore
 from server.sessions.history import HistoryStore
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
+from server.tools.personal_kb.assets import ASSETS_DIR, MAX_ASSET_SIZE, describe, sniff
 from server.tools.personal_kb.service import KbStore
+from server.tools.personal_kb.summary import generate_summary
 
 
 def get_tasks(request: Request) -> SessionStore:
@@ -122,16 +126,23 @@ async def list_models(models: Models) -> dict:
 async def create_task(
     agent: Agent,
     models: Models,
+    response: Response,
     model: Annotated[str, Form()],
     message: Annotated[str, Form()] = "",
     files: Annotated[list[UploadFile] | None, File()] = None,
+    task_id: Annotated[UUID | None, Form()] = None,
 ) -> dict:
+    """新建任务；客户端可自带 `task_id` 先行展示，重复提交同一标识返回已创建的任务（200）。"""
+    client_id = str(task_id) if task_id is not None else None
+    if client_id is not None and (existing := agent.started_task(client_id)) is not None:
+        response.status_code = 200
+        return existing
     prepared = await prepare_uploads(files or [])
     if not message.strip() and not prepared:
         raise AttachmentValidationError(
             [{"field": "message", "message": "请输入文字或至少添加一个附件"}]
         )
-    return agent.start_task(await models.validate(model), message, prepared)
+    return agent.start_task(await models.validate(model), message, prepared, client_id)
 
 
 @router.get("/tasks/{task_id}", tags=["tasks"])
@@ -363,7 +374,16 @@ class KbDocumentCreate(BaseModel):
     body: str
     summary: str | None = None
     path: str | None = None
-    tags: list[str] | None = None
+    directory: str | None = None
+
+
+class KbFolderCreate(BaseModel):
+    path: str
+
+
+class KbSummaryDraft(BaseModel):
+    title: str = ""
+    body: str
 
 
 class KbDocumentUpdate(BaseModel):
@@ -371,7 +391,6 @@ class KbDocumentUpdate(BaseModel):
     expected_version: str = Field(min_length=1)
     title: str | None = None
     body: str | None = None
-    tags: list[str] | None = None
     summary: str | None = None
 
 
@@ -398,7 +417,6 @@ def kb_document(kb: Kb, path: str) -> dict:
         "id": document["id"],
         "path": document["path"],
         "title": document["title"],
-        "tags": document["tags"] or [],
         "summary": document["summary"] or "",
         "created_at": document["created_at"],
         "updated_at": document["updated_at"],
@@ -408,15 +426,62 @@ def kb_document(kb: Kb, path: str) -> dict:
 
 
 @router.get("/kb/search", tags=["kb"])
-def kb_search(kb: Kb, q: str, tag: str | None = None) -> dict:
-    return kb.search(query=q, tag=tag, max_results=20)
+def kb_search(kb: Kb, q: str) -> dict:
+    return kb.search(query=q, max_results=20)
 
 
 @router.post("/kb/documents", status_code=201, tags=["kb"])
 def kb_create(body: KbDocumentCreate, kb: Kb) -> dict:
     return kb.save(
-        title=body.title, body=body.body, path=body.path, tags=body.tags, summary=body.summary
+        title=body.title,
+        body=body.body,
+        path=body.path,
+        directory=body.directory,
+        summary=body.summary,
     )
+
+
+@router.get("/kb/folders", tags=["kb"])
+def kb_folders(kb: Kb) -> dict:
+    return {"folders": kb.folders()}
+
+
+@router.post("/kb/folders", status_code=201, tags=["kb"])
+def kb_create_folder(body: KbFolderCreate, kb: Kb) -> dict:
+    return kb.create_folder(body.path)
+
+
+@router.post("/kb/summary", tags=["kb"])
+async def kb_summary(body: KbSummaryDraft, agent: Agent) -> dict:
+    return {"summary": await generate_summary(agent.gateway, body.title, body.body)}
+
+
+@router.post("/kb/assets", status_code=201, tags=["kb"])
+async def kb_upload_asset(kb: Kb, file: Annotated[UploadFile, File()]) -> dict:
+    """保存正文图片并立即返回路径；说明另由 `/kb/assets/describe` 生成，不拖慢插入。"""
+    data = await file.read(MAX_ASSET_SIZE + 1)
+    return await run_in_threadpool(kb.save_asset, data)
+
+
+class KbAssetDescribe(BaseModel):
+    path: str
+
+
+@router.post("/kb/assets/describe", tags=["kb"])
+async def kb_describe_asset(body: KbAssetDescribe, kb: Kb, agent: Agent) -> dict:
+    """由轻量模型看图生成说明，不写入任何文件；模型看不到图或调用失败时为空串。"""
+    prefix = f"{ASSETS_DIR}/"
+    if not body.path.startswith(prefix):
+        raise KbValidationError([{"field": "path", "message": "只能为资料库里的图片生成说明"}])
+    path, _ = kb.asset(body.path[len(prefix) :])
+    data = await run_in_threadpool(path.read_bytes)
+    return {"description": await describe(agent.gateway, data, sniff(data) or "png")}
+
+
+@router.get("/kb/assets/{name}", tags=["kb"])
+def kb_read_asset(kb: Kb, name: str) -> FileResponse:
+    path, mime_type = kb.asset(name)
+    return FileResponse(path, media_type=mime_type, headers={"X-Content-Type-Options": "nosniff"})
 
 
 @router.post("/kb/document/update", tags=["kb"])
@@ -426,7 +491,6 @@ def kb_update(body: KbDocumentUpdate, kb: Kb) -> dict:
         path=body.path,
         title=body.title,
         body=body.body,
-        tags=body.tags,
         summary=body.summary,
     )
 

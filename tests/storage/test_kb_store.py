@@ -36,11 +36,11 @@ def test_save_writes_markdown_file_with_frontmatter_and_commits(settings):
     saved = store.save(
         title="GSE lab1 要求",
         body="## 概要\n第一次实验的要求。",
-        tags=["课程", "GSE"],
     )
 
     path = settings.data_dir / saved["path"]
-    assert saved["path"].startswith("kb/inbox/") and saved["path"].endswith(".md")
+    # 不给位置时放在资料库根目录
+    assert saved["path"].count("/") == 1 and saved["path"].endswith(".md")
     assert path.exists()
     text = path.read_text(encoding="utf-8")
     assert text.startswith("---\n")
@@ -102,6 +102,84 @@ def test_list_discovers_documents_without_knowing_path_or_id(settings):
     found = next(item for item in all_documents if item["id"] == first["id"])
     assert found["path"] == first["path"]
     assert [item["title"] for item in course_documents] == ["课程资料"]
+    assert found["updated_at"] == store.read(path=first["path"])["updated_at"]
+
+
+def test_folders_include_empty_directories_and_new_documents_land_in_them(settings):
+    store = KbStore(settings.data_dir)
+
+    assert store.create_folder("项目/星云") == {"path": "kb/项目/星云"}
+    assert store.folders() == ["项目", "项目/星云"]
+    # 空文件夹只是目录，不进版本历史
+    assert git(settings.data_dir, "status", "--porcelain", "--", "kb") == ""
+
+    nested = store.save(title="验收 纪要", body="正文。", directory="项目/星云")
+    at_root = store.save(title="根目录资料", body="正文。", directory="")
+    assert nested["path"] == "kb/项目/星云/验收 纪要.md"
+    assert at_root["path"] == "kb/根目录资料.md"
+
+
+def test_file_name_is_the_title_and_numbered_on_collision(settings):
+    store = KbStore(settings.data_dir)
+
+    first = store.save(title="DVM", body="一。", directory="移动应用开发")
+    second = store.save(title="DVM", body="二。", directory="移动应用开发")
+    odd = store.save(title="  .10:30 会议/纪要?  ", body="三。")
+
+    assert first["path"] == "kb/移动应用开发/DVM.md"
+    assert second["path"] == "kb/移动应用开发/DVM 2.md"
+    assert odd["path"] == "kb/10-30 会议-纪要-.md"
+
+
+def test_changing_title_renames_file_in_place_and_keeps_history(settings):
+    store = KbStore(settings.data_dir)
+    saved = store.save(title="DVM", body="正文。", directory="移动应用开发")
+    store.save(title="Dalvik", body="占用。", directory="移动应用开发")
+
+    renamed = store.update(expected_version=saved["version"], path=saved["path"], title="Dalvik")
+
+    assert renamed["path"] == "kb/移动应用开发/Dalvik 2.md"
+    assert not (settings.data_dir / saved["path"]).exists()
+    assert renamed["version"] == store.read(path=renamed["path"])["commit"]
+    assert store.read(path=renamed["path"])["title"] == "Dalvik"
+    assert store.search(query="正文")["results"][0]["path"] == renamed["path"]
+    versions = store.history(path=renamed["path"])["versions"]
+    assert [entry["path"] for entry in versions][-1] == saved["path"]
+
+    # 只改正文、或新标题与文件名已一致时，文件名不动
+    body_only = store.update(
+        expected_version=renamed["version"], path=renamed["path"], body="新正文。"
+    )
+    assert body_only["path"] == renamed["path"]
+    same = store.update(
+        expected_version=body_only["version"], path=body_only["path"], title="Dalvik"
+    )
+    assert same["path"] == renamed["path"]
+
+
+def test_case_only_title_change_keeps_file_name(settings):
+    store = KbStore(settings.data_dir)
+    saved = store.save(title="dvm", body="正文。")
+
+    renamed = store.update(expected_version=saved["version"], path=saved["path"], title="DVM")
+
+    assert renamed["path"] == "kb/dvm.md"
+    assert store.read(path=renamed["path"])["title"] == "DVM"
+
+
+def test_create_folder_and_directory_reject_invalid_names(settings):
+    store = KbStore(settings.data_dir)
+    store.create_folder("课程")
+
+    for name in ["", "  ", "../外面", "/abs", "a//b", ".hidden", "课程/.git"]:
+        with pytest.raises(KbValidationError):
+            store.create_folder(name)
+    with pytest.raises(KbValidationError, match="同名"):
+        store.create_folder("课程")
+    with pytest.raises(KbValidationError):
+        store.save(title="两者都给", body="正文。", path="a.md", directory="课程")
+    with pytest.raises(KbValidationError):
+        store.save(title="越界", body="正文。", directory="../外面")
 
 
 def test_update_keeps_identity_and_modifies_same_file(settings):
@@ -186,7 +264,7 @@ def test_read_missing_resource_raises_not_found(settings):
     with pytest.raises(NotFoundError):
         store.read(doc_id="kb_doesnotexist")
     with pytest.raises(NotFoundError):
-        store.read(path="kb/inbox/missing.md")
+        store.read(path="kb/missing.md")
 
 
 def test_update_commit_failure_restores_previous_file(settings, monkeypatch):
@@ -222,9 +300,7 @@ def test_non_content_instance_files_are_never_tracked(settings):
 def test_kb_tools_are_registered_with_correct_schema_and_turn_exposure(settings):
     kb_save = default_registry.get_tool("kb_save")
     props = kb_save.parameters_schema["properties"]
-    # 可选数组/对象参数生成正确的 JSON 类型（剥离 Optional 后映射）
-    assert props["tags"]["type"] == "array"
-    assert props["tags"]["items"] == {"type": "string"}
+    assert "tags" not in props
     # 资料不记录出处：保存与检索都不接受来源参数
     assert "source" not in props
     # 一句话说明进入每轮资料目录：保存与修改都可以填写
@@ -237,7 +313,7 @@ def test_kb_tools_are_registered_with_correct_schema_and_turn_exposure(settings)
     assert kb_search.parameters_schema["required"] == ["query"]
     assert search_props["max_results"] == {"type": "integer", "default": None}
     assert "source_kind" not in search_props
-    assert search_props["tag"]["type"] == "string"
+    assert "tag" not in search_props
 
     kb_read = default_registry.get_tool("kb_read")
     ref_prop = kb_read.parameters_schema["properties"]["ref"]
@@ -280,7 +356,7 @@ def _manually_edit(path, old, new):
 def test_manual_edit_then_save_another_searches_the_edited_content(settings):
     store = KbStore(settings.data_dir)
     store.save(title="alpha", body="## sec\nCORAL-7421")
-    target = next((settings.data_dir / "kb" / "inbox").glob("*.md"))
+    target = next((settings.data_dir / "kb").glob("*.md"))
     _manually_edit(target, "CORAL-7421", "REVISED-9000")
 
     store.save(title="beta", body="无关正文。")
@@ -292,7 +368,7 @@ def test_manual_edit_then_save_another_searches_the_edited_content(settings):
 def test_manual_edit_then_search_does_not_return_stale_hits(settings):
     store = KbStore(settings.data_dir)
     store.save(title="alpha", body="## sec\nCORAL-7421")
-    target = next((settings.data_dir / "kb" / "inbox").glob("*.md"))
+    target = next((settings.data_dir / "kb").glob("*.md"))
     _manually_edit(target, "CORAL-7421", "REVISED-9000")
 
     assert not store.search(query="CORAL-7421")["results"]

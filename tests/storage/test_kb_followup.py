@@ -97,7 +97,7 @@ def test_copied_file_gets_a_new_identity(settings):
 
     ids = {item["path"]: item["id"] for item in documents}
     assert ids[saved["path"]] == saved["id"]
-    assert ids["kb/inbox/副本.md"] != saved["id"]
+    assert ids["kb/副本.md"] != saved["id"]
 
 
 def test_manual_delete_is_recorded_and_can_be_restored(settings):

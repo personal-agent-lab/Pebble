@@ -26,6 +26,7 @@ from server.errors import (
     RetryUnavailableError,
     SessionConflictError,
     TaskActiveError,
+    TaskIdConflictError,
     VersionConflictError,
     error_details,
 )
@@ -37,6 +38,7 @@ STATUS_CODES: tuple[tuple[type[Exception], int], ...] = (
     (NotEditableError, 409),
     (SessionConflictError, 409),
     (TaskActiveError, 409),
+    (TaskIdConflictError, 409),
     (RetryUnavailableError, 409),
     (ModelValidationError, 422),
     (AttachmentValidationError, 422),

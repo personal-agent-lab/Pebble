@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import sqlite3
 from collections.abc import Iterable
@@ -21,7 +20,7 @@ from pathlib import Path
 from server.db import session, write
 
 # 索引自身的结构版本：与前端契约无关，改动索引字段或分节规则时递增，旧索引随即被重建。
-INDEX_SCHEMA = 2
+INDEX_SCHEMA = 3
 
 # trigram 分词器按三字符建立索引：1–2 个字的词无法用 MATCH 命中，改用同一张表的包含匹配。
 FTS_MIN_TERM = 3
@@ -32,12 +31,12 @@ FENCE_RE = re.compile(r"^\s*(```|~~~)")
 CREATE_SECTIONS = (
     "CREATE TABLE IF NOT EXISTS kb_sections ("
     "row_id INTEGER PRIMARY KEY, doc_id TEXT NOT NULL, path TEXT NOT NULL, title TEXT, "
-    "tags TEXT NOT NULL, heading TEXT NOT NULL, "
+    "summary TEXT NOT NULL, heading TEXT NOT NULL, "
     "start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, commit_sha TEXT NOT NULL, "
     "content_hash TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS kb_sections_path ON kb_sections(path)",
     "CREATE VIRTUAL TABLE IF NOT EXISTS kb_sections_fts USING fts5("
-    "title, heading, tags, body, tokenize='trigram')",
+    "title, heading, summary, body, tokenize='trigram')",
     "CREATE TABLE IF NOT EXISTS kb_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
 )
 
@@ -73,7 +72,6 @@ class Hit:
     doc_id: str
     path: str
     title: str | None
-    tags: list[str]
     heading: str
     start_line: int
     end_line: int
@@ -217,18 +215,17 @@ class KbIndex:
     def _insert(conn: sqlite3.Connection, document: IndexDocument) -> None:
         meta = document.meta
         title = meta.get("title")
-        tags = meta.get("tags") or []
-        tags_text = json.dumps(list(tags), ensure_ascii=False)
+        summary = str(meta.get("summary") or "")
         for section in document.sections:
             cursor = conn.execute(
                 "INSERT INTO kb_sections "
-                "(doc_id, path, title, tags, heading, start_line, end_line, "
+                "(doc_id, path, title, summary, heading, start_line, end_line, "
                 "commit_sha, content_hash) VALUES (?,?,?,?,?,?,?,?,?)",
                 (
                     meta.get("id") or "",
                     document.path,
                     title,
-                    tags_text,
+                    summary,
                     section.heading,
                     section.start_line,
                     section.end_line,
@@ -237,9 +234,9 @@ class KbIndex:
                 ),
             )
             conn.execute(
-                "INSERT INTO kb_sections_fts (rowid, title, heading, tags, body) "
+                "INSERT INTO kb_sections_fts (rowid, title, heading, summary, body) "
                 "VALUES (?,?,?,?,?)",
-                (cursor.lastrowid, title or "", section.heading, tags_text, section.body),
+                (cursor.lastrowid, title or "", section.heading, summary, section.body),
             )
 
     @staticmethod
@@ -261,7 +258,6 @@ class KbIndex:
         self,
         *,
         terms: list[str],
-        tag: str | None,
         max_results: int,
     ) -> list[Hit]:
         """按关键词检索分节，按字段优先级与相关度排序；摘要按词命中处截取。
@@ -270,7 +266,7 @@ class KbIndex:
         否则最相关的结果可能被任意丢弃；正文只在截断后为最终命中取回。
         """
         with session(self.path) as conn:
-            rows = self._candidates(conn, terms=terms, tag=tag)
+            rows = self._candidates(conn, terms=terms)
             ranked = [(self._rank_key(row, terms), row) for row in rows]
             ranked.sort(key=lambda item: item[0])
             top = [row for _, row in ranked[:max_results]]
@@ -282,21 +278,16 @@ class KbIndex:
         conn: sqlite3.Connection,
         *,
         terms: list[str],
-        tag: str | None,
     ) -> list[sqlite3.Row]:
         condition, params, score = _condition(terms)
-        clauses = [condition]
-        if tag is not None:
-            clauses.append("kb_sections.tags LIKE ? ESCAPE '\\'")
-            params.append(f'%"{_escape_like(tag)}"%')
         sql = (
             "SELECT kb_sections.row_id, kb_sections.doc_id, kb_sections.path, "
-            "kb_sections.title, kb_sections.tags, "
+            "kb_sections.title, kb_sections.summary, "
             "kb_sections.heading, kb_sections.start_line, kb_sections.end_line, "
             f"kb_sections.commit_sha, {score} AS score "
             "FROM kb_sections_fts JOIN kb_sections "
             "ON kb_sections.row_id = kb_sections_fts.rowid "
-            f"WHERE {' AND '.join(clauses)}"
+            f"WHERE {condition}"
         )
         return list(conn.execute(sql, params))
 
@@ -312,7 +303,7 @@ class KbIndex:
     @staticmethod
     def _rank_key(row: sqlite3.Row, terms: list[str]) -> tuple[int, float, str, int]:
         return (
-            field_rank(row["title"], row["heading"], _as_tags(row["tags"]), terms),
+            field_rank(row["title"], row["heading"], row["summary"], terms),
             float(row["score"] or 0.0),
             row["path"],
             row["start_line"],
@@ -320,19 +311,17 @@ class KbIndex:
 
     @staticmethod
     def _hit(row: sqlite3.Row, terms: list[str], body: str) -> Hit:
-        tags = _as_tags(row["tags"])
         return Hit(
             doc_id=row["doc_id"],
             path=row["path"],
             title=row["title"],
-            tags=tags,
             heading=row["heading"],
             start_line=row["start_line"],
             end_line=row["end_line"],
             commit=row["commit_sha"],
             snippet=snippet(body, terms),
             score=float(row["score"] or 0.0),
-            rank=field_rank(row["title"], row["heading"], tags, terms),
+            rank=field_rank(row["title"], row["heading"], row["summary"], terms),
         )
 
 
@@ -348,7 +337,7 @@ def _condition(terms: list[str]) -> tuple[str, list[str], str]:
         clauses.append(
             "(lower(kb_sections_fts.title) LIKE ? ESCAPE '\\' OR "
             "lower(kb_sections_fts.heading) LIKE ? ESCAPE '\\' OR "
-            "lower(kb_sections_fts.tags) LIKE ? ESCAPE '\\' OR "
+            "lower(kb_sections_fts.summary) LIKE ? ESCAPE '\\' OR "
             "lower(kb_sections_fts.body) LIKE ? ESCAPE '\\')"
         )
         params.extend([pattern] * 4)
@@ -359,14 +348,6 @@ def _escape_like(value: str) -> str:
     for char in ("\\", "%", "_"):
         value = value.replace(char, f"\\{char}")
     return value
-
-
-def _as_tags(text: str) -> list[str]:
-    try:
-        loaded = json.loads(text)
-    except ValueError:
-        return []
-    return [str(item) for item in loaded] if isinstance(loaded, list) else []
 
 
 def snippet(text: str, terms: list[str], *, width: int = 160) -> str:
@@ -384,8 +365,8 @@ def normalize_terms(query: str) -> list[str]:
     return [term for term in (query or "").split() if term]
 
 
-def field_rank(title: str | None, heading: str, tags: list[str], terms: list[str]) -> int:
-    """命中的最优先字段：标题 0、分节标题 1、标签 2、正文 3；任一词命中更高优先级即靠前。"""
+def field_rank(title: str | None, heading: str, summary: str | None, terms: list[str]) -> int:
+    """命中的最优先字段：标题 0、分节标题 1、说明 2、正文 3；任一词命中更高优先级即靠前。"""
     ranks = []
     for term in terms:
         needle = term.casefold()
@@ -393,7 +374,7 @@ def field_rank(title: str | None, heading: str, tags: list[str], terms: list[str
             ranks.append(0)
         elif needle in heading.casefold():
             ranks.append(1)
-        elif any(needle in tag.casefold() for tag in tags):
+        elif needle in (summary or "").casefold():
             ranks.append(2)
         else:
             ranks.append(3)

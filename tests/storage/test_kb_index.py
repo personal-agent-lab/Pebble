@@ -36,27 +36,26 @@ def lines_of(path) -> list[str]:
     return path.read_text(encoding="utf-8").split("\n")
 
 
-def test_search_matches_chinese_english_numbered_and_tagged_sections(settings):
+def test_search_matches_chinese_english_numbered_and_summary(settings):
     kb = store(settings)
     kb.save(
         title="张老师",
         body="## 沟通偏好\n\n先给结论，再补充细节。",
-        tags=["人物", "GSE"],
+        summary="GSE 课程任课老师",
     )
-    kb.save(title=TITLE, body=BODY, tags=["课程"])
+    kb.save(title=TITLE, body=BODY)
     kb.save(
         title="实验室设备清单",
         body="## 设备\n\n离心机 CO-7100 与移液器各两台。",
     )
 
-    assert kb.search(query="沟通偏好")["results"][0]["ref"]["path"].startswith("kb/inbox/")
+    assert kb.search(query="沟通偏好")["results"][0]["ref"]["path"].count("/") == 1
     assert kb.search(query="结论")["results"][0]["title"] == "张老师"
     assert kb.search(query="CORAL-7421")["results"][0]["title"] == TITLE
     assert kb.search(query="离心机")["results"][0]["title"] == "实验室设备清单"
-    # 标签与较短的关键词都能单独限定
+    # 只出现在一句话说明里的词也能检索到
     assert [item["title"] for item in kb.search(query="GSE")["results"]] == ["张老师"]
-    assert [item["title"] for item in kb.search(query="复验", tag="课程")["results"]] == [TITLE]
-    assert kb.search(query="复验", tag="人物")["results"] == []
+    assert [item["title"] for item in kb.search(query="任课老师")["results"]] == ["张老师"]
     assert kb.search(query="先给结论")["results"][0]["title"] == "张老师"
 
 
@@ -134,7 +133,7 @@ def test_code_fence_headings_are_not_sections(settings):
 def test_results_are_ordered_by_field_priority_and_limited(settings):
     kb = store(settings)
     kb.save(title="甲资料", body="这一段正文提到了锚点这个词。")
-    kb.save(title="乙资料", body="无关正文。", tags=["锚点"])
+    kb.save(title="乙资料", body="无关正文。", summary="锚点说明")
     kb.save(title="丙资料", body="## 锚点\n\n正文与关键词无关。")
     kb.save(title="锚点丁", body="正文与关键词无关。")
 

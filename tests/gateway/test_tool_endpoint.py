@@ -146,7 +146,7 @@ def test_kb_save_emits_program_notice_without_recording_source(settings):
     payload, notice = asyncio.run(scenario())
     assert notice == {
         "type": "notice",
-        "text": f"已保存资料：会议纪要。位置：{payload['path']}",
+        "text": "已保存资料：会议纪要。位置：资料库根目录",
     }
     store = KbStore(settings.data_dir)
     assert "source" not in store.read(path=payload["path"])
@@ -319,7 +319,7 @@ def test_kb_destructive_tools_emit_notices_and_trigger_turns_can_only_save(setti
             trigger_tools, "kb_save", {"title": "邀请约定", "body": "周四下午三点讨论。"}
         )
         payload = tool_payload(saved)
-        assert notices == [f"已保存资料：邀请约定。位置：{payload['path']}"]
+        assert notices == ["已保存资料：邀请约定。位置：资料库根目录"]
         refused, _ = await call(
             trigger_tools,
             "kb_delete",
@@ -334,7 +334,7 @@ def test_kb_destructive_tools_emit_notices_and_trigger_turns_can_only_save(setti
             {"expected_version": payload["version"], "id": payload["id"], "new_path": "课程/约定"},
         )
         moved_payload = tool_payload(moved)
-        assert notices == [f"已移动资料：邀请约定。{payload['path']} → kb/课程/约定.md"]
+        assert notices == ["已移动资料：邀请约定。资料库根目录 → 「课程」文件夹"]
 
         deleted, notices = await call(
             message_tools,
@@ -343,7 +343,7 @@ def test_kb_destructive_tools_emit_notices_and_trigger_turns_can_only_save(setti
         )
         assert tool_payload(deleted)["path"] == "kb/课程/约定.md"
         assert notices == [
-            "已删除资料：邀请约定。原位置：kb/课程/约定.md。历史版本仍保留，可以恢复"
+            "已删除资料：邀请约定。原位置：「课程」文件夹。历史版本仍保留，可以恢复"
         ]
 
         restored, notices = await call(
@@ -352,7 +352,7 @@ def test_kb_destructive_tools_emit_notices_and_trigger_turns_can_only_save(setti
         restored_payload = tool_payload(restored)
         assert restored_payload["path"] == payload["path"]
         assert notices == [
-            f"已恢复资料：邀请约定。位置：{payload['path']}。恢复自版本：{payload['version']}"
+            f"已恢复资料：邀请约定。位置：资料库根目录。恢复自版本：{payload['version']}"
         ]
 
     asyncio.run(scenario())
