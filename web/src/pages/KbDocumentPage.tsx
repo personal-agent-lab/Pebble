@@ -1,24 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import {
   ApiError,
   createKbDocument,
-  deleteKbDocument,
+  describeKbAsset,
+  draftKbSummary,
   getKbDocument,
-  moveKbDocument,
   updateKbDocument,
+  uploadKbAsset,
   type KbDocument,
 } from "../api";
 import AppShell from "../components/AppShell";
+import { DeleteDialog, KbItemMenu, MoveDialog, RenameDialog, type KbAction } from "../components/KbDialogs";
 import KbEditor from "../components/KbEditor";
 import Notice from "../components/Notice";
-import { documentLink, formatTags, parseTags, relativePath } from "../kb";
+import { breadcrumbs, documentLink, folderLink, normalizeDir, parentDir } from "../kb";
 import { shortTime } from "../status";
 
+const SPARKLE_ICON = <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" /><path d="M19 16l.7 1.8 1.8.7-1.8.7L19 21l-.7-1.8-1.8-.7 1.8-.7z" /></svg>;
 const BACK_ICON = <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><polyline points="15 18 9 12 15 6" /></svg>;
-
-type Mode = { kind: "view" } | { kind: "move"; target: string } | { kind: "delete" };
 
 function asApiError(failure: unknown): ApiError {
   return failure instanceof ApiError ? failure : new ApiError("invalid_request", String(failure), 0);
@@ -32,7 +33,7 @@ function fieldMessage(error: ApiError): string {
 /**
  * 一份资料的阅读与编辑，也用于新建。
  *
- * 标题与标签是表单字段，正文是所见即所得编辑器；id 与时间只显示不可改。
+ * 标题与一句话说明是正文上方的可编辑行，正文是所见即所得编辑器；id 与时间只显示不可改。
  * 保存带上读取时的版本：资料在这期间被 Agent 或编辑器改过，保存会被拒绝，
  * 这里提示并让用户选择重新载入，不覆盖别人的改动。
  */
@@ -40,22 +41,27 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const path = creating ? null : params.get("path");
+  // 新建时建在进入新建页时所在的文件夹；已有资料返回它所在的文件夹。
+  const directory = creating ? normalizeDir(params.get("dir")) : null;
+  const backTo = folderLink(directory ?? (path === null ? "" : parentDir(path)));
 
   const [document, setDocument] = useState<KbDocument | null>(null);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState("");
-  const [tags, setTags] = useState("");
-  const [location, setLocation] = useState("");
   const [body, setBody] = useState("");
   const baseline = useRef<string | null>(creating ? "" : null);
   const reader = useRef<(() => string) | null>(null);
   const [touched, setTouched] = useState(false);
+  // 正文是否为空：变更通知有防抖，输入时直接读编辑器，按钮状态不滞后。
+  const [bodyBlank, setBodyBlank] = useState(creating);
   const [editorKey, setEditorKey] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ApiError | null>(null);
-  const [mode, setMode] = useState<Mode>({ kind: "view" });
+  const [action, setAction] = useState<KbAction | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [drafting, setDrafting] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (path === null) return;
@@ -64,7 +70,6 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
       setDocument(loaded);
       setTitle(loaded.title);
       setSummary(loaded.summary);
-      setTags(formatTags(loaded.tags));
       setBody(loaded.body);
       baseline.current = null;
       setTouched(false);
@@ -83,7 +88,6 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
     ? title.trim() !== "" || body.trim() !== "" || touched
     : document !== null && (
       bodyChanged || title !== document.title || summary.trim() !== document.summary
-        || formatTags(parseTags(tags)) !== formatTags(document.tags)
     );
 
   useEffect(() => {
@@ -98,23 +102,23 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
     navigate(to);
   };
 
-  const save = async () => {
-    if (saving) return;
+  // 点保存按钮存完回到上一页（资料所在文件夹）；⌘S 存完留在原页继续编辑。
+  const save = async (exit = false) => {
+    const latest = reader.current?.() ?? body;
+    if (saving || title.trim() === "" || latest.trim() === "") return;
     setSaving(true);
     setSaveError(null);
     setNote(null);
-    const latest = reader.current?.() ?? body;
     try {
       if (creating) {
         const created = await createKbDocument({
           title: title.trim(),
           summary: summary.trim(),
           body: latest,
-          tags: parseTags(tags),
-          ...(location.trim() ? { path: location.trim() } : {}),
+          directory: directory ?? "",
         });
         setTouched(false);
-        navigate(documentLink(created.path), { replace: true });
+        navigate(exit ? backTo : documentLink(created.path), { replace: true });
         return;
       }
       if (document === null) return;
@@ -122,11 +126,13 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
       const edited = baseline.current !== null && latest !== baseline.current;
       const nextTitle = title.trim();
       const nextSummary = summary.trim();
-      const nextTags = parseTags(tags);
-      if (!edited && nextTitle === document.title && nextSummary === document.summary
-        && formatTags(nextTags) === formatTags(document.tags)) {
+      if (!edited && nextTitle === document.title && nextSummary === document.summary) {
         setTouched(false);
         setBody(baseline.current ?? body);
+        if (exit) {
+          navigate(backTo);
+          return;
+        }
         setNote("没有需要保存的改动");
         return;
       }
@@ -134,10 +140,22 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
         title: nextTitle,
         summary: nextSummary,
         body: edited ? latest : document.body,
-        tags: nextTags,
       });
-      await load();
-      setNote(saved.index_status === "stale" ? "已保存，但当前不可检索" : "已保存");
+      // 已存但暂不可检索时留在本页把提示给用户看到，不直接离开。
+      if (exit && saved.index_status !== "stale") {
+        setTouched(false);
+        navigate(backTo);
+        return;
+      }
+      const message = saved.index_status === "stale" ? "已保存，但当前不可检索" : "已保存";
+      // 改了标题时文件名随之更新：换到新地址，由地址变化重新载入。
+      if (saved.path !== document.path) {
+        setTouched(false);
+        navigate(documentLink(saved.path), { replace: true });
+      } else {
+        await load();
+      }
+      setNote(message);
     } catch (failure) {
       setSaveError(asApiError(failure));
     } finally {
@@ -145,35 +163,41 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
     }
   };
 
-  const move = async (target: string) => {
-    if (document === null || saving) return;
-    setSaving(true);
-    setSaveError(null);
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void saveRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // 说明由轻量模型按当前标题与正文起草，填进输入框后仍由用户确认、随资料一起保存。
+  const draftSummary = async () => {
+    const latest = reader.current?.() ?? body;
+    if (drafting || latest.trim() === "") return;
+    setDrafting(true);
+    setDraftError(null);
     try {
-      const moved = await moveKbDocument(document.path, document.version, target.trim());
-      setMode({ kind: "view" });
-      navigate(documentLink(moved.path), { replace: true });
-      setNote(`已移动到 ${relativePath(moved.path)}`);
+      const drafted = await draftKbSummary(title.trim(), latest);
+      setSummary(drafted.summary);
     } catch (failure) {
-      setSaveError(asApiError(failure));
+      setDraftError(fieldMessage(asApiError(failure)));
     } finally {
-      setSaving(false);
+      setDrafting(false);
     }
   };
 
-  const remove = async () => {
-    if (document === null || saving) return;
-    setSaving(true);
-    setSaveError(null);
-    try {
-      await deleteKbDocument(document.path, document.version);
-      navigate("/kb", { replace: true });
-    } catch (failure) {
-      setSaveError(asApiError(failure));
-      setMode({ kind: "view" });
-    } finally {
-      setSaving(false);
-    }
+  // 重命名与移动都可能换地址；地址不变时直接重新载入。
+  const relocated = (nextPath: string, message: string) => {
+    setAction(null);
+    setNote(message);
+    if (document !== null && nextPath === document.path) void load();
+    else navigate(documentLink(nextPath), { replace: true });
   };
 
   if (!creating && (path === null || loadError !== null)) {
@@ -181,7 +205,7 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
       <AppShell serviceError={loadError}>
         <div className="content">
           <Notice tone="danger" title={loadError?.httpStatus === 404 || path === null ? "资料不存在" : "读取资料失败"}
-            actions={<button type="button" className="btn-secondary" onClick={() => navigate("/kb")}>返回资料列表</button>}>
+            actions={<button type="button" className="btn-secondary" onClick={() => navigate(backTo)}>返回资料列表</button>}>
             {loadError?.httpStatus === 404 || path === null
               ? "这份资料可能已被移动或删除。删除的资料可以在对话里让 Agent 找回。"
               : loadError?.message}
@@ -196,20 +220,35 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
 
   return (
     <AppShell>
-      <div className="chat-top">
-        <button type="button" className="back" onClick={() => leave("/kb")} aria-label="返回资料列表">{BACK_ICON}</button>
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <h2>{creating ? "新建资料" : (document?.title ?? "读取中…")}</h2>
-          <div className="sub">
-            {document !== null && relativePath(document.path)}
-            {creating && "保存后写入资料库，并留下历史版本"}
-          </div>
-        </div>
+      <div className="chat-top kb-doc-top">
+        <button type="button" className="back" onClick={() => leave(backTo)} aria-label="返回资料列表">{BACK_ICON}</button>
+        {/* 标题只在正文区出现一次：顶栏只交代这份资料在哪个文件夹、保存状态如何；
+            文件名由程序按标题生成，不展示。 */}
+        <nav className="kb-doc-where" aria-label="所在位置">
+          {creating && <span>保存到：</span>}
+          <Link to={folderLink("")}>资料库</Link>
+          {breadcrumbs(directory ?? (document !== null ? parentDir(document.path) : "")).map((crumb) => (
+            <span key={crumb.path}>
+              <span className="kb-crumb-sep">/</span>
+              <Link to={folderLink(crumb.path)}>{crumb.name}</Link>
+            </span>
+          ))}
+        </nav>
+        {dirty && <span className="kb-dirty">未保存</span>}
         {note !== null && !dirty && <span className="kb-note" role="status">{note}</span>}
-        <button type="button" className="btn" disabled={!ready || !dirty || saving || (creating && title.trim() === "")}
-          onClick={() => void save()}>
+        <button type="button" className={dirty ? "btn" : "btn-secondary"} disabled={!ready || !dirty || saving || title.trim() === "" || bodyBlank}
+          title={ready && dirty && (title.trim() === "" || bodyBlank) ? "标题和正文都不能为空" : "保存（⌘S）"}
+          onClick={() => void save(true)}>
           {saving ? "保存中…" : "保存"}
         </button>
+        {document !== null && (
+          <KbItemMenu
+            disabledReason={dirty ? "先保存或放弃修改" : undefined}
+            onRename={() => setAction({ kind: "rename", target: document })}
+            onMove={() => setAction({ kind: "move", target: document })}
+            onDelete={() => setAction({ kind: "delete", target: document })}
+          />
+        )}
       </div>
 
       <div className="content kb-doc">
@@ -233,26 +272,20 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
               aria-label="资料标题"
               onChange={(event) => setTitle(event.target.value)}
             />
-            <div className="kb-fields">
-              <label className="kb-field">
-                <span>说明</span>
-                <input className="input" value={summary} maxLength={120}
-                  placeholder="一句话说明这份资料讲什么，Agent 靠它知道什么时候该来读"
-                  onChange={(event) => setSummary(event.target.value)} />
-              </label>
-              <label className="kb-field">
-                <span>标签</span>
-                <input className="input" value={tags} placeholder="用逗号分隔，例如：课程, GSE"
-                  onChange={(event) => setTags(event.target.value)} />
-              </label>
-              {creating && (
-                <label className="kb-field">
-                  <span>位置</span>
-                  <input className="input" value={location} placeholder="可选，例如：课程/gse-lab1（省略时放入收件目录）"
-                    onChange={(event) => setLocation(event.target.value)} />
-                </label>
-              )}
+            {/* 说明是标题下的一行副标题，不做成表单行，读的时候不抢正文。 */}
+            <div className="kb-summary">
+              <input className="kb-summary-input" value={summary} maxLength={120} aria-label="说明"
+                placeholder="摘要"
+                onChange={(event) => setSummary(event.target.value)} />
+              <button type="button" className={`kb-summary-draft${drafting ? " drafting" : ""}`}
+                disabled={drafting || bodyBlank}
+                aria-label="生成说明"
+                title={bodyBlank ? "先写正文再生成说明" : "按标题和正文生成一句话说明"}
+                onClick={() => void draftSummary()}>
+                {SPARKLE_ICON}<span>{drafting ? "生成中…" : "生成"}</span>
+              </button>
             </div>
+            {draftError !== null && <p className="kb-field-error" role="alert">{draftError}</p>}
 
             <KbEditor
               key={`${document?.version ?? "new"}:${editorKey}`}
@@ -261,10 +294,20 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
               onReady={(markdown) => {
                 baseline.current = markdown;
                 setBody(markdown);
+                setBodyBlank(markdown.trim() === "");
               }}
-              onChange={setBody}
-              onInput={() => setTouched(true)}
+              onChange={(markdown) => {
+                setBody(markdown);
+                setBodyBlank(markdown.trim() === "");
+              }}
+              onInput={() => {
+                setTouched(true);
+                const latest = reader.current?.();
+                if (latest !== undefined) setBodyBlank(latest.trim() === "");
+              }}
               reader={reader}
+              uploadImage={uploadKbAsset}
+              describeImage={describeKbAsset}
             />
 
             {document !== null && (
@@ -275,44 +318,24 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
               </div>
             )}
 
-            {document !== null && (
-              <div className="kb-actions">
-                {mode.kind === "view" && (
-                  <>
-                    <button type="button" className="btn-secondary" disabled={dirty}
-                      title={dirty ? "先保存或放弃修改" : undefined}
-                      onClick={() => setMode({ kind: "move", target: relativePath(document.path) })}>
-                      移动或重命名
-                    </button>
-                    <button type="button" className="btn-secondary danger" disabled={dirty}
-                      title={dirty ? "先保存或放弃修改" : undefined}
-                      onClick={() => setMode({ kind: "delete" })}>
-                      删除
-                    </button>
-                  </>
-                )}
-                {mode.kind === "move" && (
-                  <form className="kb-inline" onSubmit={(event) => { event.preventDefault(); void move(mode.target); }}>
-                    <input className="input" value={mode.target} aria-label="新位置" autoFocus
-                      onChange={(event) => setMode({ kind: "move", target: event.target.value })} />
-                    <button type="submit" className="btn" disabled={saving || mode.target.trim() === ""}>移动</button>
-                    <button type="button" className="btn-secondary" onClick={() => setMode({ kind: "view" })}>取消</button>
-                  </form>
-                )}
-                {mode.kind === "delete" && (
-                  <div className="kb-inline">
-                    <span className="kb-inline-text">删除后资料库里不再有这份资料，历史版本仍保留，可在对话里让 Agent 找回。</span>
-                    <button type="button" className="btn danger" disabled={saving} onClick={() => void remove()}>确认删除</button>
-                    <button type="button" className="btn-secondary" onClick={() => setMode({ kind: "view" })}>取消</button>
-                  </div>
-                )}
-              </div>
-            )}
           </>
         )}
 
         {!ready && <div className="loading">读取中…</div>}
       </div>
+
+      {document !== null && action?.kind === "rename" && (
+        <RenameDialog target={action.target} onClose={() => setAction(null)}
+          onDone={(result) => relocated(result.path, "已重命名")} />
+      )}
+      {document !== null && action?.kind === "move" && (
+        <MoveDialog target={action.target} onClose={() => setAction(null)}
+          onDone={(result) => relocated(result.path, "已移动")} />
+      )}
+      {document !== null && action?.kind === "delete" && (
+        <DeleteDialog target={action.target} onClose={() => setAction(null)}
+          onDone={() => navigate(backTo, { replace: true })} />
+      )}
     </AppShell>
   );
 }

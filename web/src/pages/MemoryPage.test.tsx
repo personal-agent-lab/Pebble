@@ -23,14 +23,14 @@ vi.mock("../api", async (importOriginal) => {
 // 真实编辑器依赖浏览器排版能力，jsdom 下换成文本框：载入时报告“序列化后的”正文，
 // 模拟编辑器把原文重新排版（列表符号从 * 变成 -），验证只打开不会触发保存。
 vi.mock("../components/KbEditor", async () => {
-  const { useEffect } = await import("react");
+  const { useLayoutEffect } = await import("react");
   return {
     default: ({ initial, onReady, onChange, onInput, reader, label }: {
       initial: string; onReady: (m: string) => void; onChange: (m: string) => void;
       onInput: () => void; reader: { current: (() => string) | null }; label: string;
     }) => {
       const normalized = initial.replace(/^\* /gm, "- ");
-      useEffect(() => {
+      useLayoutEffect(() => {
         const node = document.querySelector<HTMLTextAreaElement>(`textarea[aria-label="${label}"]`);
         reader.current = () => node?.value ?? normalized;
         onReady(normalized);

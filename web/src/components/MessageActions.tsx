@@ -42,15 +42,23 @@ async function writeClipboard(text: string): Promise<boolean> {
   finally { area.remove(); }
 }
 
-type Props = { text: string; createdAt: string; pinned: boolean };
+type Props = {
+  text: string;
+  /** 不给就不显示时间：用户消息只挂复制按钮。 */
+  createdAt?: string;
+  pinned: boolean;
+  /** 用户消息的落款贴在气泡右下角，按钮在最右，提示向左展开。 */
+  end?: boolean;
+  copyLabel?: string;
+};
 
 /**
- * 回答左下角的落款：复制整段回答，以及这段回答的时间。
+ * 消息下方的落款：回答挂在左下角（复制整段回答与时间），用户消息挂在右下角（只复制）。
  *
- * pinned 是时间线最后一条——正在读的那条常驻显示，更早的回答靠悬停唤出，
+ * pinned 是时间线最后一条——正在读的那条常驻显示，更早的消息靠悬停唤出，
  * 免得每段文字下面都挂一行灰字，把阅读栏切碎。
  */
-export default function MessageActions({ text, createdAt, pinned }: Props) {
+export default function MessageActions({ text, createdAt, pinned, end = false, copyLabel = "复制回答" }: Props) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -61,12 +69,12 @@ export default function MessageActions({ text, createdAt, pinned }: Props) {
     timer.current = window.setTimeout(() => setState("idle"), FEEDBACK_MS);
   };
 
-  const label = state === "copied" ? "已复制" : state === "failed" ? "复制失败" : "复制回答";
-  return <div className={`msg-actions${pinned ? " pinned" : ""}`}>
+  const label = state === "copied" ? "已复制" : state === "failed" ? "复制失败" : copyLabel;
+  return <div className={`msg-actions${pinned ? " pinned" : ""}${end ? " end" : ""}`}>
     <button type="button" className="msg-action" onClick={() => void copy()} aria-label={label} title={label}>
       {state === "copied" ? DONE_ICON : COPY_ICON}
     </button>
-    <time className="msg-time" dateTime={createdAt}>{shortTime(createdAt)}</time>
+    {createdAt !== undefined && <time className="msg-time" dateTime={createdAt}>{shortTime(createdAt)}</time>}
     <span className="msg-actions-note" role="status">{state === "idle" ? "" : label}</span>
   </div>;
 }

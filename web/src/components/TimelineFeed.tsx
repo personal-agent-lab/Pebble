@@ -172,18 +172,18 @@ export default function TimelineFeed({
         <div className="msg-body"><span className="sr-only">{agent ? "Agent 说：" : "我说："}</span>
           {item.text && <div className="bubble">{agent ? <Markdown text={item.text} /> : item.text}</div>}
           {!agent && <MessageAttachments items={item.attachments ?? []} />}
-          {canRetry && <div className="user-message-actions">
-            <button type="button" className="retry-message" disabled={retrying} onClick={() => {
+          {!agent && (canRetry || item.text) && <div className="user-message-actions">
+            {canRetry && retryError !== null && <span className="retry-error" role="status">{retryError}</span>}
+            {canRetry && <button type="button" className="retry-message" disabled={retrying} onClick={() => {
               setRetryError(null);
               void retryMessage().then((error) => setRetryError(error?.message ?? null));
-            }} aria-label="重试这条消息">
+            }} aria-label={retrying ? "正在重试这条消息" : "重试这条消息"} title="重试">
               <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"
                 strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <path d="M20 11a8 8 0 1 0-2.34 5.66" /><polyline points="20 4 20 11 13 11" />
               </svg>
-              {retrying ? "重试中…" : "重试"}
-            </button>
-            {retryError !== null && <span className="retry-error" role="status">{retryError}</span>}
+            </button>}
+            {item.text && <MessageActions text={item.text} pinned={false} end copyLabel="复制消息" />}
           </div>}
           {agent && ended && <MessageActions text={answerText(items, index)}
             createdAt={item.created_at} pinned={last} />}

@@ -119,7 +119,7 @@ test("只在最后一轮已中断的用户消息右下方显示重试", async ()
     retryMessage={retryMessage} sendMessage={vi.fn()} onChanged={vi.fn()} />);
 
   const retry = screen.getByRole("button", { name: "重试这条消息" });
-  expect(screen.getAllByText("重试")).toHaveLength(1);
+  expect(retry.textContent).toBe("");
   expect(retry.closest(".msg")?.textContent).toContain("最后问题");
   await userEvent.click(retry);
   expect(retryMessage).toHaveBeenCalledTimes(1);
@@ -133,8 +133,7 @@ test("重试进行中禁用按钮且不在非中断消息上显示", () => {
   const props = { taskId: "task-1", items: [item], running: false,
     retryMessage: vi.fn(async () => null), sendMessage: vi.fn(), onChanged: vi.fn() };
   const { rerender } = render(<TimelineFeed {...props} retryRunId="run-latest" retrying />);
-  expect(screen.getByRole("button", { name: "重试这条消息" }).hasAttribute("disabled")).toBe(true);
-  expect(screen.getByText("重试中…")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "正在重试这条消息" }).hasAttribute("disabled")).toBe(true);
 
   rerender(<TimelineFeed {...props} retryRunId={null} />);
   expect(screen.queryByRole("button", { name: "重试这条消息" })).toBeNull();
@@ -158,19 +157,6 @@ test("附件单独消息刷新后仍按顺序显示图片与下载文件", () =>
   const download = screen.getByText("notes.md").closest("a");
   expect(download?.getAttribute("href")).toBe("/api/tasks/t/attachments/text");
   expect(download?.hasAttribute("download")).toBe(true);
-});
-
-test("调用进行中在消息流末尾留思考占位，结束后撤掉", () => {
-  const items: TimelineItem[] = [
-    { item_id: "text-1", kind: "text", role: "user", run_id: "run-1", text: "帮我看邮件", created_at: "2026-09-14T00:00:00Z" },
-  ];
-  const props = { taskId: "task-1", items, sendMessage: vi.fn(), onChanged: vi.fn() };
-  const { container, rerender } = render(<TimelineFeed {...props} running={true} />);
-  expect(container.querySelectorAll(".thinking .dot").length).toBe(3);
-  expect(screen.getByRole("status").textContent).toContain("Agent 正在处理");
-
-  rerender(<TimelineFeed {...props} running={false} />);
-  expect(container.querySelector(".thinking")).toBeNull();
 });
 
 test("从搜索结果跳进来时滚到命中条目并高亮，之后的新内容不再拽回底部", () => {

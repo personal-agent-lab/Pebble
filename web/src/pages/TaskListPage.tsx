@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import {
-  ApiError, cachedCatalog, cachedModels, createTask, listModels, type ModelCatalog, type ModelEntry,
+  ApiError, cachedCatalog, cachedModels, listModels, type ModelCatalog, type ModelEntry,
 } from "../api";
 import AppShell, { TaskLinks } from "../components/AppShell";
 import Composer from "../components/Composer";
 import Notice from "../components/Notice";
+import { startTask, subscribe, takeDraft, type UnsentDraft } from "../pendingTasks";
 import { useTasks } from "../tasks";
 
 const STALE_RETRY_MS = 5000;
@@ -27,8 +28,25 @@ export default function TaskListPage() {
   const [catalogStale, setCatalogStale] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<ApiError | null>(null);
-  const [starting, setStarting] = useState(false);
-  const [startError, setStartError] = useState<ApiError | null>(null);
+  // 没发出的消息退回来的文字与附件。放在 effect 里取：离开任务页时的退回发生在
+  // 旧页面卸载时，晚于新页面首次渲染；输入框以 key 重建来接住它。
+  // 停留期间才退回的（后台创建失败）不直接覆盖输入框，免得冲掉正在写的内容，由用户决定放回。
+  const [draft, setDraft] = useState<UnsentDraft | null>(null);
+  const [late, setLate] = useState<UnsentDraft | null>(null);
+  const [draftKey, setDraftKey] = useState(0);
+  useEffect(() => {
+    const returned = takeDraft();
+    if (returned !== null) { setDraft(returned); setDraftKey((key) => key + 1); }
+    return subscribe(() => {
+      const later = takeDraft();
+      if (later !== null) setLate(later);
+    });
+  }, []);
+  const applyLate = () => {
+    setDraft(late);
+    setLate(null);
+    setDraftKey((key) => key + 1);
+  };
   const retryTimer = useRef<number | null>(null);
 
   // 先用缓存的目录立即可选，再请求最新目录；读不到时沿用旧目录并提示，只有从未读到过才报错。
@@ -60,22 +78,10 @@ export default function TaskListPage() {
     return () => { if (retryTimer.current !== null) window.clearTimeout(retryTimer.current); };
   }, [loadModels]);
 
+  // 不等服务端：先进入任务页显示这条消息，创建结果与失败处理都在任务页。
   const start = async (message: string, files: File[]) => {
-    if (starting) return new ApiError("busy", "任务正在创建", 409);
-    setStarting(true);
-    setStartError(null);
-    try {
-      const created = await createTask(message, model, files);
-      void reload();
-      navigate(`/tasks/${created.task.task_id}`);
-      return null;
-    } catch (failure) {
-      const error = failure instanceof ApiError ? failure : new ApiError("offline", String(failure), 0);
-      setStartError(error);
-      return error;
-    } finally {
-      setStarting(false);
-    }
+    navigate(`/tasks/${startTask(message, model, files)}`);
+    return null;
   };
 
   return (
@@ -84,7 +90,9 @@ export default function TaskListPage() {
         <div className="hero-inner">
           <h1 className="hero-title">今天要做什么？</h1>
 
-          <Composer placeholder="随心输入" sending={starting} model={model} models={models}
+          <Composer key={draftKey} placeholder="随心输入" sending={false}
+            model={model} models={models}
+            initialMessage={draft?.message} initialFiles={draft?.files}
             onModelChange={setModel} onSubmit={start}
             catalogNotice={catalogStale ? {
               message: "模型目录可能不是最新",
@@ -123,13 +131,20 @@ export default function TaskListPage() {
             </Notice>
           )}
 
-          {startError !== null && (
-            <Notice
-              tone={startError.unavailable ? "muted" : "danger"}
-              title={startError.unavailable ? "Agent 暂未开放" : "发起失败"}
-            >
-              {startError.message}
-              {startError.unavailable && "。任务已创建，开放后可继续。"}
+          {late !== null && (
+            <Notice tone="danger" title="上一条消息没有发出"
+              actions={<button type="button" className="btn-secondary" onClick={applyLate}>放回输入框</button>}>
+              {late.reason ?? "发送失败"}
+            </Notice>
+          )}
+          {late === null && draft !== null && draft.reason !== null && (
+            <Notice tone="danger" title="上一条消息没有发出">
+              {draft.reason}。内容已放回输入框，可以修改后重新发送。
+            </Notice>
+          )}
+          {draft !== null && draft.lostFiles > 0 && (
+            <Notice tone="muted" title="附件需要重新添加">
+              页面刷新前这条消息没有发出，文字已放回输入框，{draft.lostFiles} 个附件未能保留。
             </Notice>
           )}
 

@@ -219,9 +219,11 @@ function messageForm(message: string, files: File[], target: MessageTarget | nul
   return body;
 }
 
-export const createTask = (message: string, model: string, files: File[]) => {
+/** `taskId` 由前端生成时兼作幂等键：重复提交同一标识返回已创建的任务。 */
+export const createTask = (message: string, model: string, files: File[], taskId?: string) => {
   const body = messageForm(message, files);
   body.set("model", model);
+  if (taskId !== undefined) body.set("task_id", taskId);
   return request<{ task: Task; run: Run }>("/tasks", { method: "POST", body });
 };
 export const getTask = (taskId: string) => request<TaskDetail>(`/tasks/${taskId}`);
@@ -306,7 +308,7 @@ export type KbListItem = {
   path: string;
   title: string | null;
   summary?: string | null;
-  tags: string[] | null;
+  updated_at?: string | null;
   version: string;
 };
 
@@ -315,7 +317,6 @@ export type KbDocument = {
   path: string;
   title: string;
   summary: string;
-  tags: string[];
   created_at: string | null;
   updated_at: string | null;
   version: string;
@@ -351,13 +352,40 @@ export const getKbDocument = (path: string) =>
 export const searchKb = (q: string) =>
   request<{ query: string; results: KbHit[] }>(`/kb/search?${query({ q })}`);
 export const createKbDocument = (fields: {
-  title: string; summary: string; body: string; path?: string; tags: string[];
+  title: string; summary: string; body: string; path?: string; directory?: string;
 }) =>
   request<KbWriteResult>("/kb/documents", { method: "POST", body: JSON.stringify(fields) });
+/** 资料库全部子文件夹（含空文件夹），路径不带 `kb/` 前缀。 */
+export const listKbFolders = () => request<{ folders: string[] }>("/kb/folders");
+export const createKbFolder = (path: string) =>
+  request<{ path: string }>("/kb/folders", { method: "POST", body: JSON.stringify({ path }) });
+/** 按标题与正文起草一句话说明，只返回文本、不保存。 */
+export type KbAsset = { path: string };
+
+export const uploadKbAsset = (file: File) => {
+  const body = new FormData();
+  body.append("file", file);
+  return request<KbAsset>("/kb/assets", { method: "POST", body });
+};
+
+/** 由轻量模型看图生成说明，不写入文件；生成失败时为空串。 */
+export const describeKbAsset = (path: string) =>
+  request<{ description: string }>("/kb/assets/describe", { method: "POST", body: JSON.stringify({ path }) })
+    .then((result) => result.description);
+
+/** 正文里的 `assets/…` 相对资料库根目录，显示时换成读取接口的地址；其他地址原样返回。 */
+export const kbAssetUrl = (src: string) => {
+  const match = /^assets\/([^/]+)$/.exec(src);
+  return match ? `/api/kb/assets/${encodeURIComponent(match[1])}` : src;
+};
+
+export const draftKbSummary = (title: string, body: string) =>
+  request<{ summary: string }>("/kb/summary", { method: "POST", body: JSON.stringify({ title, body }) });
 export const updateKbDocument = (
   path: string,
   expectedVersion: string,
-  fields: { title: string; summary: string; body: string; tags: string[] },
+  // 只传要改的字段；改了标题时文件名随之更新，返回的 path 是新位置。
+  fields: { title?: string; summary?: string; body?: string },
 ) => request<KbWriteResult>("/kb/document/update", {
   method: "POST",
   body: JSON.stringify({ path, expected_version: expectedVersion, ...fields }),

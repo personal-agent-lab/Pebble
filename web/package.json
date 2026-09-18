@@ -14,12 +14,15 @@
     "@milkdown/kit": "^7.22.1",
     "@milkdown/react": "^7.22.1",
     "@phosphor-icons/react": "^2.1.10",
+    "katex": "^0.18.7",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.3",
+    "rehype-katex": "^7.0.1",
     "remark-breaks": "^4.0.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.0",

@@ -58,7 +58,6 @@ export default function SearchPage() {
       <div className="topbar">
         <div style={{ flex: 1, minWidth: 0 }}>
           <h2>搜索对话</h2>
-          <div className="sub">在所有任务里查找说过的话、提示与邮件草稿</div>
         </div>
       </div>
       <div className="content kb-content">

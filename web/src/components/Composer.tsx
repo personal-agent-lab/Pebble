@@ -20,6 +20,9 @@ type Props = {
   /** 模型目录读不到最新版本时的提示；沿用旧目录，不阻止发送。 */
   catalogNotice?: { message: string; retrying: boolean; onRetry: () => void } | null;
   onSubmit: (message: string, files: File[]) => Promise<ApiError | null>;
+  /** 未发出的消息退回时预填的文字与附件。 */
+  initialMessage?: string;
+  initialFiles?: File[];
 };
 
 const formatSize = (size: number) => size >= 1024 * 1024
@@ -28,9 +31,10 @@ const formatSize = (size: number) => size >= 1024 * 1024
 
 export default function Composer({
   placeholder, sending, model, models = [], modelLocked = false, modelsPending = false, catalogNotice = null, onModelChange, onSubmit,
+  initialMessage = "", initialFiles = [],
 }: Props) {
-  const [message, setMessage] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [message, setMessage] = useState(initialMessage);
+  const [files, setFiles] = useState<File[]>(initialFiles);
   const [error, setError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -39,6 +43,9 @@ export default function Composer({
   useEffect(() => () => {
     for (const url of previews.current.values()) URL.revokeObjectURL(url);
   }, []);
+
+  // 预填的多行文字要撑开输入框，与手动输入时一致。
+  useEffect(() => { if (initialMessage) resize(); }, []);
 
   const imageUrl = (file: File) => {
     const known = previews.current.get(file);
