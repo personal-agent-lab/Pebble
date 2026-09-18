@@ -66,14 +66,12 @@ test("待确认一直标着，打开任务也不消失，处理完才消失", as
   await open("/tasks/task-2");
   expect(pendingOf("正在看的任务")).toBeTruthy();
   expect(pendingOf("没读过的任务")).toBeTruthy();
-  // 标题计数是实际还没确认的条数，与读没读过无关。
-  expect(document.querySelector(".nav-head-count")?.textContent).toBe("2 待确认");
   cleanup();
 
   operations["task-2"] = [{ operation_id: "op-2", type: "mail_draft", version: 1, status: "cancelled" }];
   await open("/tasks");
   expect(pendingOf("正在看的任务")).toBeNull();
-  expect(document.querySelector(".nav-head-count")?.textContent).toBe("1 待确认");
+  expect(pendingOf("没读过的任务")).toBeTruthy();
 });
 
 test("每行都有来源图标：邮件触发与自己发起各一种", async () => {
@@ -115,8 +113,6 @@ test("生成完还没看过的任务单独标记，打开后消失，待确认�
   // 右侧只留一个圆点：有待确认时不再叠新结果的圆点。
   expect(pendingOf("没读过的任务")).toBeTruthy();
   expect(freshOf("没读过的任务")).toBeNull();
-  // 新结果不进“待确认”计数。
-  expect(document.querySelector(".nav-head-count")?.textContent).toBe("1 待确认");
   cleanup();
 
   await open("/tasks/task-2");

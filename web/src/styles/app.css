@@ -149,16 +149,13 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   font-size: var(--text-md); font-weight: 600; color: var(--color-muted);
 }
 .nav-head-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nav-head-count {
-  margin-left: auto; font-size: var(--text-xs); font-weight: 600; color: var(--color-accent);
-}
 .nav-new {
   flex: none; margin-left: auto; width: 24px; height: 24px;
   display: grid; place-items: center; border-radius: var(--radius-sm);
   color: var(--color-muted);
 }
 /* 搜索与新任务并排：搜索在前，只有它推到行尾，新任务紧挨着。 */
-.nav-head-count + .nav-new, .nav-search + .nav-new { margin-left: 0; }
+.nav-search + .nav-new { margin-left: 0; }
 .nav-new:hover { color: var(--color-fg); background: color-mix(in oklch, var(--color-fg) 6%, transparent); }
 .nav-new.active { color: var(--color-fg); }
 .nav-new:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }

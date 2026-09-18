@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import { ApiError, deleteTask } from "../api";
-import type { TaskEntry } from "../hooks";
 import { useSeen } from "../seen";
 import { pendingCount, taskBadge } from "../status";
 import { useTasks } from "../tasks";
@@ -104,11 +103,6 @@ function writeExpanded(expanded: boolean): void {
   }
 }
 
-/** 全部任务里还没确认的操作条数；列表未读到时按 0 计，不显示占位数字。 */
-function pendingTotal(entries: TaskEntry[] | null): number {
-  return entries?.reduce((total, entry) => total + pendingCount(entry.operations), 0) ?? 0;
-}
-
 /** 任务分区包括任务列表、单个任务与从列表进入的搜索。 */
 function inTasksSection(pathname: string): boolean {
   return pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/search";
@@ -121,7 +115,7 @@ let lastTasksPath = "/tasks";
  * 手机底部 tab 用的任务入口：没有子列表，整个任务分区都算在内。
  * 从别的分区点回来时恢复上次停留的页面；已在任务分区内时点它回到任务列表。
  */
-function TasksLink({ pending }: { pending: number }) {
+function TasksLink() {
   const { pathname, search } = useLocation();
   const active = inTasksSection(pathname);
   if (active) lastTasksPath = pathname + search;
@@ -129,7 +123,6 @@ function TasksLink({ pending }: { pending: number }) {
     <NavLink to={active ? "/tasks" : lastTasksPath} className={`nav-item${active ? " active" : ""}`}>
       {TASKS_ICON}
       任务
-      {pending > 0 && <span className="nav-count">{pending} 待确认</span>}
     </NavLink>
   );
 }
@@ -378,17 +371,13 @@ export function TaskLinks({ limited = true }: { limited?: boolean }) {
 /**
  * 侧栏任务区：排在资料、记忆等固定入口之后，占满侧栏剩余高度，任务多了在列表内滚动，
  * 固定入口始终留在原位。“任务”是分区小标题而不是页面入口，没有选中态；
- * 待确认计数和搜索、发起新任务的入口挂在标题上，列表滚到哪里都看得到。
+ * 搜索、发起新任务的入口挂在标题上，列表滚到哪里都看得到；待确认只在各行用圆点标出。
  */
 function SidebarTasks() {
-  const { entries } = useTasks();
-  const pending = pendingTotal(entries);
-
   return (
     <div className="nav-group">
       <div className="nav-head">
         <span className="nav-head-title">任务</span>
-        {pending > 0 && <span className="nav-head-count">{pending} 待确认</span>}
         <NavLink
           to="/search"
           title="搜索对话"
@@ -414,8 +403,7 @@ function SidebarTasks() {
 
 /** PC 侧栏 / 手机底部 tab 共用同一组导航项，两端功能一致。 */
 export default function AppShell({ serviceError, children }: Props) {
-  const { entries, error } = useTasks();
-  const pending = pendingTotal(entries);
+  const { error } = useTasks();
   const offline = serviceError?.offline === true || error?.offline === true;
 
   return (
@@ -443,7 +431,7 @@ export default function AppShell({ serviceError, children }: Props) {
       <div className="main">{children}</div>
 
       <nav className="tabbar">
-        <TasksLink pending={pending} />
+        <TasksLink />
         <KbLink />
         <MemoryLink />
         <Placeholders />
