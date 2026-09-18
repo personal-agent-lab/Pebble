@@ -25,6 +25,11 @@ class FakeAgentGateway:
         self.title = title
         self.calls: list[dict[str, Any]] = []
         self.title_calls: list[str] = []
+        self.text = "替身文本"
+        self.text_calls: list[dict[str, str]] = []
+        # 看图生成的文字；设为异常实例时模拟模型调用失败。
+        self.image_text: str | Exception = "替身图片说明"
+        self.image_calls: list[dict[str, Any]] = []
         self.review_calls: list[dict[str, Any]] = []
         self.judge_calls: list[dict[str, Any]] = []
         # 可替换的一次性记忆回顾实现；缺省记录调用并返回空工具记录（无改动）。
@@ -49,6 +54,20 @@ class FakeAgentGateway:
         with self._lock:
             self.title_calls.append(text)
         return self.title
+
+    async def generate_text(self, instructions: str, text: str) -> str:
+        with self._lock:
+            self.text_calls.append({"instructions": instructions, "text": text})
+        return self.text
+
+    async def describe_image(self, instructions: str, data: bytes, mime_type: str) -> str:
+        with self._lock:
+            self.image_calls.append(
+                {"instructions": instructions, "size": len(data), "mime_type": mime_type}
+            )
+        if isinstance(self.image_text, Exception):
+            raise self.image_text
+        return self.image_text
 
     async def review_memory(self, task_id: str, instructions: str, transcript: str) -> list[dict]:
         with self._lock:

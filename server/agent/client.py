@@ -174,9 +174,46 @@ class QoderGateway:
 
     async def generate_title(self, text: str) -> str:
         """一次性标题生成：无工具、不接续会话，也不进入任务的对话历史。"""
+        return await self.generate_text(TITLE_PROMPT, text)
+
+    async def generate_text(self, instructions: str, text: str) -> str:
+        """一次性短文本生成：指令即系统提示，走轻量模型，无工具、不接续会话。"""
+        return await self._light_reply(instructions, text)
+
+    async def describe_image(self, instructions: str, data: bytes, mime_type: str) -> str:
+        """一次性看图生成文字：与 generate_text 同形，只是输入换成一张图片。"""
+
+        async def image() -> AsyncIterator[dict[str, Any]]:
+            yield {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": mime_type,
+                                "data": base64.b64encode(data).decode("ascii"),
+                            },
+                        }
+                    ],
+                },
+                "parent_tool_use_id": None,
+            }
+
+        return await self._light_reply(instructions, image(), vision=True)
+
+    async def _light_reply(
+        self,
+        instructions: str,
+        prompt: str | AsyncIterator[dict[str, Any]],
+        *,
+        vision: bool = False,
+    ) -> str:
         parts: list[str] = []
-        async with QoderSDKClient(self._title_options()) as client:
-            await client.query(text)
+        async with QoderSDKClient(self._light_options(instructions, vision=vision)) as client:
+            await client.query(prompt)
             async for message in client.receive_response():
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
@@ -427,10 +464,10 @@ class QoderGateway:
             resume=turn.sdk_session_id,
             include_partial_messages=True,
             auth=self._auth(),
-            **self._model_options(selected_model=turn.model),
+            model=turn.model or self.settings.qoder_model,
         )
 
-    def _title_options(self) -> QoderAgentOptions:
+    def _light_options(self, instructions: str, *, vision: bool = False) -> QoderAgentOptions:
         return QoderAgentOptions(
             tools=[],
             allowed_tools=[],
@@ -439,11 +476,11 @@ class QoderGateway:
             strict_mcp_config=True,
             setting_sources=[],
             skills=[],
-            system_prompt=TITLE_PROMPT,
+            system_prompt=instructions,
             cwd=self.workspace,
             include_partial_messages=False,
             auth=self._auth(),
-            **self._model_options(hosted_model=self.settings.title_model),
+            **self._light_model_options(vision=vision),
         )
 
     def _oneshot_options(
@@ -470,7 +507,7 @@ class QoderGateway:
             cwd=self._task_workspace(task_id),
             include_partial_messages=False,
             auth=self._auth(),
-            **self._model_options(selected_model=model),
+            model=model or self.settings.qoder_model,
         )
 
     def _tool_url(self, path: str) -> str:
@@ -483,51 +520,48 @@ class QoderGateway:
         return access_token(token.get_secret_value())
 
     def _check_model_config(self) -> None:
-        """BYOK 三项要么齐全且供应商已登记，要么都不配，缺项或写错都在装配期报错。
+        """轻量模型三项要么齐全且供应商已登记，要么都不配，缺项或写错都在装配期报错。
 
         只配一部分就静默退回托管模型，会让调用方以为在用自己的账号与额度，
         实际请求却去了别处。
         """
         settings = self.settings
-        if not settings.model_provider and not settings.model_api_key:
+        values = (
+            ("PEBBLE_LIGHT_MODEL_PROVIDER", settings.light_model_provider),
+            ("PEBBLE_LIGHT_MODEL_API_KEY", settings.light_model_api_key),
+            ("PEBBLE_LIGHT_MODEL", settings.light_model),
+        )
+        if not any(value for _, value in values):
             return
-        missing = [
-            name
-            for name, value in (
-                ("PEBBLE_MODEL_PROVIDER", settings.model_provider),
-                ("PEBBLE_MODEL_API_KEY", settings.model_api_key),
-                ("PEBBLE_QODER_MODEL", settings.qoder_model),
-            )
-            if not value
-        ]
+        missing = [name for name, value in values if not value]
         if missing:
-            raise DependencyUnavailableError(f"BYOK 配置不完整，缺少：{', '.join(missing)}")
-        if settings.model_provider not in BYOK_PROVIDERS:
+            raise DependencyUnavailableError(f"轻量模型配置不完整，缺少：{', '.join(missing)}")
+        if settings.light_model_provider not in BYOK_PROVIDERS:
             raise DependencyUnavailableError(
-                f"未登记的模型供应商：{settings.model_provider}，"
+                f"未登记的模型供应商：{settings.light_model_provider}，"
                 f"可选：{', '.join(sorted(BYOK_PROVIDERS))}"
             )
 
-    def _model_options(
-        self, *, selected_model: str | None = None, hosted_model: str | None = None
-    ) -> dict[str, Any]:
-        """托管模型直接给型号名；配了第三方模型就转成 BYOK，凭证只在这里读取。
+    def _light_model_options(self, *, vision: bool = False) -> dict[str, Any]:
+        """配了轻量模型就转成 BYOK 的 `resolve_model`，凭证只在这里读取；否则沿用托管型号。
 
-        `hosted_model` 只替换托管型号。BYOK 的密钥与供应商标识绑定，换型号就需要另一份
-        凭证，所以配了 BYOK 时忽略它。
+        看图调用要声明 `is_vl`：不声明时 CLI 按纯文本模型处理，图片不会发给模型。
+        模型本身不支持图片时这次调用失败或回答看不到，由调用方按空说明处理。
         """
         settings = self.settings
-        if settings.model_provider:
-            custom: dict[str, Any] = {
-                "provider": settings.model_provider,
-                "model": settings.qoder_model,
-                "api_key": settings.model_api_key.get_secret_value(),
-                "style": BYOK_STYLE,
-            }
-            if settings.model_base_url:
-                custom["url"] = settings.model_base_url
-            return {"resolve_model": lambda _context: {"model": custom}}
-        return {"model": hosted_model or selected_model or settings.qoder_model}
+        if not settings.light_model_provider:
+            return {"model": settings.qoder_model}
+        custom: dict[str, Any] = {
+            "provider": settings.light_model_provider,
+            "model": settings.light_model,
+            "api_key": settings.light_model_api_key.get_secret_value(),
+            "style": BYOK_STYLE,
+        }
+        if vision:
+            custom["is_vl"] = True
+        if settings.light_model_base_url:
+            custom["url"] = settings.light_model_base_url
+        return {"resolve_model": lambda _context: {"model": custom}}
 
 
 def _result_event(message: ResultMessage) -> AgentEvent:

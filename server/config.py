@@ -22,14 +22,15 @@ class Settings(BaseSettings):
     port: int = 8000
 
     qoder_model: str | None = None
-    # 标题生成用的托管型号；不配就沿用 qoder_model。
-    title_model: str | None = None
     qoder_token: SecretStr | None = Field(
         default=None, validation_alias="QODERCN_PERSONAL_ACCESS_TOKEN"
     )
-    model_provider: str | None = None
-    model_api_key: SecretStr | None = None
-    model_base_url: str | None = None
+    # 轻量调用（任务标题、资料说明等一次性短文本）用自有 API Key 的低价模型；
+    # 供应商、密钥、型号都不配时沿用托管的 qoder_model，主对话与记忆调用不受影响。
+    light_model: str | None = None
+    light_model_provider: str | None = None
+    light_model_api_key: SecretStr | None = None
+    light_model_base_url: str | None = None
 
     # 后台记忆回顾：每完成多少个用户消息轮触发一次；开关只管自动触发，手动接口不受限。
     memory_review_interval: int = Field(default=5, ge=1)

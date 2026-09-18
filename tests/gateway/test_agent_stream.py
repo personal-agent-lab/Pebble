@@ -536,24 +536,25 @@ def test_manual_compaction_is_skipped_below_threshold(settings, monkeypatch):
     assert events == [{"type": "done"}]
 
 
-def test_managed_model_and_byok_credentials(settings):
-    managed = options_for(make_gateway(settings, qoder_model="q-model"), TurnKind.MESSAGE)
-    assert managed.model == "q-model"
-    assert managed.resolve_model is None
+def light_gateway(settings, **overrides):
+    config = {
+        "qoder_model": "q-model",
+        "light_model": "deepseek-flash-pg",
+        "light_model_provider": "deepseek",
+        "light_model_api_key": "sk-test",
+    }
+    return make_gateway(settings, **(config | overrides))
 
-    byok = make_gateway(
-        settings,
-        qoder_model="deepseek-v4-pro-pg",
-        model_provider="deepseek",
-        model_api_key="sk-test",
-        model_base_url="https://api.deepseek.com",
-    )
-    options = options_for(byok, TurnKind.MESSAGE)
+
+def test_light_model_serves_short_calls_only(settings):
+    """标题与资料说明走自有 API Key 的轻量模型；主对话仍用任务所选的托管型号。"""
+    gateway = light_gateway(settings, light_model_base_url="https://api.deepseek.com")
+    options = gateway._light_options("起标题")
     assert options.model is None
     assert options.resolve_model(None) == {
         "model": {
             "provider": "deepseek",
-            "model": "deepseek-v4-pro-pg",
+            "model": "deepseek-flash-pg",
             "api_key": "sk-test",
             "style": "openai",
             "url": "https://api.deepseek.com",
@@ -561,56 +562,36 @@ def test_managed_model_and_byok_credentials(settings):
     }
     assert "sk-test" not in options.system_prompt
 
+    turn = options_for(gateway, TurnKind.MESSAGE, model="q-selected")
+    assert turn.model == "q-selected"
+    assert turn.resolve_model is None
 
-def test_title_call_uses_its_own_managed_model(settings):
-    """标题是每条任务一次的后台短调用，可以走低倍率型号；主对话不受影响。"""
-    gateway = make_gateway(settings, qoder_model="q-model", title_model="q-cheap")
-    assert gateway._title_options().model == "q-cheap"
-    assert options_for(gateway, TurnKind.MESSAGE).model == "q-model"
-
-    inherited = make_gateway(settings, qoder_model="q-model")
-    assert inherited._title_options().model == "q-model"
+    hosted = make_gateway(settings, qoder_model="q-model")
+    assert hosted._light_options("起标题").model == "q-model"
+    assert hosted._light_options("起标题").resolve_model is None
 
 
-def test_byok_title_call_keeps_the_session_model(settings):
-    """BYOK 的密钥与供应商标识绑定，标题调用不能借用托管型号名换模型。"""
-    byok = make_gateway(
-        settings,
-        qoder_model="deepseek-v4-pro-pg",
-        title_model="q-cheap",
-        model_provider="deepseek",
-        model_api_key="sk-test",
-    )
-    options = byok._title_options()
-    assert options.model is None
-    assert options.resolve_model(None) == {
-        "model": {
-            "provider": "deepseek",
-            "model": "deepseek-v4-pro-pg",
-            "api_key": "sk-test",
-            "style": "openai",
-        }
-    }
+def test_image_description_declares_vision_to_light_model(settings):
+    """看图调用要声明 is_vl，否则 CLI 按纯文本模型处理，图片不会发给模型；文本调用不声明。"""
+    gateway = light_gateway(settings)
+    assert "is_vl" not in gateway._light_options("起标题").resolve_model(None)["model"]
+    vision = gateway._light_options("看图", vision=True).resolve_model(None)["model"]
+    assert vision["is_vl"] is True
 
 
-def test_partial_byok_config_fails_at_assembly(settings):
-    """BYOK 只配一部分不能静默退回托管模型：装配期就报错并指出缺项。"""
-    with pytest.raises(DependencyUnavailableError, match="PEBBLE_QODER_MODEL"):
-        make_gateway(settings, model_provider="deepseek", model_api_key="sk-test")
+def test_partial_light_model_config_fails_at_assembly(settings):
+    """轻量模型只配一部分不能静默退回托管模型：装配期就报错并指出缺项。"""
+    with pytest.raises(DependencyUnavailableError, match="PEBBLE_LIGHT_MODEL$"):
+        make_gateway(settings, light_model_provider="deepseek", light_model_api_key="sk-test")
 
-    with pytest.raises(DependencyUnavailableError, match="PEBBLE_MODEL_API_KEY"):
-        make_gateway(settings, model_provider="deepseek", qoder_model="deepseek-v4-pro-pg")
+    with pytest.raises(DependencyUnavailableError, match="PEBBLE_LIGHT_MODEL_API_KEY"):
+        make_gateway(settings, light_model_provider="deepseek", light_model="deepseek-flash-pg")
 
 
 def test_unregistered_provider_fails_at_assembly(settings):
     """登记表以 `list_byok_providers()` 目录为准，报错时要能看出该填什么。"""
     with pytest.raises(DependencyUnavailableError, match="未登记的模型供应商：qwen") as error:
-        make_gateway(
-            settings,
-            model_provider="qwen",
-            model_api_key="sk-test",
-            qoder_model="qwen3.8-max-tp",
-        )
+        light_gateway(settings, light_model_provider="qwen")
     for provider in BYOK_PROVIDERS:
         assert provider in str(error.value)
 
