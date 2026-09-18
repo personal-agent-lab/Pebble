@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
@@ -94,4 +94,19 @@ test("邮件触发的任务在列表里带邮件标记，自己发起的只留�
   expect(rowOf("正在看的任务")?.querySelector(".nav-task-source")).toBeTruthy();
   expect(rowOf("正在看的任务")?.querySelector(".nav-task-source svg")).toBeNull();
   expect(rowOf("正在看的任务")?.textContent).not.toContain("由新邮件触发");
+});
+
+test("手机底部切到别的分区再点回任务，回到刚才打开的任务", async () => {
+  await open("/tasks/task-2");
+  const tasksTab = () => document.querySelector<HTMLAnchorElement>(".tabbar a[href^='/tasks']");
+  // 已在任务分区内时，入口回到任务列表。
+  expect(tasksTab()?.getAttribute("href")).toBe("/tasks");
+
+  fireEvent.click(document.querySelector(".tabbar a[href='/memory']") as HTMLAnchorElement);
+  await waitFor(() => expect(tasksTab()?.getAttribute("href")).toBe("/tasks/task-2"));
+  expect(tasksTab()?.classList.contains("active")).toBe(false);
+
+  fireEvent.click(tasksTab() as HTMLAnchorElement);
+  await waitFor(() => expect(tasksTab()?.classList.contains("active")).toBe(true));
+  expect(rowOf("正在看的任务")?.classList.contains("active")).toBe(true);
 });

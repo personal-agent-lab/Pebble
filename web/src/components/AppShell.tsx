@@ -96,10 +96,24 @@ function writeExpanded(expanded: boolean): void {
   }
 }
 
-/** 手机底部 tab 用的任务入口：没有子列表，整个任务分区都算在内。 */
+/** 任务分区包括任务列表、单个任务与从列表进入的搜索。 */
+function inTasksSection(pathname: string): boolean {
+  return pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/search";
+}
+
+/** 任务分区里最后停留的位置；切到资料、记忆再点回任务时回到这里，而不是任务列表。 */
+let lastTasksPath = "/tasks";
+
+/**
+ * 手机底部 tab 用的任务入口：没有子列表，整个任务分区都算在内。
+ * 从别的分区点回来时恢复上次停留的页面；已在任务分区内时点它回到任务列表。
+ */
 function TasksLink({ unread }: { unread: number }) {
+  const { pathname, search } = useLocation();
+  const active = inTasksSection(pathname);
+  if (active) lastTasksPath = pathname + search;
   return (
-    <NavLink to="/tasks" className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
+    <NavLink to={active ? "/tasks" : lastTasksPath} className={`nav-item${active ? " active" : ""}`}>
       {TASKS_ICON}
       任务
       {unread > 0 && <span className="nav-count">{unread} 待确认</span>}
