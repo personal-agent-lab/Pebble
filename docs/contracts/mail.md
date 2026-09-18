@@ -91,15 +91,7 @@ Agent 可以读邮件和保存本地草稿，但不能直接发送；发送只�
 
 ## 2. 轮次可见范围
 
-模型每轮看到的工具由注册时声明的副作用决定：
-
-| 轮次类型 | 可见的邮件工具 |
-| --- | --- |
-| 新邮件触发轮 | 只读 |
-| 用户对话轮 | 只读、本地写 |
-| 执行结果回传轮 | 只读、本地写 |
-
-其他域在各轮次开放的工具见各自契约（例如新邮件触发轮还可新建与修改资料，见 `personal-kb.md` 第 4 节）。因此新邮件触发轮只能读邮件，用户明确要求起草后才有准备、读取与更新草稿的工具。实际发送属外部写，任何一轮都不暴露给模型，只由 Confirmation 调用。
+各类轮次可见哪些副作用由 `v1-design.md` §3 统一规定。对邮件而言：新邮件触发轮只能读邮件，用户明确要求起草后才会调用准备与更新草稿的工具；实际发送属于永不暴露的外部写，任何一轮都不注册给模型，只由 Confirmation 调用。
 
 定向修改轮次额外绑定目标 `operation_id`：禁止准备新操作，并拒绝读取或更新其他草稿。
 
@@ -166,15 +158,7 @@ Runtime 在发布通知前先保存时间线位置。通知表示草稿可读取
 
 任务关联的邮件操作 `type` 统一为 `mail`。
 
-| 错误 | HTTP | 附加字段 |
-| --- | --- | --- |
-| `NotFoundError` | 404 `not_found` | — |
-| `VersionConflictError` | 409 `version_conflict` | `current_version` |
-| `NotEditableError` | 409 `not_editable` | `status` |
-| `DraftValidationError` | 422 `invalid_draft` | `errors[]`（`field`、`message`） |
-| `DependencyUnavailableError` | 503 `unavailable` | — |
-
-工具端点把同一套错误名与字段交回模型，与 HTTP 响应体共用词汇。调用不在当轮清单里的工具按不存在处理，不解释原因。
+通用错误（`not_found`、`version_conflict`、`not_editable`、`unavailable`）见 `v1-design.md` §3。本域另有 `DraftValidationError`：422 `invalid_draft`，附 `errors[]`（`field`、`message`）。
 
 ## 8. 相关 HTTP 接口
 

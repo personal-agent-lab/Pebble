@@ -90,20 +90,15 @@ updated_at: 2026-09-14T10:22:31+08:00
 | `kb_search` | 只读 | Phase 2 | 按关键词检索资料分节，返回摘要与引用 |
 | `kb_list` | 只读 | Phase 1 | 按目录列出资料及当前位置 |
 | `kb_read` | 只读 | Phase 1 / Phase 2 | 读取原文，可指定历史版本或按引用读取片段 |
-| `kb_save` | 本地写 | Phase 1 | 新建资料文件 |
-| `kb_update` | 本地写 | Phase 1 | 修改已有资料文件 |
+| `kb_save` | 本地写，所有轮次 | Phase 1 | 新建资料文件 |
+| `kb_update` | 本地写，所有轮次 | Phase 1 | 修改已有资料文件 |
 | `kb_history` | 只读 | Phase 1 / Phase 3 | 列出一份资料的历史版本，Phase 3 起含已删除资料 |
 | `kb_delete` | 本地写，仅用户对话轮 | Phase 3 | 删除资料文件，历史保留 |
 | `kb_move` | 本地写，仅用户对话轮 | Phase 3 | 把资料移到别的文件夹（改名称用 `kb_update` 改标题） |
 | `kb_restore` | 本地写，仅用户对话轮 | Phase 3 | 从历史版本恢复资料 |
 | `kb_archive` | 本地写 | Phase 4 | 归档一次任务的关键信息与逐项结果 |
 
-轮次可见范围：
-
-- 用户对话轮：全部工具。
-- 执行结果回传轮：只读工具、`kb_save`、`kb_update`、`kb_archive`。
-- 新邮件等触发轮（Phase 3 起）：只读工具、`kb_save`、`kb_update`。删除、移动、恢复与归档不开放，其他域的本地写（如 Skill 草稿）也不因此开放。开放范围由工具注册时的声明决定，通用层不认工具名。
-- 后台主题整理会话（Phase 5）：只读工具，以及限定写入 `kb/topics/` 的 `kb_save`/`kb_update`；路径限制由程序校验。
+轮次可见范围按 `v1-design.md` §3 由副作用决定：`kb_save`、`kb_update` 在所有轮次可见，新邮件触发轮因此能保存与修改资料（写入有提示、有版本、可恢复）；`kb_archive` 在用户对话轮与执行结果回传轮可见；`kb_delete`、`kb_move`、`kb_restore` 只在用户对话轮可见。后台主题整理会话（Phase 5）只有只读工具，以及限定写入 `kb/topics/` 的 `kb_save`/`kb_update`，路径限制由程序校验。
 
 删除、移动与恢复要求先在对话中取得用户同意（`kb-spec.md` 第 5.2 节）。这一要求写在工具说明里，由模型遵守；程序保证的是这三个工具只在用户亲自发起的对话轮可见。
 
@@ -244,7 +239,7 @@ updated_at: 2026-09-14T10:22:31+08:00
 
 ## 9. 错误
 
-复用 `server/errors.py` 的词汇与字段形状：`NotFoundError`、`VersionConflictError`（附 `current_version`，取 Git commit sha）。资料校验失败返回 `KbValidationError`（`invalid_kb`），附 `errors[]`，每项含 `field` 与 `message`，不保存数据，按引用读取失败时也不返回内容。资料文件或本地版本仓库不可用时返回 `KbStoreUnavailableError`（`kb_store_unavailable`）；索引缺失、损坏或无法重建时返回 `KbIndexUnavailableError`（`kb_index_unavailable`），此时不返回旧索引结果。后台整理写入 `kb/topics/` 之外的路径返回 `invalid_kb`。
+通用错误见 `v1-design.md` §3；资料的 `version_conflict` 附带的 `current_version` 是 Git commit sha。资料校验失败返回 `KbValidationError`（`invalid_kb`），附 `errors[]`，每项含 `field` 与 `message`，不保存数据，按引用读取失败时也不返回内容。资料文件或本地版本仓库不可用时返回 `KbStoreUnavailableError`（`kb_store_unavailable`）；索引缺失、损坏或无法重建时返回 `KbIndexUnavailableError`（`kb_index_unavailable`），此时不返回旧索引结果。后台整理写入 `kb/topics/` 之外的路径返回 `invalid_kb`。
 
 ## 10. 正文图片（Phase 6）
 

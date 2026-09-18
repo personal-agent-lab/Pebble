@@ -75,7 +75,8 @@ uv sync --project server
 uv run --project server python -m server.main
 ```
 
-服务监听 `http://127.0.0.1:8000`，带热重载。
+服务监听 `http://127.0.0.1:8000`，带热重载，使用生产入口 `server.main:create_production_app`
+（Uvicorn factory）。
 
 前端：
 
@@ -97,33 +98,10 @@ npm run dev
 设计只固定安全要求，不固定传输方案；反向隧道、反向代理加域名或私有网络的选定结果与配置步骤
 会在实现后写回本节。
 
-## 网页
-
-`web/` 是 TypeScript + React + Vite 单页应用，路由为 `/tasks`（任务列表与发起新任务）、
-`/tasks/:taskId`（统一时间线、完整草稿卡与逐项执行结果）、`/search`（历史对话搜索）、
-`/kb`、`/kb/doc`、`/kb/new`（资料）与 `/memory`（长期记忆）。
-视觉设计系统 token 见 `src/styles/tokens.css`，分种子、原语与语义三层。
-断点 900px：以上为侧栏布局，以下折叠为底部 tab，两端功能一致。
-任务列表就是导航本身：PC 在侧栏资料、记忆等固定入口之下，列出全部任务并在列表内滚动；手机在任务页内，默认列最近 5 条，其余折在「展开显示」后面。
-
-新任务与任务详情共用 Codex 风格输入框。新建任务时从当前 Qoder 账号目录选择模型，创建后模型固定；若该型号后来不可用，后续轮次明确失败而不会换模型。模型目录保存在 `<PEBBLE_DATA_DIR>/agent/models.json`，服务启动时后台预读；网络波动读不到最新目录时沿用最近一次成功的目录，输入框旁提示“模型目录可能不是最新”并可重试。可上传 PNG/JPEG/WebP、PDF、UTF-8 文本、Markdown 与代码文件，也可只发附件；每条消息最多 10 个、每个不超过 20 MB。图片在时间线中预览，其他文件下载。附件保存在 `<PEBBLE_DATA_DIR>/agent/workspaces/<task_id>/attachments/`，删除任务时一并删除；附件中的指令只是待分析内容，不取得任何外部写权限。
-
-邮件草稿固定在 Agent 生成时的对话位置，卡片内展示完整正文，并支持直接编辑、定向对话修改与最终确认。
-未保存的修改不能确认，确认绑定卡片当前展示的草稿版本；发送状态和结果继续显示在原卡片上。
-编辑收件人时每行填写一个地址，可保留显示名。
-日程不渲染卡片：创建结果由 Agent 在对话文字里汇报，操作与执行记录通过接口查询。
-
-任务列表没有列表级事件流，按 5 秒轮询刷新（页面不可见时暂停），新邮件自动触发的任务无需手动刷新；
-任务详情用 SSE，确认后的执行在后台进行，事件流不携带执行状态，页面对执行结果按 1.5 秒轮询直到
-草稿卡状态离开 `sending`，SSE 重连后整体重读时间线对账。
-回答不展示资料来源。
-
-## 验证
+## 检查
 
 浏览器打开 `http://127.0.0.1:5173`，应看到任务列表（PC 在左侧侧栏）。后端不可达时页面显示
-「无法连接服务」并提供重试，不白屏。
-
-或直接请求接口：
+「无法连接服务」并提供重试，不白屏。也可以直接请求接口：
 
 ```bash
 curl http://127.0.0.1:8000/api/health
@@ -132,50 +110,23 @@ curl http://127.0.0.1:8000/api/models
 
 返回里的 `services.gmail` 与 `services.calendar` 为 `ok` 表示已接入，`unconfigured` 表示缺凭证、相关功能已关闭。
 
-重启后端后确认数据文件仍在：
+## 数据位置
 
-```bash
-ls .data/pebble.db
-```
+以下都在实例数据目录 `<PEBBLE_DATA_DIR>`（默认 `.data/`）下，可以直接查看：
 
-## 长期记忆
+| 路径 | 内容 |
+| --- | --- |
+| `pebble.db` | 任务、时间线、草稿、确认与执行状态（SQLite） |
+| `memory/USER.md`、`memory/MEMORY.md` | 长期记忆，可直接编辑，下一轮生效；上限 1375 / 2200 字符 |
+| `kb/` | 个人资料（Markdown），直接编辑、新增、移动、删除都会在下一次资料库操作前自动纳入版本 |
+| `kb-index.sqlite3` | 资料检索索引，派生数据，可随时重建 |
+| `agent/` | SDK 会话记录、模型目录缓存与每个任务的工作目录（含上传附件） |
+| `gmail_sync.json` | 新邮件检测的游标 |
 
-当前有效的长期记忆保存在实例数据目录中：
+`kb/` 属于数据目录内的独立本地 Git 仓库，每次写入即一次提交，可用 Git 查看历史与差异；数据库、凭证、
+SDK 会话与 `memory/` 不进入该仓库。
 
-```text
-<PEBBLE_DATA_DIR>/memory/USER.md
-<PEBBLE_DATA_DIR>/memory/MEMORY.md
-```
-
-`USER.md` 记用户本人：背景、长期目标与偏好，上限 1375 个 Unicode 字符；`MEMORY.md` 记用户以外、
-跨任务都成立的事实与约定，上限 2200 个字符。可以查的项目信息与术语资料放个人资料库。每个文件是
-一份完整的 Markdown 文档，可直接编辑。
-下一轮 Agent 调用会重新读取文件。记忆不做版本管理：每轮记忆判断与后台回顾负责新增、合并与
-清理，改动以提示显示在对话里；也可以在网页的“记忆”页面查看容量，并在渲染后的内容上直接编辑。
-
-## 个人资料库
-
-资料是实例数据目录里的 Markdown 文件，目录结构由 Agent 按内容组织，你可以直接阅读、修改和
-重组：
-
-```text
-<PEBBLE_DATA_DIR>/kb/**/*.md       # 资料本体，frontmatter 里带稳定 id 与一句话说明 summary
-<PEBBLE_DATA_DIR>/kb-index.sqlite3 # 检索索引，派生数据，不进 Git，可随时重建
-```
-
-`kb/` 属于 `<PEBBLE_DATA_DIR>` 内的独立本地 Git 仓库，每次写入即一次提交，可用 Git 查看历史与差异；
-数据库、凭证、SDK 会话与 `memory/` 不进入该仓库。
-检索索引按二级标题分节，写入后自动增量更新；索引缺失、损坏或与已提交内容不一致时会在下一次
-检索前整体重建。你在编辑器或文件夹里直接编辑、新增、移动、删除资料都不需要手动提交：下一次
-资料库操作前，程序会把改动纳入版本（没有 frontmatter 的新文件会补上 id 与标题，正文不变；
-移动按 id 认作同一份资料）。删除的资料历史仍在，可以在对话里让 Agent 找回。
-Agent 查到资料后直接作答，回答不展示资料来源。
-
-资料正文不会每轮都交给 Agent：程序每轮从各资料的标题和一句话说明生成一份资料目录（上限
-1500 字，按目录分组、最近更新优先），和长期记忆一起带给 Agent，Agent 需要细节时再去读原文。
-资料的说明可以在“资料”页或文件的 `summary` 字段里修改。
-
-## 检查命令
+## 测试
 
 后端测试与静态检查（仓库根执行）：
 
@@ -196,90 +147,14 @@ npm test
 npm run build
 ```
 
-## 本地任务、草稿与确认执行服务
+自动化测试替换 SDK 子进程、Gmail 投递和 iCloud CalDAV 这三个外部边界，其余模块、SQLite、HTTP 都是真的；
+测试通过不代表真实外部操作成功。
 
-初始化数据库后使用 `server.sessions.service.SessionStore`、`server.sessions.timeline.TimelineStore`、
-`server.tools.gmail.service.MailDraftStore`、`server.tools.calendar.service.CalendarEventStore` 和
-`server.approval.service.ConfirmationService`。它们默认使用实例数据库，也可显式传入
-`path=Path(...)`。邮件草稿与日程字段分别在对应域内校验，日程每次创建保存一份不可变内容版本；
-`ConfirmationService` 必须注入实际的
-Gmail 发送或 iCloud 创建函数，生产代码没有默认成功的外部写入。输入输出字段及错误含义见
-[Gmail 契约](docs/contracts/mail.md)和 [Calendar 契约](docs/contracts/calendar.md)。
-
-任务保存用户目标与 SDK 会话关联；操作管理版本与状态；邮件字段和原邮件去重留在邮件能力内。
-跨任务复用同一操作后，各任务看到相同的最新草稿与状态，SDK 会话仍独立。
-
-### 确认执行
-
-- `accept_confirmation(task_id, operation_id, version)`：检查版本、保存确认并取得执行权。
-- `execute_accepted(operation_id, deliver=True)`：读取已确认版本、执行并保存结果；重复调用不再次执行。
-  日程直连创建传 `deliver=False`：结果就地返回给模型，不登记回传轮，避免同一件事汇报两遍。
-- `get_execution(operation_id)`：操作当前状态、确认信息及已保存结果。
-- `get_agent_result(operation_id)`：回传数据；尚无结果或回传任务未关联会话时返回 `None`。
-- `verify_pending(operation_id)`：只读核实 `unknown`，找到对应外部结果后更新状态并登记回传。
-- `recover_interrupted_executions()`：重启时已开始的外部执行记 `unknown`，尚未开始的记 `failed`；
-  在数据库初始化后、接受请求前调用，不自动重试。
-
-外部执行函数的输入输出见对应契约；异常、中断及不符契约的返回都记 `unknown`，不自动重试，
-`unknown` 可以显式核实，重复确认不会再次产生外部写入。
-
-## 验证范围
-
-- `tests/storage/`：真实 SQLite 的版本、并发、回滚、恢复与确认去重。
-- `tests/gateway/`：后台调度、SDK 选项装配与事件映射、工具端点与工具边界、执行结果回传、邮件全链路衔接。
-- `tests/api/`：健康检查，以及独立进程的 HTTP/SSE、断线后继续执行与重启。
-- `tests/tools/`：邮件与日历的解析、字段校验、协议内容、结果核实、日程直连创建与冲突覆盖、工具声明。
-
-测试替换 SDK 子进程、Gmail 投递和 iCloud CalDAV 这三个外部边界，其余模块、SQLite、HTTP 都是真的。
-SDK 模型响应、Gmail 投递与 iCloud 读写仍须用明确授权的账号和内容验收；测试通过不代表真实外部操作成功。
-
-Qoder 短期上下文的真实验收脚本不会随 pytest 运行。它验证多轮、独立进程恢复和每轮最新
-材料；加 `--compact` 会发送较长的合成文本并验证压缩，因而消耗更多真实额度：
-
-```bash
-uv run --project server python -m tests.acceptance.qoder_context
-uv run --project server python -m tests.acceptance.qoder_context --compact
-```
-
-长期记忆与资料库的真实验收同样不会随 pytest 运行。记忆验收使用临时实例目录和真实 Qoder 模型，
-验证每轮记忆判断的写入、分区与提示，并在全新的 SDK 会话中读回记忆：
+`tests/acceptance/` 下是使用真实 Qoder 模型的验收脚本，不随 pytest 运行，会消耗真实额度。每个脚本
+单独运行，例如：
 
 ```bash
 uv run --project server python -m tests.acceptance.qoder_memory
-uv run --project server python -m tests.acceptance.qoder_kb
-uv run --project server python -m tests.acceptance.qoder_kb_search
 ```
 
-触发源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/runtime.py` 的 `MailSource`
-（`start` / `stop` / `error`）。真实 Gmail 检测由 `server/tools/gmail/sync.py` 实现同一接口，
-生产工厂统一装配。
-
-## 生产装配
-
-生产入口为 `server.main:create_production_app`（Uvicorn factory），上面的 `python -m server.main`
-已使用该入口。`create_app()` 保留为显式依赖注入的应用构造函数，供测试使用。启动顺序为
-初始化数据库 → 恢复中断的发送 → 恢复调用调度 → 启动邮件检测；关闭时先停检测再等发送落盘。
-
-Gmail 首次启动记录当前 historyId，随后每 10 秒检测新增的收件箱邮件；首次启动前的旧邮件不会批量触发。
-跨进程游标保存在 `.data/gmail_sync.json`。邮件成功交给 Gateway 的持久化任务入口后才推进游标，
-重复通知由 Gateway 去重。游标失效明确停止检测，health 显示原因，需要核对后重新建立同步位置，
-不静默跳过缺口。常规检测错误保留游标，在下一轮重新查询。
-
-新邮件轮次只开放只读工具与资料的新建、修改；结果回传轮次开放只读与本地写；只有用户亲自发起的
-对话轮能看到日程直连创建工具与资料的删除、移动、恢复，因此邮件或资料内容里的指令无法驱动外部写入。用户要求起草后，SDK 才可调用准备、读取及
-更新草稿工具；更新使用当前已保存版本，直接编辑与 Agent 修改共用 `MailDraftStore` 的版本控制。
-草稿保存事件交给网页。邮件发送函数只由 Confirmation 在用户确认最终版本后调用，执行结果回到确认
-任务的原 SDK 会话。
-
-模型经应用进程内的 MCP 端点（server 名 `pebble`）调用工具；内置工具只在用户对话轮开放联网查询
-（`WebSearch`、`WebFetch`），以及任务有附件时读取附件的 `Read`（限定在该任务工作目录），本机设置关闭：每轮登记一个
-一次性路径供 qodercli 子进程按回环地址连接，轮次结束即撤销。每轮独立启动一次 qodercli 子进程，
-会话标识由 SDK 生成并按任务保存，重启后靠它接续。会话记录落在 `.data/agent/config/` 下，
-模型上下文由该记录恢复；网页时间线由 SQLite 独立持久化，刷新后仍保持文字与草稿卡的生成顺序。
-基础系统提示在同一 SDK 会话内保持固定；每轮动态材料通过 SessionStart hook 注入。当前 CN
-SDK headless runtime 未启用自动压缩，Gateway 达到 SDK 报告的阈值时先执行手动压缩再处理输入。
-
-联合测试 `tests/gateway/test_integrated_mail.py` 覆盖实际模块衔接、Agent 修改与手动编辑、
-旧版本拒绝、最终内容一致性、重复确认、结果会话关联与游标推进；`tests/gateway/test_agent_stream.py`
-覆盖选项装配、事件映射与工具边界；`tests/api/test_http_flow.py` 覆盖内嵌时间线、原卡片更新和确认发送。
-其中 SDK 模型响应和 Gmail 投递仍为测试边界替身；真实验收结果需另行记录。
+`qoder_context` 加 `--compact` 会发送较长的合成文本验证上下文压缩，消耗更多额度。
