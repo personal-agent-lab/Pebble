@@ -231,6 +231,7 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 /* 侧栏只标出还没读过的待确认，读过与其余状态都留给任务页，列表保持一列干净的标题。 */
 .nav-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--color-border); }
 .nav-dot.wait { background: var(--color-accent); }
+.nav-dot.fresh { background: var(--status-success); }
 
 .nav-more {
   align-self: flex-start; margin-top: 2px; padding: 5px 10px;

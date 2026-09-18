@@ -328,6 +328,8 @@ export function TaskLinks({ limited = true }: { limited?: boolean }) {
         {visible.map((entry) => {
           const badge = taskBadge(entry.latestRun, entry.operations);
           const unread = seen.unread(entry.task.task_id, entry.operations);
+          // 待确认优先：它需要用户动作，新结果只是提醒去看。
+          const fresh = unread === 0 && seen.fresh(entry.task.task_id, entry.latestRun);
           const fromMail = entry.task.source === "mail";
           return (
             <div className="nav-task-row" key={entry.task.task_id}>
@@ -342,6 +344,8 @@ export function TaskLinks({ limited = true }: { limited?: boolean }) {
                 <span className="t">{entry.task.goal}</span>
                 {fromMail && <span className="sr-only">由新邮件触发</span>}
                 {unread > 0 && <span className="nav-dot wait" aria-hidden />}
+                {fresh && <span className="nav-dot fresh" aria-hidden />}
+                {fresh && <span className="sr-only">有新结果</span>}
                 <span className="sr-only">{badge.label}</span>
               </NavLink>
               <TaskItemMenu

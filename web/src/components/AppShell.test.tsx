@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
-import type { OperationSummary, Task, TaskDetail, Timeline } from "../api";
+import type { OperationSummary, Run, Task, TaskDetail, Timeline } from "../api";
 
 const tasks: Task[] = [
   { task_id: "task-1", goal: "没读过的任务", model: "Auto", source: "mail", sdk_session_id: null, created_at: "2026-09-14T01:00:00Z" },
@@ -14,6 +14,11 @@ const operations: Record<string, OperationSummary[]> = {
   "task-1": [{ operation_id: "op-1", type: "mail_draft", version: 1, status: "pending" }],
   "task-2": [{ operation_id: "op-2", type: "mail_draft", version: 1, status: "pending" }],
 };
+const runs: Record<string, Run | null> = {};
+const doneRun = (taskId: string, runId: string): Run => ({
+  run_id: runId, task_id: taskId, kind: "new_mail", status: "done", error: null,
+  created_at: "2026-09-14T03:00:00Z", started_at: null, finished_at: "2026-09-14T03:01:00Z",
+});
 
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
@@ -23,7 +28,7 @@ vi.mock("../api", async (importOriginal) => {
     getTask: (taskId: string) =>
       Promise.resolve({
         ...(tasks.find((task) => task.task_id === taskId) as Task),
-        latest_run: null,
+        latest_run: runs[taskId] ?? null,
       } satisfies TaskDetail),
     listOperations: (taskId: string) => Promise.resolve(operations[taskId] ?? []),
     getTimeline: (taskId: string) =>
@@ -37,6 +42,7 @@ const App = (await import("../App")).default;
 beforeAll(() => { Element.prototype.scrollIntoView = vi.fn(); });
 beforeEach(() => {
   window.localStorage.clear();
+  for (const key of Object.keys(runs)) delete runs[key];
   operations["task-2"] = [{ operation_id: "op-2", type: "mail_draft", version: 1, status: "pending" }];
 });
 afterEach(cleanup);
@@ -109,4 +115,30 @@ test("手机底部切到别的分区再点回任务，回到刚才打开的任�
   fireEvent.click(tasksTab() as HTMLAnchorElement);
   await waitFor(() => expect(tasksTab()?.classList.contains("active")).toBe(true));
   expect(rowOf("正在看的任务")?.classList.contains("active")).toBe(true);
+});
+
+test("生成完还没看过的任务单独标记，打开后消失，待确认优先", async () => {
+  // 已有提醒记录（不是首次启用），两条任务都有新结束的调用。
+  window.localStorage.setItem("pebble.tasks.seenRuns", "{}");
+  runs["task-1"] = doneRun("task-1", "run-1");
+  runs["task-2"] = doneRun("task-2", "run-2");
+  operations["task-2"] = [];
+  await open("/tasks");
+
+  expect(dotOf("正在看的任务")?.classList.contains("fresh")).toBe(true);
+  expect(dotOf("没读过的任务")?.classList.contains("wait")).toBe(true);
+  // 新结果不进“待确认”计数。
+  expect(document.querySelector(".nav-head-count")?.textContent).toBe("1 待确认");
+  cleanup();
+
+  await open("/tasks/task-2");
+  await waitFor(() => expect(dotOf("正在看的任务")).toBeNull());
+});
+
+test("首次启用时已有的结果都算读过", async () => {
+  runs["task-2"] = doneRun("task-2", "run-2");
+  operations["task-2"] = [];
+  await open("/tasks");
+  await waitFor(() => expect(window.localStorage.getItem("pebble.tasks.seenRuns")).not.toBeNull());
+  expect(dotOf("正在看的任务")).toBeNull();
 });
