@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import { ApiError, deleteTask } from "../api";
+import type { TaskEntry } from "../hooks";
 import { useSeen } from "../seen";
-import { taskBadge } from "../status";
+import { pendingCount, taskBadge } from "../status";
 import { useTasks } from "../tasks";
 
 type Props = {
@@ -37,6 +38,13 @@ const MAIL_ICON = (
   <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="5" width="18" height="14" rx="2" />
     <polyline points="3.5 7 12 13 20.5 7" />
+  </svg>
+);
+
+/** 用户自己发起的任务：和邮件标记同一列，每行都有来源图标，任务名才对得齐。 */
+const CHAT_ICON = (
+  <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" />
   </svg>
 );
 
@@ -96,6 +104,11 @@ function writeExpanded(expanded: boolean): void {
   }
 }
 
+/** 全部任务里还没确认的操作条数；列表未读到时按 0 计，不显示占位数字。 */
+function pendingTotal(entries: TaskEntry[] | null): number {
+  return entries?.reduce((total, entry) => total + pendingCount(entry.operations), 0) ?? 0;
+}
+
 /** 任务分区包括任务列表、单个任务与从列表进入的搜索。 */
 function inTasksSection(pathname: string): boolean {
   return pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/search";
@@ -108,7 +121,7 @@ let lastTasksPath = "/tasks";
  * 手机底部 tab 用的任务入口：没有子列表，整个任务分区都算在内。
  * 从别的分区点回来时恢复上次停留的页面；已在任务分区内时点它回到任务列表。
  */
-function TasksLink({ unread }: { unread: number }) {
+function TasksLink({ pending }: { pending: number }) {
   const { pathname, search } = useLocation();
   const active = inTasksSection(pathname);
   if (active) lastTasksPath = pathname + search;
@@ -116,7 +129,7 @@ function TasksLink({ unread }: { unread: number }) {
     <NavLink to={active ? "/tasks" : lastTasksPath} className={`nav-item${active ? " active" : ""}`}>
       {TASKS_ICON}
       任务
-      {unread > 0 && <span className="nav-count">{unread} 待确认</span>}
+      {pending > 0 && <span className="nav-count">{pending} 待确认</span>}
     </NavLink>
   );
 }
@@ -308,9 +321,6 @@ export function TaskLinks({ limited = true }: { limited?: boolean }) {
   // 正在查看的任务始终留在列表里，收起时也不会从列表消失。
   const current = all.find((entry) => pathname.startsWith(`/tasks/${entry.task.task_id}`));
   if (current !== undefined && !visible.includes(current)) visible.push(current);
-  // 列表里出现邮件标记时，没有标记的行也留出同一条槽位，任务名左边才对得齐；
-  // 一条邮件任务都没有时不留，免得每行都带一段没有来由的缩进。
-  const reserveSource = visible.some((entry) => entry.task.source === "mail");
 
   // 列表在自己的区域里滚动：从搜索或别处打开一条靠后的任务时，把它滚进视野。
   const list = useRef<HTMLDivElement>(null);
@@ -327,9 +337,9 @@ export function TaskLinks({ limited = true }: { limited?: boolean }) {
         {entries !== null && all.length === 0 && <div className="nav-note">还没有任务</div>}
         {visible.map((entry) => {
           const badge = taskBadge(entry.latestRun, entry.operations);
-          const unread = seen.unread(entry.task.task_id, entry.operations);
-          // 待确认优先：它需要用户动作，新结果只是提醒去看。
-          const fresh = unread === 0 && seen.fresh(entry.task.task_id, entry.latestRun);
+          const pending = pendingCount(entry.operations);
+          // 右侧只留一个标记。待确认优先：它需要用户动作，新结果只是提醒去看。
+          const fresh = pending === 0 && seen.fresh(entry.task.task_id, entry.latestRun);
           const fromMail = entry.task.source === "mail";
           return (
             <div className="nav-task-row" key={entry.task.task_id}>
@@ -338,12 +348,11 @@ export function TaskLinks({ limited = true }: { limited?: boolean }) {
                 title={`${entry.task.goal} · ${badge.label}${fromMail ? " · 由新邮件触发" : ""}`}
                 className={({ isActive }) => `nav-task${isActive ? " active" : ""}`}
               >
-                {reserveSource && (
-                  <span className="nav-task-source">{fromMail && MAIL_ICON}</span>
-                )}
+                <span className="nav-task-source">{fromMail ? MAIL_ICON : CHAT_ICON}</span>
                 <span className="t">{entry.task.goal}</span>
                 {fromMail && <span className="sr-only">由新邮件触发</span>}
-                {unread > 0 && <span className="nav-dot wait" aria-hidden />}
+                {pending > 0 && <span className="nav-dot wait" aria-hidden />}
+                {pending > 0 && <span className="sr-only">待确认</span>}
                 {fresh && <span className="nav-dot fresh" aria-hidden />}
                 {fresh && <span className="sr-only">有新结果</span>}
                 <span className="sr-only">{badge.label}</span>
@@ -373,13 +382,13 @@ export function TaskLinks({ limited = true }: { limited?: boolean }) {
  */
 function SidebarTasks() {
   const { entries } = useTasks();
-  const unread = useSeen().unreadTotal(entries);
+  const pending = pendingTotal(entries);
 
   return (
     <div className="nav-group">
       <div className="nav-head">
         <span className="nav-head-title">任务</span>
-        {unread > 0 && <span className="nav-head-count">{unread} 待确认</span>}
+        {pending > 0 && <span className="nav-head-count">{pending} 待确认</span>}
         <NavLink
           to="/search"
           title="搜索对话"
@@ -406,7 +415,7 @@ function SidebarTasks() {
 /** PC 侧栏 / 手机底部 tab 共用同一组导航项，两端功能一致。 */
 export default function AppShell({ serviceError, children }: Props) {
   const { entries, error } = useTasks();
-  const unread = useSeen().unreadTotal(entries);
+  const pending = pendingTotal(entries);
   const offline = serviceError?.offline === true || error?.offline === true;
 
   return (
@@ -434,7 +443,7 @@ export default function AppShell({ serviceError, children }: Props) {
       <div className="main">{children}</div>
 
       <nav className="tabbar">
-        <TasksLink unread={unread} />
+        <TasksLink pending={pending} />
         <KbLink />
         <MemoryLink />
         <Placeholders />

@@ -19,7 +19,7 @@
 
 规则：
 
-- `thread_id` 由工具按原邮件读取，不由 Agent 传入。同一原邮件已有回复操作时复用它并关联到当前任务，不用候选内容覆盖已保存的草稿（复用时候选内容也不参与校验）。
+- `thread_id` 由工具按原邮件读取，不由 Agent 传入。同一原邮件已有回复操作时复用它并关联到当前任务，不用候选内容覆盖已保存的草稿（复用时候选内容也不参与校验）。例外是用户取消过的回复：以本次候选内容校验后另存一版，并恢复为 `pending`。
 - `prepare_email` 每次调用都新建一份草稿；收件人可以稍后在卡片上补填。
 - `presented_to_user: true` 表示草稿已由系统以卡片展示给用户，Agent 不必复述内容。
 - 只能读取和修改与当前任务关联的草稿，其余按不存在处理。只有 `pending` 草稿可以修改；版本不匹配时拒绝。用户在卡片上的直接编辑走同一套版本规则。
@@ -49,6 +49,7 @@
 - Message-ID 由 `operation_id` 确定，供核实识别。
 - 核实器用 `operation_id` 重建 Message-ID，核对收件人、主题、正文（回复还要核对往来与 `In-Reply-To`）。查不到不能证明没发，因此核实只会把 `unknown` 升级为 `sent`。核实只由 `POST /operations/{operation_id}/verification` 显式发起。
 - 同一操作只发送一次；重复确认返回已有状态；`unknown` 没有重发入口。
+- 用户可以取消 `pending` 草稿：输入同确认（`task_id`、`operation_id`、`version`），版本不匹配时拒绝；取消后状态为 `cancelled`，不产生执行记录，也不向 Agent 回传结果。重复取消返回已有状态；已确认的操作不能取消。
 
 ## 5. 状态与结果
 
@@ -61,6 +62,7 @@
 | `sent` | Gmail 返回了明确的成功证据 | `message_id` |
 | `failed` | 明确未发送成功 | `reason` |
 | `unknown` | 已进入执行，但证据不足以判断是否发出 | `reason` |
+| `cancelled` | 用户取消，不会发送，不再能编辑或确认 | — |
 
 错误：通用错误见 `v1-design.md` §3；本域另有 `invalid_draft`（422，附 `errors[]`）。
 
@@ -71,7 +73,8 @@
 | `GET /api/operations/{operation_id}/draft?version=` | 读取草稿的指定版本或最新版本 |
 | `PATCH /api/operations/{operation_id}/draft` | 卡片上直接编辑：`expected_version`、`to`、`subject`、`body` |
 | `POST /api/tasks/{task_id}/confirmations` | 确认：`operation_id`、`version` |
+| `POST /api/tasks/{task_id}/cancellations` | 取消：`operation_id`、`version` |
 | `GET /api/operations/{operation_id}/execution` | 当前状态、确认信息与已保存的结果 |
 | `POST /api/operations/{operation_id}/verification` | 显式核实 `unknown` |
 
-后三个接口与日程共用。
+确认、执行状态与核实三个接口与日程共用。

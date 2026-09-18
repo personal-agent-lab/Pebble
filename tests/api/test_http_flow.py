@@ -427,3 +427,41 @@ def test_verification_of_unconfirmed_operation_calls_nothing(settings):
         assert response.status_code == 200
         assert response.json() == client.get(f"/api/operations/{oid}/execution").json()
         assert response.json()["status"] == "pending"
+
+
+def test_cancellation_stops_draft_without_sending(settings):
+    """取消后草稿不能再编辑或确认，重复取消返回原状态；已进入执行的草稿不能取消。"""
+    calls = []
+
+    def send(**fields):
+        calls.append(fields)
+        return {"status": "sent", "message_id": "gmail-1"}
+
+    app = create_app(send_message=send)
+    with TestClient(app) as client:
+        tid = app.state.tasks.create_task("测试")["task_id"]
+        oid = MailDraftStore().save_email_draft(tid, ["a@example.com"], "主题", "正文")[
+            "operation_id"
+        ]
+        body = {"operation_id": oid, "version": 1}
+
+        stale = client.post(f"/api/tasks/{tid}/cancellations", json={**body, "version": 2})
+        assert stale.status_code == 409
+
+        cancelled = client.post(f"/api/tasks/{tid}/cancellations", json=body)
+        assert cancelled.status_code == 200
+        assert cancelled.json()["status"] == "cancelled"
+        assert cancelled.json()["confirmation"] is None
+        assert client.post(f"/api/tasks/{tid}/cancellations", json=body).json() == cancelled.json()
+
+        assert client.post(f"/api/tasks/{tid}/confirmations", json=body).status_code == 409
+        edit = {"expected_version": 1, "to": ["a@example.com"], "subject": "主题", "body": "改"}
+        assert client.patch(f"/api/operations/{oid}/draft", json=edit).status_code == 409
+        assert calls == []
+
+        sent_id = MailDraftStore().save_email_draft(tid, ["a@example.com"], "主题", "正文")[
+            "operation_id"
+        ]
+        sent = {"operation_id": sent_id, "version": 1}
+        assert client.post(f"/api/tasks/{tid}/confirmations", json=sent).status_code == 202
+        assert client.post(f"/api/tasks/{tid}/cancellations", json=sent).status_code == 409

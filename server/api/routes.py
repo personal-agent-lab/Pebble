@@ -306,6 +306,12 @@ async def confirm(
     return view
 
 
+@router.post("/tasks/{task_id}/cancellations", tags=["approvals"])
+def cancel(task_id: str, body: ConfirmationInput, confirmations: Confirmations) -> dict:
+    """取消待确认的草稿：不发送，也不再能编辑或确认。"""
+    return confirmations.cancel(task_id, body.operation_id, body.version)
+
+
 @router.get("/operations/{operation_id}/execution", tags=["approvals"])
 def execution(operation_id: str, confirmations: Confirmations) -> dict:
     return confirmations.get_execution(operation_id)

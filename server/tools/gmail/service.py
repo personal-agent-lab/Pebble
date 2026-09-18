@@ -188,8 +188,27 @@ class MailDraftStore:
         if not result["valid"]:
             raise DraftValidationError(result["errors"])
 
-    def _reuse(self, conn: sqlite3.Connection, task_id: str, operation_id: str) -> dict:
+    def _reuse(
+        self, conn: sqlite3.Connection, task_id: str, operation_id: str, candidate: dict
+    ) -> dict:
+        """复用同一原邮件的回复操作；用户取消过的，用本次内容另存一版并恢复为待确认。"""
         operations.link(conn, task_id, operation_id)
+        operation = operations.operation(conn, operation_id)
+        if operation["status"] != "cancelled":
+            return summary(operation)
+        now = timestamp()
+        version = operation["version"] + 1
+        operations.advance_version(conn, operation_id, version, now)
+        insert_version(
+            conn,
+            operation_id,
+            version,
+            candidate["to"],
+            candidate["subject"],
+            candidate["body"],
+            now,
+        )
+        operations.update_status(conn, operation_id, "pending", now)
         return summary(operations.operation(conn, operation_id))
 
     def save_reply_draft(
@@ -202,12 +221,16 @@ class MailDraftStore:
         body: str,
     ) -> dict:
         recipients = list(to)
+        candidate = {"to": recipients, "subject": subject, "body": body}
         with session(self.path) as conn:
             operations.task(conn, task_id)
             known = find_reply(conn, source_message_id)
-        if known is not None:
+            reopening = (
+                known is not None and operations.operation(conn, known)["status"] == "cancelled"
+            )
+        if known is not None and not reopening:
             with session(self.path) as conn, write(conn):
-                return self._reuse(conn, task_id, known)
+                return self._reuse(conn, task_id, known, candidate)
         self._validate(
             kind="reply",
             source_message_id=source_message_id,
@@ -219,7 +242,7 @@ class MailDraftStore:
         with session(self.path) as conn, write(conn):
             existing = find_reply(conn, source_message_id)
             if existing is not None:
-                return self._reuse(conn, task_id, existing)
+                return self._reuse(conn, task_id, existing, candidate)
             operation = create_operation(conn, task_id, "mail")
             operation_id = operation["operation_id"]
             insert_draft(conn, operation_id, "reply", source_message_id, thread_id)

@@ -224,14 +224,15 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .nav-task:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
 /* 任务名一行截断：侧栏是索引，完整文案在任务对话里，悬停另有 title。 */
 .nav-task .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 邮件触发的标记跟着整行的颜色走，只压低一档：它说明来源，不该比任务名更显眼。
-   负 margin 把图标和标题之间的间距从行内的 8px 收到 6px，读起来仍是一组。 */
+/* 来源图标每行都有（邮件触发 / 自己发起），跟着整行的颜色走，只压低一档：它说明来源，
+   不该比任务名更显眼。负 margin 把图标和标题之间的间距从行内的 8px 收到 6px，读起来仍是一组。 */
 .nav-task-source { display: flex; width: 14px; flex: none; margin-right: -2px; opacity: 0.65; }
 .nav-task-source .i { width: 14px; height: 14px; }
-/* 侧栏只标出还没读过的待确认，读过与其余状态都留给任务页，列表保持一列干净的标题。 */
-.nav-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--color-border); }
+/* 右侧至多一个圆点：蓝色是待确认，需要动手，处理完才消失；灰色是新结果，
+   只是提醒去看，打开任务就消失。 */
+.nav-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; }
 .nav-dot.wait { background: var(--color-accent); }
-.nav-dot.fresh { background: var(--status-success); }
+.nav-dot.fresh { background: var(--color-muted); }
 
 .nav-more {
   align-self: flex-start; margin-top: 2px; padding: 5px 10px;
@@ -650,7 +651,9 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 /* 工具条：左侧修改要求、中间状态，主操作靠右，整行不加分隔线。 */
 .mail-toolbar { display: flex; gap: 8px; align-items: center; min-height: 34px; }
 .mail-toolbar .badge { margin-left: 4px; }
-.mail-toolbar .mail-send, .mail-toolbar .mail-verify { margin-left: auto; }
+.mail-toolbar .mail-actions, .mail-toolbar .mail-verify { margin-left: auto; }
+/* 取消与确认成组：窄屏换行时一起换到下一行靠右，不会被拆开。 */
+.mail-actions { display: flex; gap: 4px; align-items: center; flex: none; }
 
 .mail-ghost {
   display: flex; align-items: center; gap: 6px; flex: none;
@@ -676,6 +679,29 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   font: 400 var(--text-sm)/var(--leading-ui) var(--font-body);
 }
 .mail-ask input:focus { outline: none; }
+/* 提交修改要求：和对话输入框的发送按钮同一套样式，缩小一号放进短输入里。 */
+.mail-ask-send {
+  flex: none; width: 26px; height: 26px; border: none; border-radius: 50%;
+  display: grid; place-items: center; cursor: pointer;
+  color: var(--button-fg); background: var(--button-bg);
+  transition: background-color var(--duration-fast) ease-in-out;
+}
+.mail-ask-send:hover:not(:disabled) { background: var(--button-bg-hover); }
+.mail-ask-send:disabled { opacity: 0.38; cursor: not-allowed; }
+.mail-ask-send:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-ring); }
+
+/* 取消：次要操作，紧挨主操作左侧，只有文字，不和“确认并发送”争视线。 */
+.mail-cancel {
+  flex: none; height: 34px; padding: 0 12px; border: none; border-radius: var(--radius-md);
+  background: transparent; color: var(--color-muted);
+  font: 510 var(--text-sm)/1 var(--font-body); cursor: pointer; white-space: nowrap;
+  transition: background-color var(--duration-fast) ease-in-out, color var(--duration-fast) ease-in-out;
+}
+.mail-cancel:hover:not(:disabled, .mail-cancelled) { color: var(--color-fg); background: var(--color-border-subtle); }
+.mail-cancel:disabled { opacity: 0.45; cursor: not-allowed; }
+/* 取消之后，取消按钮原位留下“已取消”：同一个样式，不可点，不再有悬停反馈。 */
+.mail-cancelled { display: flex; align-items: center; margin-left: auto; cursor: default; }
+.mail-cancel:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-ring); }
 
 /* 主操作：浅主色底 + 深主色字，和用户气泡同一套配色，不做整块实心。 */
 .mail-send {
@@ -1141,6 +1167,11 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   /* 展开的修改要求独占一行，状态与主操作留在下一行，谁都不被挤成一个字。 */
   .mail-ask { flex: 1 1 100%; max-width: none; }
   .mail-ghost { flex: none; }
+  /* 待确认时工具条放不下状态徽标：整个交给读屏，修改要求与两个操作才能排在一行；
+     操作按钮本身已说明在等确认。其余状态没有操作按钮，徽标照常显示。 */
+  .mail-toolbar.with-actions .badge {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
   .mail-head { padding: 4px 0 8px; }
   .mail-row { grid-template-columns: 56px minmax(0, 1fr); gap: 8px; padding: 4px 8px; }
   .mail-compose { padding: 10px 12px; }

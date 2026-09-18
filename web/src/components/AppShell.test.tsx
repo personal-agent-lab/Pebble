@@ -59,46 +59,32 @@ const open = async (path: string) => {
 const rowOf = (goal: string) =>
   [...document.querySelectorAll(ROW)].find((node) => node.textContent === goal)?.closest("a") ?? null;
 
-const dotOf = (goal: string) => rowOf(goal)?.querySelector(".nav-dot") ?? null;
+const pendingOf = (goal: string) => rowOf(goal)?.querySelector(".nav-dot.wait") ?? null;
+const freshOf = (goal: string) => rowOf(goal)?.querySelector(".nav-dot.fresh") ?? null;
 
-test("打开的任务读过就不再标记，其余任务照旧提醒", async () => {
+test("待确认一直标着，打开任务也不消失，处理完才消失", async () => {
   await open("/tasks/task-2");
+  expect(pendingOf("正在看的任务")).toBeTruthy();
+  expect(pendingOf("没读过的任务")).toBeTruthy();
+  // 标题计数是实际还没确认的条数，与读没读过无关。
+  expect(document.querySelector(".nav-head-count")?.textContent).toBe("2 待确认");
+  cleanup();
 
-  // 读过的痕迹在列表读出来之后落下，标记随即消失。
-  await waitFor(() => expect(dotOf("正在看的任务")).toBeNull());
-  expect(dotOf("没读过的任务")).toBeTruthy();
-  // 头部计数与圆点同源：只数没读过的待确认。
+  operations["task-2"] = [{ operation_id: "op-2", type: "mail_draft", version: 1, status: "cancelled" }];
+  await open("/tasks");
+  expect(pendingOf("正在看的任务")).toBeNull();
   expect(document.querySelector(".nav-head-count")?.textContent).toBe("1 待确认");
 });
 
-test("读过的痕迹留在本地，换个页面回来仍然不提醒", async () => {
-  await open("/tasks/task-2");
-  await waitFor(() => expect(dotOf("正在看的任务")).toBeNull());
-  cleanup();
-
-  await open("/tasks");
-  expect(dotOf("正在看的任务")).toBeNull();
-  expect(dotOf("没读过的任务")).toBeTruthy();
-});
-
-test("草稿改出新版本重新提醒，读过的是那一版不是那条操作", async () => {
-  await open("/tasks/task-2");
-  await waitFor(() => expect(dotOf("正在看的任务")).toBeNull());
-  cleanup();
-
-  operations["task-2"] = [{ operation_id: "op-2", type: "mail_draft", version: 2, status: "pending" }];
-  await open("/tasks");
-  expect(dotOf("正在看的任务")).toBeTruthy();
-});
-
-test("邮件触发的任务在列表里带邮件标记，自己发起的只留空槽位", async () => {
+test("每行都有来源图标：邮件触发与自己发起各一种", async () => {
   await open("/tasks");
 
-  expect(rowOf("没读过的任务")?.querySelector(".nav-task-source svg")).toBeTruthy();
+  const mail = rowOf("没读过的任务")?.querySelector(".nav-task-source svg");
+  const chat = rowOf("正在看的任务")?.querySelector(".nav-task-source svg");
+  expect(mail).toBeTruthy();
+  expect(chat).toBeTruthy();
+  expect(mail?.innerHTML).not.toBe(chat?.innerHTML);
   expect(rowOf("没读过的任务")?.textContent).toContain("由新邮件触发");
-  // 槽位照留，任务名才对得齐；标记本身不出现。
-  expect(rowOf("正在看的任务")?.querySelector(".nav-task-source")).toBeTruthy();
-  expect(rowOf("正在看的任务")?.querySelector(".nav-task-source svg")).toBeNull();
   expect(rowOf("正在看的任务")?.textContent).not.toContain("由新邮件触发");
 });
 
@@ -125,14 +111,16 @@ test("生成完还没看过的任务单独标记，打开后消失，待确认�
   operations["task-2"] = [];
   await open("/tasks");
 
-  expect(dotOf("正在看的任务")?.classList.contains("fresh")).toBe(true);
-  expect(dotOf("没读过的任务")?.classList.contains("wait")).toBe(true);
+  expect(freshOf("正在看的任务")).toBeTruthy();
+  // 右侧只留一个圆点：有待确认时不再叠新结果的圆点。
+  expect(pendingOf("没读过的任务")).toBeTruthy();
+  expect(freshOf("没读过的任务")).toBeNull();
   // 新结果不进“待确认”计数。
   expect(document.querySelector(".nav-head-count")?.textContent).toBe("1 待确认");
   cleanup();
 
   await open("/tasks/task-2");
-  await waitFor(() => expect(dotOf("正在看的任务")).toBeNull());
+  await waitFor(() => expect(freshOf("正在看的任务")).toBeNull());
 });
 
 test("首次启用时已有的结果都算读过", async () => {
@@ -140,5 +128,5 @@ test("首次启用时已有的结果都算读过", async () => {
   operations["task-2"] = [];
   await open("/tasks");
   await waitFor(() => expect(window.localStorage.getItem("pebble.tasks.seenRuns")).not.toBeNull());
-  expect(dotOf("正在看的任务")).toBeNull();
+  expect(freshOf("正在看的任务")).toBeNull();
 });

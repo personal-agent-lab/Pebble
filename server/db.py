@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import default_model, get_settings
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -257,6 +257,14 @@ SCHEMA_V14 = (
     "PRIMARY KEY(item_id,file_id), UNIQUE(item_id,position))",
 )
 
+# 用户可以取消待确认的邮件草稿：cancelled 是不产生外部写入的终止状态，没有执行记录。
+SCHEMA_V15 = (
+    SCHEMA_V7[0].replace("'created'", "'created','cancelled'"),
+    "INSERT INTO operations_new SELECT * FROM operations",
+    "DROP TABLE operations",
+    "ALTER TABLE operations_new RENAME TO operations",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -272,6 +280,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     12: SCHEMA_V12,
     13: SCHEMA_V13,
     14: SCHEMA_V14,
+    15: SCHEMA_V15,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

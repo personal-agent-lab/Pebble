@@ -7,12 +7,12 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ApiError, type TimelineItem } from "../api";
 import MailDraftCard from "./MailDraftCard";
 
-const { editDraft, confirmOperation, verifyExecution } = vi.hoisted(() => ({
-  editDraft: vi.fn(), confirmOperation: vi.fn(), verifyExecution: vi.fn(),
+const { editDraft, confirmOperation, cancelOperation, verifyExecution } = vi.hoisted(() => ({
+  editDraft: vi.fn(), confirmOperation: vi.fn(), cancelOperation: vi.fn(), verifyExecution: vi.fn(),
 }));
 vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
-  return { ...actual, editDraft, confirmOperation, verifyExecution };
+  return { ...actual, editDraft, confirmOperation, cancelOperation, verifyExecution };
 });
 
 const item: Extract<TimelineItem, { kind: "mail_draft" }> = {
@@ -25,7 +25,7 @@ const item: Extract<TimelineItem, { kind: "mail_draft" }> = {
 };
 
 beforeEach(() => {
-  editDraft.mockReset(); confirmOperation.mockReset(); verifyExecution.mockReset();
+  editDraft.mockReset(); confirmOperation.mockReset(); cancelOperation.mockReset(); verifyExecution.mockReset();
   editDraft.mockResolvedValue({ version: 4 });
   confirmOperation.mockResolvedValue(item.execution);
 });
@@ -127,4 +127,23 @@ test("发送中、成功、失败和待核实都在原卡片呈现", () => {
   }} sendMessage={vi.fn()} onChanged={vi.fn()} />);
   expect(screen.getByText("结果待核实：网络中断。未核实前不能再次发送。")).toBeTruthy();
   expect(screen.getByRole("button", { name: "核实实际结果" })).toBeTruthy();
+});
+
+test("取消先保存未保存的改动，再按最新版本取消", async () => {
+  const onChanged = vi.fn().mockResolvedValue(undefined);
+  cancelOperation.mockResolvedValue({ ...item.execution, status: "cancelled" });
+  render(<MailDraftCard taskId="task-1" item={item} sendMessage={vi.fn()} onChanged={onChanged} />);
+  await userEvent.type(screen.getByLabelText("正文"), "补一句");
+  await userEvent.click(screen.getByRole("button", { name: "取消" }));
+  await waitFor(() => expect(cancelOperation).toHaveBeenCalledWith("task-1", "op-1", 4));
+  expect(confirmOperation).not.toHaveBeenCalled();
+});
+
+test("已取消的草稿只读，不再有取消与发送按钮", () => {
+  const cancelled = { ...item, execution: { ...item.execution, status: "cancelled" as const } };
+  render(<MailDraftCard taskId="task-1" item={cancelled} sendMessage={vi.fn()} onChanged={vi.fn()} />);
+  expect(screen.getByText("已取消")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "取消" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /确认并发送/ })).toBeNull();
+  expect((screen.getByLabelText("正文") as HTMLTextAreaElement).disabled).toBe(true);
 });

@@ -1,7 +1,8 @@
 /** 后端 Interface：统一时间线、邮件草稿版本、确认执行、资料与长期记忆管理。 */
 
 export type RunStatus = "pending" | "running" | "done" | "error" | "interrupted";
-export type OperationStatus = "pending" | "sending" | "sent" | "creating" | "created" | "failed" | "unknown";
+export type OperationStatus =
+  | "pending" | "sending" | "sent" | "creating" | "created" | "failed" | "unknown" | "cancelled";
 
 export type Run = {
   run_id: string;
@@ -257,6 +258,11 @@ export const editDraft = (
 
 export const confirmOperation = (taskId: string, operationId: string, version: number) =>
   request<Execution>(`/tasks/${taskId}/confirmations`, {
+    method: "POST",
+    body: JSON.stringify({ operation_id: operationId, version }),
+  });
+export const cancelOperation = (taskId: string, operationId: string, version: number) =>
+  request<Execution>(`/tasks/${taskId}/cancellations`, {
     method: "POST",
     body: JSON.stringify({ operation_id: operationId, version }),
   });
