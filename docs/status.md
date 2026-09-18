@@ -9,7 +9,7 @@
 | 对话与任务：Web、Gateway、Agent 装配、有序时间线与 SSE、按任务固定模型、附件上传、中断消息重试 | 已实现 | `v1-spec.md` §4.1、`v1-design.md` |
 | Gmail：搜索与读取、入站附件、回复与新邮件草稿、确认发送与核实、新邮件增量检测 | 已实现 | `contracts/mail.md` |
 | iCloud Calendar：查询、冲突检查、直连创建与核实 | 已实现 | `contracts/calendar.md` |
-| 长期记忆：两份记忆文件、每轮记忆判断、后台记忆回顾、管理页面 `/memory` | 已实现 | `memory-spec.md` §3、§5，`contracts/memory.md` |
+| 长期记忆：两份记忆文件、静默的每轮记忆判断、后台记忆回顾、管理页面 `/memory` | 已实现 | `memory-spec.md` §3、§5，`contracts/memory.md` |
 | 历史对话检索：`history_search`、`history_read`、搜索页 `/search` | 已实现 | `memory-spec.md` §4、§5.4，`contracts/memory.md` §3 |
 | 个人资料库 Phase 1–4：保存、读取、更新、历史，分节检索与按引用读取，删除、移动、恢复与用户改动跟随，资料目录，管理界面，任务归档 | 已实现 | `kb-spec.md`、`contracts/personal-kb.md` |
 | 个人资料库 Phase 6：正文图片与图片说明 | 已实现 | `contracts/personal-kb.md` §10 |
@@ -29,7 +29,7 @@ SQLite schema 版本为 14。
 - Vite 开发服务器开放局域网且不做访问控制，只能配合 `PEBBLE_AUTH=off` 在开发时使用。
 - 触发源插孔仍带邮件域名（`MailSource`、`accept_new_mail`、`create_app(mail_source=...)`），与“通用层不持有域措辞”的约定不一致；第二个触发源接入时改为域中立命名。
 - 联网查询的来源没有独立呈现：`agent/client.py` 的流只取 `TextBlock`，`WebSearch` 结果里的 `Links` 和 `WebFetch` 实际抓取的 URL 都被丢弃，回答末尾的来源列表是模型自己写进正文的 Markdown，已实测出现复述与实际不一致。是否持久化与展示尚未决定（个人资料库已决定回答不展示来源）。
-- 记忆不做版本管理，对话中的记忆提示也不带具体内容：误改后只能由用户说明要恢复的内容，或在记忆页面重新编辑（`memory-spec.md` §3.3）。
+- 记忆不做版本管理，每轮记忆判断也不在对话中提示：误改后只能由用户说明要恢复的内容，或在记忆页面重新编辑（`memory-spec.md` §3.3）。
 - 资料目录每轮都要纳入用户改动并解析全部资料的 frontmatter，资料很多时有额外开销；说明由模型填写，写得不好时 Agent 可能想不到去读对应资料。
 - 用户改动不是实时监听：直接改文件后，要等下一次资料库操作才纳入版本；每次操作都会先做一次 `git status`，资料库很大时有额外开销。删除、移动与恢复前需取得用户同意由工具说明约束模型遵守，程序只保证这三个工具只在用户对话轮可见。
 - 历史检索在第一次搜索时才把已有历史写进索引，历史很多时这次搜索会明显变慢；进行中的轮次搜不到。日期过滤按本机时区换算，服务与用户不在同一时区时自然日边界会有偏差。

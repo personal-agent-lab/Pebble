@@ -2,7 +2,7 @@
 
 前台主 Agent 不持有记忆工具：每个用户消息轮由独立的一次性判断会话决定写入
 （judge_registry），后台定期回顾负责跨轮模式与整理（review_registry）。两者都用同一个
-按行锚点编辑的工具追加、插入、修改、删除与移动；只有判断会话能向用户追问，回顾独立于对话运行，没有提问的对象。
+按行锚点编辑的工具追加、插入、修改、删除与移动。
 """
 
 from server.memory.service import MemoryStore
@@ -12,11 +12,6 @@ from server.tools.registry import SideEffect, ToolRegistry
 def edit_memory(operations: list[dict], *, memory_store: MemoryStore) -> dict:
     """按行锚点插入、替换、删除、移动整行或在分区末尾追加；一次调用可跨分区，整体生效。"""
     return memory_store.edit(operations)
-
-
-def ask_memory(question: str) -> dict:
-    """判断存在歧义时不做任何写入，把需要向用户确认的问题交回程序。"""
-    return {"question": question}
 
 
 # 只讲怎么调用：分区标准、锚点、各 action 与失败处理；写什么、不写什么见 notices.MEMORY_RULES。
@@ -87,13 +82,3 @@ for registry in (judge_registry, review_registry):
         side_effect=SideEffect.LOCAL_WRITE,
         param_schemas={"operations": OPERATIONS_SCHEMA},
     )
-
-judge_registry.register(
-    ask_memory,
-    name="memory_ask",
-    description=(
-        "判断存在歧义时向用户提出一句具体的确认问题，不做任何写入。"
-        "问题要指出候选内容或两种理解，让用户一句话即可回答。"
-    ),
-    side_effect=SideEffect.READONLY,
-)

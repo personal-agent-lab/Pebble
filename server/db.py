@@ -197,8 +197,8 @@ SCHEMA_V9 = (
     "WHERE status IN ('pending','running')",
 )
 
-# 程序提示：记忆判断产生的“已记住/已修改/想确认”等提示是时间线上的独立一类，
-# 不由模型输出，role 为空以区别于对话文本。重建表以放宽 kind 检查。
+# 程序提示（如后台记忆回顾结果）是时间线上的独立一类，不由模型输出，
+# role 为空以区别于对话文本。重建表以放宽 kind 检查。
 SCHEMA_V10 = (
     "CREATE TABLE task_timeline_items_new (item_id TEXT PRIMARY KEY, "
     "task_id TEXT NOT NULL REFERENCES tasks(task_id), "

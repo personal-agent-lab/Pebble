@@ -1,4 +1,4 @@
-"""每轮记忆判断接线：并行触发、程序提示落库与推送、失败与重启行为。
+"""每轮记忆判断接线：并行静默触发、失败与重启行为。
 
 真实落盘 SQLite 与真实 MemoryStore；Agent 用替身，判断调用可脚本化阻塞。
 """
@@ -81,7 +81,7 @@ async def send(flow: JudgeFlow, task_id: str, *texts: str) -> None:
         await drain(flow.service)
 
 
-async def test_judgment_runs_in_parallel_and_notice_reaches_timeline(judge_flow):
+async def test_judgment_runs_in_parallel_and_stays_out_of_timeline(judge_flow):
     task_id = judge_flow.tasks.create_task("闲聊")["task_id"]
     release = asyncio.Event()
 
@@ -108,24 +108,11 @@ async def test_judgment_runs_in_parallel_and_notice_reaches_timeline(judge_flow)
 
     release.set()
     await drain(judge_flow.service)
-    assert notices(task_id) == ["已更新记忆"]
-    notice_items = [item for item in timeline_items(task_id) if item["kind"] == "notice"]
-    assert notice_items[0]["role"] is None
-    # 提示挂在触发它的消息轮上，并经 SSE 推送。
-    run = judge_flow.service.latest_run(task_id)
-    assert notice_items[0]["run_id"] == run["run_id"]
+    assert notices(task_id) == []
     events = []
     while not subscription.empty():
         events.append(subscription.get_nowait())
-    notice_events = [event for event in events if event["type"] == "notice"]
-    assert notice_events == [
-        {
-            "run_id": run["run_id"],
-            "item_id": notice_items[0]["item_id"],
-            "type": "notice",
-            "text": "已更新记忆",
-        }
-    ]
+    assert [event for event in events if event["type"] == "notice"] == []
     assert judge_flow.store.snapshot()["user"]["content"] == "用户周末常去徒步"
 
 
@@ -157,29 +144,6 @@ async def test_new_mail_turn_does_not_trigger_judgment(judge_flow):
     assert judge_flow.gateway.judge_calls == []
 
 
-async def test_next_turn_judgment_sees_system_notices(judge_flow):
-    task_id = judge_flow.tasks.create_task("闲聊")["task_id"]
-
-    async def asking_judge(task_id, instructions, message):
-        return [
-            {
-                "tool": "memory_ask",
-                "arguments": {"question": "你说的Hermes是指哪个项目？"},
-                "result": {"question": "你说的Hermes是指哪个项目？"},
-            }
-        ]
-
-    judge_flow.gateway.judge_handler = asking_judge
-    await send(judge_flow, task_id, "我在看 Hermes")
-    assert notices(task_id) == ["想确认：你说的Hermes是指哪个项目？"]
-
-    judge_flow.gateway.judge_handler = None
-    await send(judge_flow, task_id, "是写 Agent 的那个")
-    second = judge_flow.gateway.judge_calls[1]["message"]
-    assert "## 用户刚发的消息\n是写 Agent 的那个" in second
-    assert "系统：想确认：你说的Hermes是指哪个项目？" in second
-
-
 async def test_restart_drops_in_flight_judgment(judge_flow, settings):
     task_id = judge_flow.tasks.create_task("闲聊")["task_id"]
     release = asyncio.Event()
@@ -200,7 +164,7 @@ async def test_restart_drops_in_flight_judgment(judge_flow, settings):
         assert notices(task_id) == []
         release.set()
         await drain(service)
-        # 重启后的新消息才触发新判断；被丢弃的那次不会补发提示。
+        # 重启后的新消息才触发新判断；被丢弃的那次不会补跑。
         service.submit_message(task_id, "还在吗")
         await drain(service)
         assert len(judge_flow.gateway.judge_calls) == 2

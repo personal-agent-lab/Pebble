@@ -159,7 +159,7 @@ class QoderGateway:
         self.review_tools = build_tools(
             replace(deps, memory_store=self.memory_store), registry=review_registry
         )
-        # 每轮记忆判断的一次性会话用判断工具集：新增、替换、停止使用与追问。
+        # 每轮记忆判断的一次性会话用判断工具集：新增、替换与停止使用。
         self.judge_tools = build_tools(
             replace(deps, memory_store=self.memory_store), registry=judge_registry
         )

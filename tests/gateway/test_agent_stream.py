@@ -272,9 +272,7 @@ def test_judge_options_expose_judgment_tools_in_fresh_session(settings):
         model="q-model",
     )
 
-    assert options.allowed_tools == [
-        f"mcp__{TOOL_SERVER_NAME}__{name}" for name in ("memory_edit", "memory_ask")
-    ]
+    assert options.allowed_tools == [f"mcp__{TOOL_SERVER_NAME}__memory_edit"]
     assert options.tools == []
     assert options.system_prompt == "判断指令"
     assert options.resume is None
@@ -681,16 +679,14 @@ def test_judge_memory_records_real_tool_results(settings, monkeypatch):
         gateway,
         monkeypatch,
         ToolCall("memory_edit", {"operations": [ADD_CHINESE]}),
-        ToolCall("memory_ask", {"question": "要改哪一条？"}),
         task_id=task_id,
     )
 
-    assert [record["tool"] for record in records] == ["memory_edit", "memory_ask"]
+    assert [record["tool"] for record in records] == ["memory_edit"]
     first = records[0]
     assert first["arguments"] == {"operations": [ADD_CHINESE]}
     assert first["result"]["changed"] is True
     assert first["result"]["applied"][0]["added"] == ["默认使用中文"]
-    assert records[1]["result"] == {"question": "要改哪一条？"}
     assert (settings.data_dir / "memory" / "USER.md").read_text() == "默认使用中文"
 
 

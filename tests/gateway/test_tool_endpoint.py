@@ -290,11 +290,6 @@ def test_review_endpoint_exposes_review_tools(settings):
             assert stale.isError is True
             assert "用户在研究记忆机制" in tool_payload(stale)["memory"]["user"]["content"]
 
-            # 回顾没有提问的对象：追问工具只在每轮判断会话中存在。
-            blocked = await session.call_tool("memory_ask", {"question": "要改哪一条？"})
-            assert blocked.isError is True
-            assert tool_payload(blocked)["error"] == "unknown_tool"
-
     asyncio.run(scenario())
     assert store.snapshot()["user"]["content"] == "用户在研究记忆机制"
 
@@ -317,7 +312,7 @@ def test_judge_endpoint_exposes_judgment_tools(settings):
             mcp_session(server, f"{BASE_URL}{path}") as session,
         ):
             listed = await session.list_tools()
-            assert [tool.name for tool in listed.tools] == ["memory_edit", "memory_ask"]
+            assert [tool.name for tool in listed.tools] == ["memory_edit"]
 
             replaced = await session.call_tool(
                 "memory_edit",

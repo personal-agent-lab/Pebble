@@ -623,26 +623,17 @@ class GatewayRuntime:
         task.add_done_callback(self._judges.discard)
 
     async def _judge(self, row: dict, message: str) -> None:
-        """执行一轮记忆判断并把程序提示落库、推给页面；判断失败不影响本轮回答。"""
-        task_id = row["task_id"]
+        """静默执行一轮记忆判断；判断失败不影响本轮回答。"""
         try:
-            notices = await run_judgment(
-                self.gateway, self.memory_store, self.path, task_id=task_id, message=message
+            await run_judgment(
+                self.gateway,
+                self.memory_store,
+                self.path,
+                task_id=row["task_id"],
+                message=message,
             )
         except Exception:
-            logging.getLogger(__name__).exception("记忆判断失败，本轮不生成记忆提示")
-            return
-        for text in notices:
-            with session(self.path) as conn, write(conn):
-                try:
-                    operations.task(conn, task_id)
-                except NotFoundError:
-                    return  # 任务在判断期间被删除
-                item_id = timeline.insert_notice(conn, task_id, row["run_id"], text)
-            self.events.publish(
-                task_id,
-                {"run_id": row["run_id"], "item_id": item_id, "type": "notice", "text": text},
-            )
+            logging.getLogger(__name__).exception("记忆判断失败")
 
     # ---------- 任务标题 ----------
 

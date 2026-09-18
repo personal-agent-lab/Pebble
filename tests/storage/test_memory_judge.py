@@ -10,7 +10,6 @@ from server.memory.judge import (
     JUDGE_MESSAGE_HEADER,
     JUDGE_RECENT_TURNS,
     build_judge_message,
-    notice_texts,
     recent_text_items,
 )
 from server.memory.service import MemoryStore
@@ -64,9 +63,9 @@ def seed_round(conn, task_id: str, text: str) -> str:
 # ---------- 判断工具契约 ----------
 
 
-def test_judge_registry_exposes_edit_and_ask(store):
+def test_judge_registry_exposes_only_edit(store):
     tools = judge_tools(store)
-    assert set(tools) == {"memory_edit", "memory_ask"}
+    assert set(tools) == {"memory_edit"}
     # 前台的 memory 工具不出现在判断会话中。
     assert judge_registry.get_tool("memory") is None
 
@@ -77,13 +76,6 @@ def test_judge_edit_tool_writes_through_store(store):
     line = memory_anchor(store, "用户对历史感兴趣")
     assert edit([{"action": "delete", "anchor": line}])["changed"] is True
     assert store.snapshot()["user"]["content"] == ""
-
-
-def test_judge_ask_records_question_without_writing(store):
-    tools = judge_tools(store)
-    assert tools["memory_ask"]("你想改的是哪一条？") == {"question": "你想改的是哪一条？"}
-    assert store.snapshot()["user"]["content"] == ""
-    assert store.snapshot()["memory"]["content"] == ""
 
 
 # ---------- 输入组装 ----------
@@ -130,67 +122,3 @@ def test_recent_text_items_limited_to_recent_turns(settings):
         texts = [item["text"] for item in recent_text_items(conn, task_id)]
     assert "第0条" not in texts and "第1条" not in texts
     assert texts[0] == "第2条"
-
-
-def test_recent_text_items_include_notices(settings):
-    init_db()
-    with session() as conn:
-        task_id = make_task(conn)
-        run_id = seed_round(conn, task_id, "第一条")
-        timeline.insert_notice(conn, task_id, run_id, "想确认：你指的是哪一条？")
-        items = recent_text_items(conn, task_id)
-    assert items[-1] == {"kind": "notice", "role": None, "text": "想确认：你指的是哪一条？"}
-
-
-# ---------- 提示文案 ----------
-
-
-def edited(*applied):
-    return {
-        "tool": "memory_edit",
-        "arguments": {"operations": []},
-        "result": {"changed": True, "applied": list(applied)},
-    }
-
-
-def change(action, removed=(), added=(), changed=True, **extra):
-    return {
-        "action": action,
-        "target": "user",
-        "removed": list(removed),
-        "added": list(added),
-        "changed": changed,
-        **extra,
-    }
-
-
-def failed(error, message):
-    return {"tool": "memory_edit", "arguments": {}, "error": {"error": error, "message": message}}
-
-
-def test_notice_texts_report_actual_results():
-    records = [
-        edited(
-            change("append", added=["- 用户对历史感兴趣"]),
-            change("insert", added=["- 用户偏好通俗读物"]),
-            change("replace", ["- 内部会议 30 分钟"], ["- 内部会议 45 分钟"]),
-            change("delete", ["- 用户偏好英文"]),
-            change("move", ["- 工作日历用于内部会议"], ["- 工作日历用于内部会议"], to="memory"),
-            change("append", changed=False, reason="exists"),
-        ),
-        {"tool": "memory_ask", "arguments": {}, "result": {"question": "要改哪一条？"}},
-    ]
-    assert notice_texts(records) == [
-        "已更新记忆",
-        "这条内容已经在记忆里。",
-        "想确认：要改哪一条？",
-    ]
-
-
-def test_notice_texts_report_failure_only_when_last_edit_failed():
-    saved = edited(change("append", added=["新偏好"]))
-    assert notice_texts([failed("invalid_memory", "未通过校验"), saved]) == ["已更新记忆"]
-    assert notice_texts([saved, failed("memory_full", "放不下")]) == [
-        "已更新记忆",
-        "记忆保存失败：放不下",
-    ]

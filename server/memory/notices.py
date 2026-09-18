@@ -1,8 +1,7 @@
-"""记忆会话的共用部分：判断与回顾共用的写入规则、给模型的当前记忆材料、按真实工具结果生成的用户提示。
+"""记忆会话的共用部分：判断与回顾共用的写入规则、当前记忆材料和回顾提示。
 
-提示只依据记录到的工具调用与结果生成，模型自述不作为事实来源。每轮判断有实际变更时只提示
-一次“已更新记忆”，不复述内容；后台回顾只在修改、删除或跨分区移动（整理动了用户已有的内容）时
-提示一次“已整理记忆”，新增不打扰用户。
+每轮判断静默运行。后台回顾只在修改、删除或跨分区移动（整理动了用户已有的内容）时
+依据真实工具结果提示一次“已整理记忆”，新增不打扰用户。
 """
 
 from __future__ import annotations
@@ -26,7 +25,6 @@ MEMORY_RULES = (
     "不能去掉或扩大适用条件；实在腾不出空间就不保存。"
 )
 
-UPDATED_NOTICE = "已更新记忆"
 REVIEW_NOTICE = "已整理记忆"
 REVIEW_NOTICE_ACTIONS = {"replace", "delete", "move"}
 
@@ -40,32 +38,6 @@ def memory_materials(snapshot: dict) -> tuple[Material, ...]:
         title = f"当前长期记忆：{label}（已用 {usage['chars']} / 上限 {usage['limit']} 字）"
         materials.append(Material(title, view[target]["content"]))
     return tuple(materials)
-
-
-def notice_texts(records: list[dict]) -> list[str]:
-    """每轮判断的实际工具调用与结果映射为用户可见的提示，按调用顺序；实际变更合并为一条“已更新记忆”。
-
-    写入失败只看这次判断最后一次 memory_edit：失败后重试成功的，不再提示前面的失败。
-    """
-    edits = [index for index, record in enumerate(records) if record["tool"] == "memory_edit"]
-    last_edit = edits[-1] if edits else -1
-    notices = []
-    for index, record in enumerate(records):
-        if "error" in record:
-            if record["tool"] != "memory_edit" or index == last_edit:
-                notices.append(f"记忆保存失败：{record['error']['message']}")
-            continue
-        if record["tool"] == "memory_ask":
-            notices.append(f"想确认：{record['result']['question']}")
-            continue
-        for edit in record["result"].get("applied", []):
-            if not edit["changed"]:
-                if edit.get("reason") == "exists":
-                    notices.append("这条内容已经在记忆里。")
-                continue
-            if UPDATED_NOTICE not in notices:
-                notices.append(UPDATED_NOTICE)
-    return notices
 
 
 def review_notice_texts(records: list[dict]) -> list[str]:
