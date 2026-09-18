@@ -1,18 +1,21 @@
 # 个人知识库契约
 
-状态：**Phase 4 已实现**（`kb_list`/`kb_save`/`kb_read`/`kb_update`/`kb_history`/`kb_search`/`kb_delete`/`kb_move`/`kb_restore`/`kb_archive`，含 SQLite FTS5 分节索引、用户改动的自动跟随、每轮常驻的资料目录（第 7 节）与资料管理 HTTP 接口（第 9 节））。Phase 5 是约定，尚未实现。产品行为以 `docs/kb-spec.md` 为准；本文定义个人知识库（Personal KB）的存储形态、索引、工具字段与引用语义。实现与本文冲突时先改本文，不静默偏离。
+产品行为以 `docs/kb-spec.md` 为准；本文定义个人知识库（Personal KB）的存储形态、索引、工具字段与引用语义。实现与本文冲突时先改本文，不静默偏离。
 
 知识库保存“具体资料”，属于按需检索；Memory 保存“关于用户的精简背景、偏好与长期目标”，属于常驻上下文，见 `skills.md` 与 `memory-spec.md`。
 
 ## 0. 交付阶段
 
-| 阶段 | 内容 | 状态 |
-| --- | --- | --- |
-| Phase 1 | `kb/` 文件存储 + 本地 Git 版本；资料列举、保存、读取、更新和历史读取；稳定 `id`、版本历史；与长期记忆的边界 | 已实现 |
-| Phase 2 | 按内容检索：`kb_search` + SQLite FTS5 分节索引、增量替换与重建；按路径、`id` 或引用读取原文；回答不向用户展示来源 | 已实现 |
-| Phase 3 | 自动跟随用户在文件系统里的改动（自动纳入版本、识别移动与重命名、为无标识文件补标识）；`kb_delete`/`kb_move`/`kb_restore`；触发轮开放资料新建与修改 | 已实现 |
-| Phase 4 | 资料管理界面（浏览、搜索、编辑）；`kb_archive` 任务归档；资料 `summary` 与每轮常驻的资料目录 | 已实现 |
-| Phase 5 | 主题页与后台主题整理；外部笔记导入（首个来源熊掌记） | 未实现 |
+| 阶段 | 内容 |
+| --- | --- |
+| Phase 1 | `kb/` 文件存储 + 本地 Git 版本；资料列举、保存、读取、更新和历史读取；稳定 `id`、版本历史；与长期记忆的边界 |
+| Phase 2 | 按内容检索：`kb_search` + SQLite FTS5 分节索引、增量替换与重建；按路径、`id` 或引用读取原文；回答不向用户展示来源 |
+| Phase 3 | 自动跟随用户在文件系统里的改动（自动纳入版本、识别移动与重命名、为无标识文件补标识）；`kb_delete`/`kb_move`/`kb_restore`；触发轮开放资料新建与修改 |
+| Phase 4 | 资料管理界面（浏览、搜索、编辑）；`kb_archive` 任务归档；资料 `summary` 与每轮常驻的资料目录 |
+| Phase 5 | 主题页与后台主题整理 |
+| Phase 6 | 资料正文嵌入图片：`kb/assets/` 存储、上传与读取接口、编辑器粘贴插图、插入后在后台生成图片说明（第 10 节） |
+
+各阶段的实现进度见 `docs/status.md`。
 
 索引只收录内容与其 Git 版本一致的文件；Phase 3 起用户在文件系统里的改动在每次资料库操作前自动纳入版本（第 3 节），因此改完即可在下一次检索中命中。程序不监听文件变化，改动在下一次任何资料库操作时才纳入。
 
@@ -22,15 +25,15 @@
 
 ```text
 <data_dir>/kb/
-├── inbox/            # 未分类的资料
 ├── people/           # 人物，一人一文件
 ├── projects/         # 事项与项目
 ├── reference/        # 稳定参考资料
 ├── topics/           # 主题页（Phase 5），后台整理只写这里
-└── archive/          # 任务归档：关键信息与逐项执行结果
+├── archive/          # 任务归档：关键信息与逐项执行结果
+└── assets/           # 正文引用的图片（Phase 6，第 10 节）
 ```
 
-除 `topics/` 与 `archive/` 外，上图只是示例，不是固定分类法。保存时由 Agent 按内容自选相对路径、可新建文件夹；省略 `path` 时落到 `kb/inbox/`。索引、资料目录与导入状态都是派生或运行数据，放在数据目录内且不进 Git，可随时从文件重建（导入状态除外，见第 8 节）。
+除 `topics/`、`archive/` 与 `assets/` 外，上图只是示例，不是固定分类法。保存时由 Agent 按内容自选相对路径、可新建文件夹；省略 `path` 时放在 `kb/` 根目录。索引与资料目录都是派生数据，放在数据目录内且不进 Git，可随时从文件重建。
 
 ## 2. 文件格式
 
@@ -40,14 +43,13 @@ UTF-8 Markdown，带 frontmatter：
 ---
 id: kb_01HZQ3M7V4W2X8         # 稳定标识，路径变化时不变
 title: 张老师
-tags: [课程, GSE]              # 可选，空则省略
-summary: GSE 课程任课老师       # 一句话说明，出现在资料目录里；主题页必填
+summary: GSE 课程任课老师       # 一句话说明，出现在资料目录里并参与检索；主题页必填
 created_at: 2026-09-14T10:22:31+08:00
 updated_at: 2026-09-14T10:22:31+08:00
 ---
 ```
 
-核心字段为 `id`、`title`、`created_at`、`updated_at`；`summary`（一句话说明）与 `tags` 可选，`summary` 强烈建议填写、主题页必填。资料不记录出处字段。资料的类别由目录与 `tags` 体现，不强制 `kind` 枚举。正文用二级标题分节，标题文本即锚点。原始内容与模型总结在同一文件中必须分节标明，不混写。
+核心字段为 `id`、`title`、`created_at`、`updated_at`；`summary`（一句话说明）可选，强烈建议填写、主题页必填。资料不记录出处字段，也不带标签。资料的类别由目录体现，不强制 `kind` 枚举。正文用二级标题分节，标题文本即锚点。原始内容与模型总结在同一文件中必须分节标明，不混写。
 
 用户新建、没有 frontmatter 或缺少 `id` 的 Markdown 文件在纳入版本时由程序补上 `id`、`title`（取第一个一级标题，没有时取文件名）、`created_at`、`updated_at`，正文原样保留。复制出来、`id` 与另一份仍存在的资料相同的新文件换发新 `id`。frontmatter 无法解析的文件照样纳入版本，但不补标识、不进入索引。
 
@@ -59,13 +61,14 @@ updated_at: 2026-09-14T10:22:31+08:00
 
 | 字段 | 含义 |
 | --- | --- |
-| `id`、`path`、`title`、`tags` | 资料标识与分类 |
+| `id`、`path`、`title` | 资料标识 |
+| `summary` | 资料的一句话说明，同一份资料的各分节相同 |
 | `heading` | 分节标题路径，例如 `张老师 / 沟通偏好`；前言与整篇只有资料标题 |
 | `lines` | 该分节在文件中的起止行（含 frontmatter 的真实行号） |
 | `content_hash` | 该分节内容哈希 |
 | `commit` | 写入该版本时的 Git 提交 |
 
-检索用 SQLite FTS5 的 `trigram` 分词器，中文连续文本、英文与编号都能命中；1–2 个字的词无法被 trigram 命中，改在同一张索引表上做包含匹配，不引入第二套检索实现。排序先看命中字段（标题、分节标题、标签、正文），再看 FTS5 相关度，分数相同时按路径与行号保持稳定顺序。排序在全部候选上完成后才截断到 `max_results`，正文只在截断后为最终命中取回，保证最相关的结果不会因命中数量大而被丢弃。
+检索用 SQLite FTS5 的 `trigram` 分词器，中文连续文本、英文与编号都能命中；1–2 个字的词无法被 trigram 命中，改在同一张索引表上做包含匹配，不引入第二套检索实现。排序先看命中字段（标题、分节标题、一句话说明、正文），再看 FTS5 相关度，分数相同时按路径与行号保持稳定顺序。排序在全部候选上完成后才截断到 `max_results`，正文只在截断后为最终命中取回，保证最相关的结果不会因命中数量大而被丢弃。
 
 更新规则：
 
@@ -91,7 +94,7 @@ updated_at: 2026-09-14T10:22:31+08:00
 | `kb_update` | 本地写 | Phase 1 | 修改已有资料文件 |
 | `kb_history` | 只读 | Phase 1 / Phase 3 | 列出一份资料的历史版本，Phase 3 起含已删除资料 |
 | `kb_delete` | 本地写，仅用户对话轮 | Phase 3 | 删除资料文件，历史保留 |
-| `kb_move` | 本地写，仅用户对话轮 | Phase 3 | 移动或重命名资料 |
+| `kb_move` | 本地写，仅用户对话轮 | Phase 3 | 把资料移到别的文件夹（改名称用 `kb_update` 改标题） |
 | `kb_restore` | 本地写，仅用户对话轮 | Phase 3 | 从历史版本恢复资料 |
 | `kb_archive` | 本地写 | Phase 4 | 归档一次任务的关键信息与逐项结果 |
 
@@ -111,30 +114,37 @@ updated_at: 2026-09-14T10:22:31+08:00
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
 | `query` | string | 检索词；含空格时按多个词处理，全部命中才算命中 |
-| `tag` | string | 可选，限定标签 |
 | `max_results` | integer | 最多返回数，默认 10，范围 1–20 |
 
 输出 `results[]`，每项含 `id`、`path`、`title`、`heading`、`lines`、`snippet`、`score` 与 `ref`（结构见第 5 节），不返回整篇正文。无命中时 `results` 为空。
 
 ### `kb_list`
 
-输入可选的资料库内 `directory` 与可选 `deleted`。默认输出该目录及子目录中每份资料的 `id`、`path`、`title`、`summary`、`tags` 和当前 `version`，不返回正文。它只列目录与元数据，按内容找资料用 `kb_search`。
+输入可选的资料库内 `directory` 与可选 `deleted`。默认输出该目录及子目录中每份资料的 `id`、`path`、`title`、`summary`、`updated_at` 和当前 `version`，不返回正文。它只列目录与元数据，按内容找资料用 `kb_search`。
 
-`deleted: true` 时改为列出已删除且尚未恢复的资料（按删除时间从新到旧，每份资料只列最近一次删除），每项含 `id`、删除前的 `path`、`title`、`tags`、`deleted_at` 与删除前最后的 `version`；检索与普通列举看不到已删除资料，找回时先用它定位，再交给 `kb_restore`。
+`deleted: true` 时改为列出已删除且尚未恢复的资料（按删除时间从新到旧，每份资料只列最近一次删除），每项含 `id`、删除前的 `path`、`title`、`deleted_at` 与删除前最后的 `version`；检索与普通列举看不到已删除资料，找回时先用它定位，再交给 `kb_restore`。
 
 ### `kb_read`
 
 输入 `path` 或 `id`（二者之一）、可选 `version`（某次提交的 Git commit，读取历史版本），或 `ref`（按引用读取）。`ref` 必须原样取自 `kb_search`、`kb_read` 或 `kb_save` 的返回：`path`、`commit`、`lines` 必填（模型可见 schema 已声明）。给 `ref` 时按 `commit + path + lines` 读取该版本的原文片段，并校验资料身份、路径与行号：commit 不存在或路径在该版本下不存在返回 `not_found`；`id` 不匹配、行号越界，或行号区间与资料的某个分节/整篇正文区间不对应返回 `invalid_kb`，不返回任何内容——拼接出来的区间不算引用。
 
-输出 `id`、`path`、`title`、`summary`、`tags`、`created_at`、`updated_at`、`heading`、`lines`、`commit`、`body`（Markdown 原文，不总结）和同一个规范化 `ref`（按 `ref` 读取时不含 `path`、`summary`、`created_at`、`updated_at`，路径见 `ref`）。按 `path`/`id` 读取整篇时 `heading` 为空、`lines` 覆盖正文区间（不含 frontmatter），与返回正文严格对应。模型按哪种方式读取由它自行判断，读取方式不影响回答。规范化包括：commit 展开为完整 sha，`id` 取自该版本的 frontmatter，行号区间与分节完全一致时 `heading` 重新取自该分节，否则（整篇区间）`heading` 为空。
+输出 `id`、`path`、`title`、`summary`、`created_at`、`updated_at`、`heading`、`lines`、`commit`、`body`（Markdown 原文，不总结）和同一个规范化 `ref`（按 `ref` 读取时不含 `path`、`summary`、`created_at`、`updated_at`，路径见 `ref`）。按 `path`/`id` 读取整篇时 `heading` 为空、`lines` 覆盖正文区间（不含 frontmatter），与返回正文严格对应。模型按哪种方式读取由它自行判断，读取方式不影响回答。模型可见的 `kb_read` 工具在读取当前版本整篇时把 `body` 换成 `anchored_body`：每个非空行写成 `锚点| 原文`，空行原样保留、没有锚点，供 `kb_update` 的 `operations` 定位；按 `version` 或 `ref` 读取时仍返回不带锚点的 `body`。HTTP 接口不带锚点。规范化包括：commit 展开为完整 sha，`id` 取自该版本的 frontmatter，行号区间与分节完全一致时 `heading` 重新取自该分节，否则（整篇区间）`heading` 为空。
 
 ### `kb_save`
 
-输入 `title`、`body`、可选 `summary`（工具说明要求填写；写入 `topics/` 时必填）、可选 `path`、可选 `tags[]`。省略 `path` 时落到 `kb/inbox/`，文件名由 `title` 的 slug 加 `id` 后六位生成。输出 `id`、`path`、`title`、`version`、`index_status`、`ref`。目标文件已存在时拒绝（提示改用 `kb_update`）。成功结果由程序在时间线展示实际 `kb/` 路径，不依赖模型复述；`index_status` 为 `stale` 时提示改为“资料已保存，但当前不可检索”。
+输入 `title`、`body`、可选 `summary`（工具说明要求填写；写入 `topics/` 时必填）、可选 `path`。省略 `path` 时放在 `kb/` 根目录，文件名取 `title`：只把文件系统不允许的字符（`/\:*?"<>|` 与控制字符）换成 `-`，合并空白，去掉开头的 `.`，截到 60 个字符；同一文件夹里已有同名文件时依次加编号（`标题 2.md`、`标题 3.md`）。输出 `id`、`path`、`title`、`version`、`index_status`、`ref`。目标文件已存在时拒绝（提示改用 `kb_update`）。成功结果由程序在时间线展示标题与所在文件夹（“位置：「项目」文件夹”或“资料库根目录”），不依赖模型复述，也不展示文件名；工具说明要求模型向用户提到资料时同样只说标题与文件夹；`index_status` 为 `stale` 时提示改为“资料已保存，但当前不可检索”。
 
 ### `kb_update`
 
-输入 `expected_version`（该资料当前的 Git commit）、`id` 或 `path`、以及要写入的 `title`、`tags[]`、`body`、`summary`（只传需要改的字段，未传的保持原样；`summary` 传空串表示删除说明）。输出 `id`、`path`、`title`、`previous_version`、新 `version`、`index_status`、`ref`。`expected_version` 与当前 commit 不匹配时拒绝并返回 `VersionConflictError`，不写入；`id` 跨修改保持不变，历史版本不改写。成功结果由程序在时间线展示资料位置与修改前后版本。
+输入 `expected_version`（该资料当前的 Git commit）、`id` 或 `path`、以及要写入的 `title`、`summary` 与正文（只传需要改的字段，未传的保持原样；`summary` 传空串表示删除说明）。正文二选一：`body` 整篇替换，或 `operations` 按行锚点局部修改；同时给出返回 `invalid_kb`。输出 `id`、`path`、`title`、`previous_version`、新 `version`、`index_status`、`ref`；按行修改时另有 `applied[]`。
+
+`operations` 与长期记忆的 `memory_edit` 共用同一套按行锚点编辑（`server/storage/line_edit.py`，规则见 [skills.md](skills.md) Memory 一节），只作用于正文、不触及 frontmatter，差别如下：
+- 只有一个部分（正文），动作为 `append`、`insert`、`replace`、`delete`，没有 `move`；`append` 不需要 `target`，加在正文末尾。
+- 不查重：资料里重复的行是正常内容，新增的行照写。
+- 锚点取自 `kb_read` 的 `anchored_body`；锚点不存在或修改范围冲突时整次拒绝，返回 `invalid_kb`，附 `errors[]` 与 `document`（`path`、`version`、带锚点的最新 `body`），模型据此重新定位、最多重试一次。
+- 仍校验 `expected_version`，版本不匹配先于锚点检查返回 `version_conflict`。修改后正文为空时拒绝。
+- `applied[]` 按调用顺序列出每处 `action`、`removed`、`added`（实际删除与写入的整行）与 `changed`。提交说明为 `[Kb] Edit (N changes) 标题`，整篇替换仍为 `[Kb] Update 标题`。
+`expected_version` 与当前 commit 不匹配时拒绝并返回 `VersionConflictError`，不写入；`id` 跨修改保持不变，历史版本不改写。`title` 改变时文件名随新标题更新（规则同 `kb_save`，文件夹不变）：先提交修改，再把改名以原内容单独提交一次，历史能跟随；文件名已与新标题一致（含编号）或只差大小写时不改名，改名失败只记日志、保留原文件名。输出的 `path`、`version` 与 `ref` 是改名后的。成功结果由程序在时间线展示资料名、所在文件夹与修改前后版本。
 
 ### `kb_history`
 
@@ -142,11 +152,11 @@ updated_at: 2026-09-14T10:22:31+08:00
 
 ### `kb_delete`（Phase 3）
 
-输入 `expected_version`、`id` 或 `path`。从 `kb/` 删除该文件并提交，历史保留。输出 `id`、`path`、`previous_version`、`version`（删除提交）。成功结果由程序展示“已删除资料：标题。历史版本仍保留”。
+输入 `expected_version`、`id` 或 `path`。从 `kb/` 删除该文件并提交，历史保留。输出 `id`、`path`、`previous_version`、`version`（删除提交）。成功结果由程序展示“已删除资料：标题。原位置：…。历史版本仍保留，可以恢复”。
 
 ### `kb_move`（Phase 3）
 
-输入 `expected_version`、`id` 或 `path`、`new_path`。目标已存在时拒绝。输出 `id`、`previous_path`、`path`、`previous_version`、`version`。`id` 不变。
+输入 `expected_version`、`id` 或 `path`、`new_path`。目标已存在时拒绝。输出 `id`、`previous_path`、`path`、`previous_version`、`version`。`id` 不变。工具说明把它限定为换文件夹：改资料名称用 `kb_update` 改标题。
 
 ### `kb_restore`（Phase 3）
 
@@ -154,7 +164,7 @@ updated_at: 2026-09-14T10:22:31+08:00
 
 ### `kb_archive`（Phase 4）
 
-输入 `title` 与非空 `items[]`。每项含 `kind: "original" | "summary"`、可选 `heading` 与非空 `text`：`original` 为邮件、日程等原始内容的摘录，`summary` 为模型总结或逐项执行结果。归档文件写入 `kb/archive/<日期>-<标题 slug>-<随机后缀>.md`，正文先列全部原始内容再列总结，每项一节，节标题为 `原始内容：<heading>` 或 `总结与执行结果：<heading>`（无 `heading` 时省去冒号部分）。输出与 `kb_save` 相同，程序在时间线展示“已归档任务：标题。位置：…”。字段不合法返回 `invalid_kb`，不写入。
+输入 `title` 与非空 `items[]`。每项含 `kind: "original" | "summary"`、可选 `heading` 与非空 `text`：`original` 为邮件、日程等原始内容的摘录，`summary` 为模型总结或逐项执行结果。归档文件写入 `kb/archive/<日期> <标题>.md`（文件名规则同 `kb_save`），正文先列全部原始内容再列总结，每项一节，节标题为 `原始内容：<heading>` 或 `总结与执行结果：<heading>`（无 `heading` 时省去冒号部分）。输出与 `kb_save` 相同，程序在时间线展示“已归档任务：标题。位置：…”。字段不合法返回 `invalid_kb`，不写入。
 
 归档时机由模型判断，写在工具说明里：任务中的外部操作有了实际结果之后归档（典型是执行结果回传轮）；纯问答、闲聊、只起草未确认的任务不归档；同一任务再有新结果时用 `kb_update` 修改已有归档。执行结果以工具返回与系统回传为准。归档不记录任务标识或出处。
 
@@ -198,40 +208,85 @@ updated_at: 2026-09-14T10:22:31+08:00
 - 后台主题整理（Phase 5）是一次性模型会话，调度复用后台记忆回顾：每个任务累计若干个已完成的用户消息轮后执行一次，另有手动入口。输入是窗口内的对话文本、窗口期间新增或修改的资料清单与当前资料目录；只能写 `kb/topics/`。整理不写任务时间线、不发 SSE、不通知用户。
 - 整理修改主题页时基于当前版本（`expected_version`），用户在整理期间改过的主题页返回 `version_conflict`，本次跳过，下次基于用户的版本重新整理。
 
-## 8. 外部笔记导入（Phase 5）
+## 8. 资料管理 HTTP 接口（Phase 4）
 
-导入由用户发起，按“来源适配器 → 转换 → 写入”执行：
-
-- 适配器读取来源并逐篇给出：外部笔记标识、标题、Markdown 正文、标签、创建与修改时间、是否在废纸篓、是否加密或不可读。首个适配器为熊掌记，读取方式等待定项见 `kb-spec.md` 第 9.2 节。
-- 转换：保留标题、正文结构与标签；图片与附件不存入资料库。
-- 导入状态文件 `<data_dir>/kb-imports.json`（不进 Git）按来源记录外部笔记标识 → 资料 `id`，以及上次导入写入的资料版本。它只用于去重与冲突判断，不写入资料 frontmatter，也不展示为出处；文件丢失时退化为按标题匹配并报告疑似重复。
-- 写入：没有对应记录的笔记用 `kb_save` 语义新建；有记录且资料当前版本等于上次导入写入的版本时，用 `kb_update` 语义更新；资料在 Pebble 中被改过（当前版本不等于上次导入版本）时不写入，计为冲突。资料已被删除时计为跳过，不自动重建。
-- 废纸篓中的笔记不导入；加密或不可读的笔记计为跳过。
-- 一次导入的全部写入合并为一个 Git 提交，提交后统一更新索引。
-- 输出 `created`、`updated`、`skipped[]`、`conflicts[]`、`failed[]`，后三者每项含标题与原因。
-
-## 9. 资料管理 HTTP 接口（Phase 4）
-
-界面操作由用户本人发起，等同于直接改文件（认证随交付阶段 6 接入）：不经过 Agent，不需要对话中的同意，也不产生时间线提示。接口复用 `KbStore` 的同一套校验、版本与索引规则；错误体与第 10 节相同，`invalid_kb` 为 422，`not_found` 为 404，`version_conflict` 为 409（附 `current_version`），资料库或索引不可用为 503，资料库未装配时返回 `unavailable`（503）。
+界面操作由用户本人发起，等同于直接改文件（认证随交付阶段 6 接入）：不经过 Agent，不需要对话中的同意，也不产生时间线提示。接口复用 `KbStore` 的同一套校验、版本与索引规则；错误体与第 9 节相同，`invalid_kb` 为 422，`not_found` 为 404，`version_conflict` 为 409（附 `current_version`），资料库或索引不可用为 503，资料库未装配时返回 `unavailable`（503）。
 
 | 方法与路径 | 输入 | 输出 |
 | --- | --- | --- |
 | `GET /api/kb/documents` | 可选 `directory` | 与 `kb_list` 相同 |
-| `GET /api/kb/document` | `path` | `id`、`path`、`title`、`summary`（无说明为空串）、`tags`（无标签为空列表）、`created_at`、`updated_at`、`version`、`body` |
-| `GET /api/kb/search` | `q`、可选 `tag` | 与 `kb_search` 相同，最多 20 条 |
-| `POST /api/kb/documents` | `title`、`body`、可选 `summary`、`path`、`tags[]` | 201，与 `kb_save` 相同 |
-| `POST /api/kb/document/update` | `path`、`expected_version`，以及要写入的 `title`、`body`、`summary`、`tags[]` | 与 `kb_update` 相同 |
+| `GET /api/kb/document` | `path` | `id`、`path`、`title`、`summary`（无说明为空串）、`created_at`、`updated_at`、`version`、`body` |
+| `GET /api/kb/search` | `q` | 与 `kb_search` 相同，最多 20 条 |
+| `POST /api/kb/documents` | `title`、`body`、可选 `summary`、`path`、`directory` | 201，与 `kb_save` 相同。`directory` 只在不给 `path` 时使用：按标题在该文件夹下生成文件名（规则同 `kb_save`），空串表示根目录；两者都给返回 `invalid_kb` |
+| `GET /api/kb/folders` | 无 | `folders[]`：`kb/` 下全部子文件夹的相对路径（不带 `kb/` 前缀，含空文件夹，不含隐藏目录），按路径排序 |
+| `POST /api/kb/folders` | `path`（资料库内相对路径） | 201，`path`（带 `kb/` 前缀）。名称为空、越界、以 `.` 开头或已存在时返回 `invalid_kb` |
+| `POST /api/kb/summary` | `title`、`body` | `{summary}`：由轻量模型按标题与正文开头（至多 12000 字）起草的一句话说明，截断到 60 个字符，不写入资料；正文为空返回 `invalid_kb`，模型调用失败返回 503 |
+| `POST /api/kb/document/update` | `path`、`expected_version`，以及要写入的 `title`、`body`、`summary`（只传要改的字段） | 与 `kb_update` 相同；改了标题时 `path` 是随标题更新后的新位置 |
 | `POST /api/kb/document/move` | `path`、`expected_version`、`new_path` | 与 `kb_move` 相同 |
 | `POST /api/kb/document/delete` | `path`、`expected_version` | 与 `kb_delete` 相同 |
 
 界面约定：
 
-- 标题、一句话说明与标签是表单字段，`id` 与时间只显示不修改；正文用所见即所得的 Markdown 编辑器（CommonMark + GFM）。
-- 编辑器会把原文重新排版（例如表格对齐）。只有正文实际被编辑时才提交编辑器输出的 Markdown；只改标题或标签时提交原文，打开不编辑不产生写入。
+- 列表按文件夹逐层浏览，当前文件夹写在地址 `?dir=` 里：先列直属子文件夹（名称与其中资料数），再列直属资料（标题、一句话说明、更新时间，最近更新在前）；面包屑可回到任一上层。搜索范围是整个资料库。
+- “新建”菜单可选 Markdown 文档或文件夹，都建在当前文件夹里。文件夹只是 `kb/` 下的目录，不进版本历史；里面有资料后随资料一起提交，最后一份资料被删除后空目录随之消失。
+
+- 标题与一句话说明是表单字段，`id` 与时间只显示不修改；说明旁的“生成”按钮按当前标题与正文起草说明并填入输入框，由用户确认后随资料一起保存，正文为空时不可用；正文用所见即所得的 Markdown 编辑器（CommonMark + GFM + 公式）。
+- 编辑器会把原文重新排版（例如表格对齐）。只有正文实际被编辑时才提交编辑器输出的 Markdown；只改标题或说明时提交原文，打开不编辑不产生写入。
+- 资料行与资料页顶栏各有一个“⋯”菜单：重命名、移动、删除，操作都在对话框里完成。资料页有未保存的修改时菜单项不可用。
+  - 重命名改的是标题（`document/update` 只传 `title`），文件名由后端随之更新。
+  - 移动对话框从资料所在文件夹开始，面包屑回到上层，点文件夹进入下一层，同层资料只灰着列出；可在当前层新建文件夹；“移到这里”把资料移到正在浏览的文件夹，文件名沿用原名，重名时编号；原文件夹里不可用。
+  - 删除在对话框里确认。
+- 界面不展示文件名：资料页顶栏与搜索结果只显示所在文件夹（“资料库 / 项目”）与标题。
 - 保存、移动与删除都带读取时的 `version`；冲突时提示资料已被修改，用户选择重新载入，不覆盖。
+- 公式按 remark-math 的写法读写：行内 `$…$`、块级 `$$…$$`，用 KaTeX 排版。行内公式按 Pandoc 的规则收紧：开头 `$` 后或收尾 `$` 前是空白、或收尾 `$` 后紧跟数字的，按文字处理。点击公式（或选中后回车）原地编辑源码，行内公式回车写回，块级公式 ⌘/Ctrl+回车写回并实时预览，Esc 放弃；空段落输入 `$$` 加空格新建块级公式，输入 `$…$` 即成行内公式。编辑过的正文里，作为文字的 `$` 写回时转义为 `\$`。聊天消息的 Markdown 渲染采用同一套规则。
 - 原文中的 HTML 按纯文本显示，不在页面中执行。
 - 不提供历史版本、差异与恢复入口，不展示 Agent 的读取记录。
 
-## 10. 错误
+## 9. 错误
 
 复用 `server/errors.py` 的词汇与字段形状：`NotFoundError`、`VersionConflictError`（附 `current_version`，取 Git commit sha）。资料校验失败返回 `KbValidationError`（`invalid_kb`），附 `errors[]`，每项含 `field` 与 `message`，不保存数据，按引用读取失败时也不返回内容。资料文件或本地版本仓库不可用时返回 `KbStoreUnavailableError`（`kb_store_unavailable`）；索引缺失、损坏或无法重建时返回 `KbIndexUnavailableError`（`kb_index_unavailable`），此时不返回旧索引结果。后台整理写入 `kb/topics/` 之外的路径返回 `invalid_kb`。
+
+## 10. 正文图片（Phase 6）
+
+资料正文可以嵌入图片。图片是资料的附属文件，不是独立资料。
+
+### 存储
+
+- 图片保存在 `kb/assets/<哈希>.<扩展名>`，与资料同在资料库 Git 仓库中，写入即提交（`[Kb] Add asset …`）。`<哈希>` 取文件内容 SHA-256 的前 16 位十六进制；内容相同只存一份，重复上传返回同一路径。
+- 只接受 PNG、JPEG、WebP，单张不超过 10 MB；按文件内容判断类型，不信任扩展名与请求头。不接受 SVG（可携带脚本）。
+- `assets/` 不放 Markdown：`kb_save`、`kb_move` 与界面新建的目标路径落在 `assets/` 下时返回 `invalid_kb`。
+- `assets/` 下的文件不补 frontmatter、不进入索引与资料目录；用户直接放进来的图片按第 3 节随资料库改动纳入版本。
+
+### 引用
+
+- 正文写标准 Markdown 图片：`![说明](assets/3f2a9c0d1e7b4a56.png)`，路径相对资料库根目录，资料移动或重命名时引用不需要改写。代价是外部编辑器按“相对当前文件”解析，子文件夹里的资料在外部编辑器中可能显示不出图片。
+- `http(s)` 外链图片按原地址显示，不下载保存。
+
+### 图片说明
+
+图片里的信息要变成文字才能被检索和回答，与 PDF、附件提取成 Markdown 的做法一致。
+
+- 图片插入后由轻量模型（与第 8 节生成一句话说明相同）另行看图生成说明：有文字的图（截图、表格、板书、票据）尽量转写要点，其余图简述画面内容；单行，不超过 1000 个字符。
+- 说明写在图片的 alt 文本里，随正文保存、进入版本历史与索引，不另建存储或索引字段；说明只属于插入它的那处引用，重复上传同一张图会重新生成。
+- 说明走轻量模型的看图调用，调用时向 SDK 声明模型支持图片（BYOK 的 `is_vl`，不声明时图片不会发给模型），需要所配模型本身支持图片输入；模型看不到图（按约定只回 `NO_IMAGE`）或调用失败时说明为空串，照常上传。
+- 用户直接放进 `assets/` 的图片与手写的图片引用不补生成说明。
+- Agent 读资料时看到的是图片引用与说明，不读取图片本身；不提供图片相关工具。对话附件里的图片不自动存入资料库。
+
+### 接口与界面
+
+| 方法与路径 | 输入 | 输出 |
+| --- | --- | --- |
+| `POST /api/kb/assets` | multipart 单个文件 | 201，`{path}`，例如 `assets/3f2a9c0d1e7b4a56.png`；立即返回，不等说明生成。类型或大小不符返回 `invalid_kb` |
+| `POST /api/kb/assets/describe` | `path`（`assets/…`） | `{description}`：轻量模型看图生成的说明，不写入任何文件；模型看不到图或调用失败时为空串。`path` 不在 `assets/` 下返回 `invalid_kb`，图片不存在返回 404 |
+| `GET /api/kb/assets/{name}` | 文件名 | 图片原文件，按内容类型返回，带 `X-Content-Type-Options: nosniff`；只读 `kb/assets/` 下的文件，其余返回 404 |
+
+- 资料编辑器支持粘贴或拖入图片：上传成功后立即插入，图片单独成段（光标在空段落或占位段落时占用该段，否则插在光标所在段落之后，不把句子劈开）；上传失败时提示，不插入。随后在后台请求说明，等待期间图注显示“正在生成说明…”，生成好了填进仍为空的 alt 文本；用户已自己写了说明或已删除图片时不覆盖，填说明不进撤销历史。
+- 粘贴的内容引用了别的应用本地的图片（例如熊掌记复制出来的 `![](image.png)`，浏览器拿不到图片数据）时，按纯文本里的 Markdown 解析：去掉 HTML 注释，按笔记应用“一行一段”的写法给图片行与相邻的普通文字行补空行（列表、表格、引用、标题与代码块不动），每张带不进来的图片在原位留一段占位 `〔图片未随粘贴带入：文件名〕`，不另外提示。光标在占位段落里粘贴图片时，图片替换这一段。
+- 编辑器里图片下方显示图注即 alt 文本，宽度与图片的显示宽度一致（至少 320px），默认显示全文，超过 6 行折叠并提供“展开 / 收起”。点击图注原地修改，排版与显示时相同，只多一层淡底色与“回车保存 · Esc 取消”提示；回车或失焦写回，Esc 放弃。说明为空时显示“添加图片说明”。
+- 编辑器与对话消息显示图片时把 `assets/…` 映射到 `GET /api/kb/assets/…`，保存回文件的仍是 `assets/…`；图片按比例缩到栏宽与 360px 高度以内，对话里点击图片在新标签页打开原图。
+- 文件夹列表不显示 `assets/`。
+
+### 不做
+
+- 删除或修改资料时不清理不再被引用的图片（可能被别的资料或历史版本引用）。
+- 不做缩略图、压缩、裁剪或图片管理页；图片只能通过说明文字被检索，不做以图搜图。

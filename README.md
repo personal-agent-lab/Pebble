@@ -8,32 +8,23 @@
 确认操作；任务不依赖始终开启的浏览器页面。新邮件是首版的系统触发源，收到即自动开始处理，
 但邮件只是它能做的事之一。
 
-当前状态：对话链、按任务固定模型、图片/文件附件、任务时间线、Gateway 与 Qoder CN/Gmail/iCloud Calendar 生产装配已接通，SQLite schema 为 14。
-Gmail 支持搜索、单封与完整往来读取、入站附件读取、回复与主动新写邮件；两者共用内嵌草稿卡、
-草稿编辑、最终版本确认、去重发送和结果核实。外发邮件只支持纯文字正文。
-iCloud Calendar 支持查询、详情、冲突检查与创建单次日程：对话里给出标题和起止时间就直接创建，
-缺信息先追问补齐，目标时间已有日程则不创建、在对话里说明冲突，你明确要求照建才覆盖创建；
-日程不渲染卡片，结果只在对话文字里汇报。不邀请参与人。
-长期记忆已实现：两份记忆文档由每轮记忆判断与后台回顾维护，侧栏“记忆”页可以直接编辑；历史对话
-可以跨任务检索（侧栏搜索按钮，Agent 也能在新任务里回忆过去的讨论与执行结果）。个人知识库已实现前四个阶段：Markdown 资料保存在实例数据目录的 `kb/` 下，
-由同一数据目录的本地 Git 管理版本；可以保存、读取、更新、删除、移动、按历史版本读取与恢复，
-也能按关键词检索分节、按引用读回原文，Agent 查到资料后直接作答，不展示来源；你直接改动的
-文件会自动纳入版本；侧栏“资料”页可以浏览、搜索和用所见即所得编辑器编辑资料；邮件发送等操作
-有结果后 Agent 会自主归档任务；主题页与导入、Skills、认证与 HTTPS 远程访问尚未实现，目前只能本机和同局域网访问。
-真实账号验收仍在进行，本地测试通过不代表真实邮件或日程操作成功。
+已接通对话与任务、Gmail、iCloud Calendar、长期记忆、历史对话检索与个人资料库；主题页、Skills、
+认证与 HTTPS 远程访问尚未实现，目前只能本机和同局域网访问。完整的实现状态与已知偏差见
+`docs/status.md`。真实账号验收仍在进行，本地测试通过不代表真实邮件或日程操作成功。
 
 ## 文档
 
 - `docs/v1-spec.md`：需求范围、产品行为、验收标准。内容冲突时以此为准。
-- `docs/v1-design.md`：组件划分、交付阶段、验证要求、当前实现与已知偏差。
+- `docs/v1-design.md`：组件划分、交付阶段、验证要求与实现要点。
+- `docs/status.md`：实现状态与已知偏差，唯一的状态记录。
 - `docs/memory-spec.md`：记忆功能规格：短期上下文、长期记忆、常驻上下文与按需检索、历史检索。
-- `docs/kb-spec.md`：个人资料库功能规格：保存与主动保存、检索作答、删除与恢复、主题页、外部笔记导入。
-- `docs/contracts/mail.md`：Gmail 工具、同步触发、确认发送与核实的字段与语义（已实现）。
-- `docs/contracts/calendar.md`：iCloud Calendar 工具、直连创建与冲突处理的字段与语义（已实现）。
-- `docs/contracts/skills.md`：Memory 已实现，Skills 仍为约定。
-- `docs/contracts/personal-kb.md`：个人知识库的工具、存储与引用语义（Phase 1–4 已实现，Phase 5 为约定）。
+- `docs/kb-spec.md`：个人资料库功能规格：保存与主动保存、检索作答、删除与恢复、主题页。
+- `docs/contracts/mail.md`：Gmail 工具、同步触发、确认发送与核实的字段与语义。
+- `docs/contracts/calendar.md`：iCloud Calendar 工具、直连创建与冲突处理的字段与语义。
+- `docs/contracts/skills.md`：Memory 与 Skills 的文件格式、工具与加载边界。
+- `docs/contracts/personal-kb.md`：个人知识库的工具、存储与引用语义。
 
-设计文档第 2 节的组件表与代码结构是目标结构，第 10 节记录已实现部分与已知偏差。
+设计文档第 2 节的组件表与代码结构是目标结构。
 
 ## 前置依赖
 
@@ -57,8 +48,7 @@ cp .env.example .env
 | `PEBBLE_HOST`、`PEBBLE_PORT` | 监听地址与端口，默认 `127.0.0.1:8000` |
 | `QODERCN_PERSONAL_ACCESS_TOKEN` | Qoder CN 访问令牌，注意没有 `PEBBLE_` 前缀 |
 | `PEBBLE_QODER_MODEL` | 新任务默认选中的型号标识（如 `qmodel_38max`），取值见 `GET /api/models` 的 `id`；未配置时默认 `auto` |
-| `PEBBLE_TITLE_MODEL` | 只给任务标题生成用的型号，默认沿用 `PEBBLE_QODER_MODEL` |
-| `PEBBLE_MODEL_PROVIDER`、`PEBBLE_MODEL_API_KEY`、`PEBBLE_MODEL_BASE_URL` | 自定义模型（BYOK）。供应商、密钥、型号必须同时给全，`BASE_URL` 可选；provider 必须匹配账号的 BYOK 目录 |
+| `PEBBLE_LIGHT_MODEL_PROVIDER`、`PEBBLE_LIGHT_MODEL`、`PEBBLE_LIGHT_MODEL_API_KEY`、`PEBBLE_LIGHT_MODEL_BASE_URL` | 轻量模型（自有 API Key），只用于任务标题、资料说明与资料图片说明生成；图片说明需要所配模型支持图片输入。供应商、型号、密钥必须同时给全，`BASE_URL` 可选；provider 与型号取自账号的 BYOK 目录（如 `deepseek` / `deepseek-flash-pg`）。都不配时沿用 `PEBBLE_QODER_MODEL` |
 | `PEBBLE_GMAIL_CREDENTIALS_PATH` | Gmail OAuth 桌面应用 JSON，默认 `<data_dir>/credentials.json` |
 | `PEBBLE_GMAIL_TOKEN_PATH` | Gmail 授权结果，默认 `<data_dir>/gmail_token.json` |
 | `PEBBLE_ICLOUD_ACCOUNT` | Apple ID 账号，仅在服务端使用 |
@@ -109,8 +99,9 @@ npm run dev
 
 ## 网页
 
-`web/` 是 TypeScript + React + Vite 单页应用，路由为 `/tasks`（任务列表与发起新任务）和
-`/tasks/:taskId`（统一时间线、完整草稿卡与逐项执行结果）。
+`web/` 是 TypeScript + React + Vite 单页应用，路由为 `/tasks`（任务列表与发起新任务）、
+`/tasks/:taskId`（统一时间线、完整草稿卡与逐项执行结果）、`/search`（历史对话搜索）、
+`/kb`、`/kb/doc`、`/kb/new`（资料）与 `/memory`（长期记忆）。
 视觉设计系统 token 见 `src/styles/tokens.css`，分种子、原语与语义三层。
 断点 900px：以上为侧栏布局，以下折叠为底部 tab，两端功能一致。
 任务列表就是导航本身：PC 在侧栏资料、记忆等固定入口之下，列出全部任务并在列表内滚动；手机在任务页内，默认列最近 5 条，其余折在「展开显示」后面。
@@ -125,7 +116,7 @@ npm run dev
 任务列表没有列表级事件流，按 5 秒轮询刷新（页面不可见时暂停），新邮件自动触发的任务无需手动刷新；
 任务详情用 SSE，确认后的执行在后台进行，事件流不携带执行状态，页面对执行结果按 1.5 秒轮询直到
 草稿卡状态离开 `sending`，SSE 重连后整体重读时间线对账。
-界面只呈现接口能支撑的内容：搜索框对应的接口尚未提供，暂不渲染；回答不展示资料来源。
+回答不展示资料来源。
 
 ## 验证
 
@@ -274,13 +265,14 @@ Gmail 首次启动记录当前 historyId，随后每 10 秒检测新增的收件
 重复通知由 Gateway 去重。游标失效明确停止检测，health 显示原因，需要核对后重新建立同步位置，
 不静默跳过缺口。常规检测错误保留游标，在下一轮重新查询。
 
-新邮件轮次只开放只读工具，结果回传轮次开放只读与本地写；只有用户亲自发起的对话轮能看到日程直连
-创建工具，因此邮件或资料内容里的指令无法驱动外部写入。用户要求起草后，SDK 才可调用准备、读取及
+新邮件轮次只开放只读工具与资料的新建、修改；结果回传轮次开放只读与本地写；只有用户亲自发起的
+对话轮能看到日程直连创建工具与资料的删除、移动、恢复，因此邮件或资料内容里的指令无法驱动外部写入。用户要求起草后，SDK 才可调用准备、读取及
 更新草稿工具；更新使用当前已保存版本，直接编辑与 Agent 修改共用 `MailDraftStore` 的版本控制。
 草稿保存事件交给网页。邮件发送函数只由 Confirmation 在用户确认最终版本后调用，执行结果回到确认
 任务的原 SDK 会话。
 
-模型经应用进程内的 MCP 端点（server 名 `pebble`）调用工具，内置工具与本机设置关闭：每轮登记一个
+模型经应用进程内的 MCP 端点（server 名 `pebble`）调用工具；内置工具只在用户对话轮开放联网查询
+（`WebSearch`、`WebFetch`），以及任务有附件时读取附件的 `Read`（限定在该任务工作目录），本机设置关闭：每轮登记一个
 一次性路径供 qodercli 子进程按回环地址连接，轮次结束即撤销。每轮独立启动一次 qodercli 子进程，
 会话标识由 SDK 生成并按任务保存，重启后靠它接续。会话记录落在 `.data/agent/config/` 下，
 模型上下文由该记录恢复；网页时间线由 SQLite 独立持久化，刷新后仍保持文字与草稿卡的生成顺序。
