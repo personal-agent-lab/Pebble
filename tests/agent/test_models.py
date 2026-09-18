@@ -57,7 +57,7 @@ def test_no_catalog_ever_fails_creation_but_lets_turns_through(settings, monkeyp
 
     with pytest.raises(DependencyUnavailableError, match="无法读取 Qoder 模型目录"):
         asyncio.run(catalog.validate("auto"))
-    assert asyncio.run(catalog.validate("auto", fresh=False)) == "auto"
+    assert asyncio.run(catalog.validate("auto", new_task=False)) == "auto"
 
 
 def test_network_failure_falls_back_to_persisted_catalog(settings, monkeypatch):
@@ -90,10 +90,39 @@ def test_turns_reuse_recent_catalog_and_refreshes_are_shared(settings, monkeypat
 
     asyncio.run(concurrent())
     assert source.calls == 1
-    asyncio.run(catalog.validate("qfmodel", fresh=False))
+    asyncio.run(catalog.validate("qfmodel", new_task=False))
     assert source.calls == 1
-    asyncio.run(catalog.validate("qfmodel"))
+
+
+def test_new_task_validates_against_cache_without_waiting(settings, monkeypatch):
+    source = Flaky(monkeypatch)
+    catalog = ModelCatalog(settings=settings)
+    asyncio.run(catalog.refresh())
+    assert source.calls == 1
+
+    # 缓存里有该型号：直接通过，一分钟内的目录也不触发刷新。
+    assert asyncio.run(catalog.validate("qfmodel")) == "qfmodel"
+    assert source.calls == 1
+
+    # 缓存较旧：仍立即通过，刷新放到后台，不阻塞新建任务。
+    catalog._fetched_at = time.time() - models.TURN_FRESH_SECONDS - 1
+    source.ok = False
+
+    async def validate_old():
+        result = await catalog.validate("qfmodel")
+        calls_before_background = source.calls
+        await asyncio.sleep(0.01)
+        return result, calls_before_background
+
+    result, calls_before_background = asyncio.run(validate_old())
+    assert (result, calls_before_background) == ("qfmodel", 1)
     assert source.calls == 2
+
+    # 缓存里没有的型号才同步读取最新目录后判断。
+    source.ok = True
+    with pytest.raises(ModelValidationError):
+        asyncio.run(catalog.validate("gone"))
+    assert source.calls == 3
 
 
 def test_failure_retries_before_giving_up(settings, monkeypatch):

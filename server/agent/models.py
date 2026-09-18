@@ -81,12 +81,6 @@ class ModelCatalog:
     def default_model(self) -> str:
         return default_model(self.settings)
 
-    def _byok_entries(self) -> list[ModelEntry] | None:
-        # 自有 API Key 的型号由服务端配置决定，目录只有这一项，不需要读取与缓存。
-        if not self.settings.model_provider:
-            return None
-        return [ModelEntry(self.default_model, self.default_model, "custom")]
-
     def _load(self) -> None:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
@@ -170,9 +164,7 @@ class ModelCatalog:
         return entries
 
     def refresh_in_background(self) -> None:
-        if self._byok_entries() is not None or (
-            self._refreshing is not None and not self._refreshing.done()
-        ):
+        if self._refreshing is not None and not self._refreshing.done():
             return
 
         async def run() -> None:
@@ -190,49 +182,50 @@ class ModelCatalog:
             task.cancel()
         await asyncio.gather(*self._background, return_exceptions=True)
 
-    async def validate(self, model: str, *, fresh: bool = True) -> str:
-        """新建任务（`fresh`）先读最新目录；轮次校验可复用一分钟内的目录。
+    async def validate(self, model: str, *, new_task: bool = True) -> str:
+        """新建任务按可用缓存即时判断；轮次校验复用一分钟内的目录，更旧就先读最新目录。
 
-        读不到最新目录时按缓存判断；新建任务连可用缓存也没有就报服务不可用，
-        已有任务则放行，由模型调用本身给出结果。
+        新建任务不等目录读取：缓存里有该型号即通过，缓存超过一分钟就在后台刷新；
+        型号若其实已下线，首轮校验会读到最新目录并让该轮明确失败。缓存里没有该型号
+        或没有可用缓存时才同步读取。读不到最新目录时按缓存判断；新建任务连可用缓存
+        也没有就报服务不可用，已有任务则放行，由模型调用本身给出结果。
         """
-        entries = self._byok_entries()
-        if entries is None:
-            age = self._age()
-            if (
-                not fresh
-                and self._entries is not None
-                and age is not None
-                and age < TURN_FRESH_SECONDS
-            ):
-                entries = self._entries
-            else:
-                try:
-                    entries = await self.refresh()
-                except DependencyUnavailableError:
-                    entries = self._usable_cache()
-                    if entries is None:
-                        if fresh:
-                            raise
-                        return model
+        age = self._age()
+        cached = self._usable_cache()
+        if new_task and cached is not None and model in {entry.id for entry in cached}:
+            if age is not None and age >= TURN_FRESH_SECONDS:
+                self.refresh_in_background()
+            return model
+        if (
+            not new_task
+            and self._entries is not None
+            and age is not None
+            and age < TURN_FRESH_SECONDS
+        ):
+            entries = self._entries
+        else:
+            try:
+                entries = await self.refresh()
+            except DependencyUnavailableError:
+                entries = self._usable_cache()
+                if entries is None:
+                    if new_task:
+                        raise
+                    return model
         if model not in {entry.id for entry in entries}:
             raise ModelValidationError(model)
         return model
 
     async def response(self) -> dict:
         """展示目录：有缓存立即返回，过期或上次失败就后台刷新；从未读到过才等待读取。"""
-        entries = self._byok_entries()
-        if entries is not None:
-            fetched_at = None
+        if self._entries is None:
+            await self.refresh()
         else:
-            if self._entries is None:
-                await self.refresh()
-            else:
-                age = self._age()
-                if age is None or age > REFRESH_AFTER_SECONDS or self._refresh_failed:
-                    self.refresh_in_background()
-            entries = self._entries or []
-            fetched_at = datetime.fromtimestamp(self._fetched_at or 0, UTC).isoformat()
+            age = self._age()
+            if age is None or age > REFRESH_AFTER_SECONDS or self._refresh_failed:
+                self.refresh_in_background()
+        entries = self._entries or []
+        fetched_at = datetime.fromtimestamp(self._fetched_at or 0, UTC).isoformat()
         return {
             "default_model": self.default_model,
             "models": [entry.response() for entry in entries],

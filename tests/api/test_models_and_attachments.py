@@ -38,7 +38,7 @@ class StaticCatalog:
     async def close(self):
         pass
 
-    async def validate(self, model, *, fresh=True):
+    async def validate(self, model, *, new_task=True):
         if model not in self.available:
             raise ModelValidationError(model)
         return model

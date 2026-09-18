@@ -520,7 +520,7 @@ class GatewayRuntime:
         terminal = None
         # 固定模型每轮重新核对账号目录：失效就让本轮明确失败，不换用其他型号。
         await self._model_catalog.validate(
-            self._sessions.get_task(row["task_id"])["model"], fresh=False
+            self._sessions.get_task(row["task_id"])["model"], new_task=False
         )
         # 显式关闭事件流：异常路径也要走网关自己的清理（如撤销本轮登记的工具端点）。
         async with aclosing(self._invoke(row, json.loads(row["input"]))) as stream:
