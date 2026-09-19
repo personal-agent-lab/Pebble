@@ -148,9 +148,16 @@ class GatewayRuntime:
         message: str,
         *,
         target: dict | None = None,
+        skill_ids: list[str] | None = None,
+        excluded_skill_ids: list[str] | None = None,
+        auto_match_skills: bool = True,
+        skill_refs: list[dict] | None = None,
     ) -> dict:
         """登记用户消息并返回调用记录；会话标识从任务记录读取。"""
         self.require_gateway()
+        from server.skills.runtime import validate_refs
+
+        validate_refs(skill_refs or [])
         target_operation_id = None
         if target is not None:
             if target.get("kind") != "mail_draft" or not isinstance(
@@ -169,6 +176,10 @@ class GatewayRuntime:
         payload = {
             "message": message,
             "target": target,
+            "skill_ids": skill_ids or [],
+            "skill_refs": skill_refs or [],
+            "excluded_skill_ids": excluded_skill_ids or [],
+            "auto_match_skills": auto_match_skills,
         }
         with session(self.path) as conn, write(conn):
             operations.task(conn, task_id)
@@ -317,6 +328,11 @@ class GatewayRuntime:
                 version=delivery["version"],
                 result=delivery["result"],
             )
+        # 加载 Skill 列表
+        skill_ids = payload.get("skill_ids", [])
+        excluded_skill_ids = payload.get("excluded_skill_ids", [])
+        auto_match_skills = payload.get("auto_match_skills", True)
+
         return self.gateway.stream_turn(
             Turn(
                 kind=TurnKind(row["kind"]),
@@ -329,6 +345,12 @@ class GatewayRuntime:
                     if row["kind"] == repo.KIND_MESSAGE
                     else None
                 ),
+                skill_refs=tuple(payload.get("skill_refs", [])),
+                run_id=row["run_id"],
+                db_path=self.path,
+                skill_ids=skill_ids,
+                excluded_skill_ids=excluded_skill_ids,
+                auto_match_skills=auto_match_skills,
             )
         )
 

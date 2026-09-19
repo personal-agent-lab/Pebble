@@ -14,7 +14,7 @@ class NotFoundError(Exception):
 
 
 class VersionConflictError(Exception):
-    def __init__(self, current_version: int):
+    def __init__(self, current_version):
         self.current_version = current_version
         super().__init__(f"当前版本为 {current_version}")
 
@@ -45,6 +45,14 @@ class DraftValidationError(Exception):
         super().__init__(str(errors))
 
 
+class SkillValidationError(Exception):
+    """Skill 字段校验未通过；`errors` 为字段与原因列表。"""
+
+    def __init__(self, errors: list[dict[str, str]]):
+        self.errors = errors
+        super().__init__(str(errors))
+
+
 def error_details(error: Exception) -> dict | None:
     """已知业务异常的名称与附带字段；其他异常返回 None，由调用方按未预期错误处理。"""
     if isinstance(error, DependencyUnavailableError):
@@ -65,4 +73,6 @@ def error_details(error: Exception) -> dict | None:
         return {"error": "task_active", "message": "任务正在运行，结束后才能删除"}
     if isinstance(error, DraftValidationError):
         return {"error": "invalid_draft", "message": "待确认内容未通过校验", "errors": error.errors}
+    if isinstance(error, SkillValidationError):
+        return {"error": "invalid_skill", "message": "Skill 字段校验未通过", "errors": error.errors}
     return None

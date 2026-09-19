@@ -9,6 +9,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+# 注册 Skill 工具到全局注册表
+import server.skills.tools  # noqa: F401, E402
 from server.agent.mcp import MCP_MOUNT_PATH, ToolServer
 from server.api.errors import install_error_handlers
 from server.api.routes import router

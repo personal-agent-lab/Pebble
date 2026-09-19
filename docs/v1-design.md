@@ -368,5 +368,9 @@ schema 3 增加 `agent_runs`、`mail_task_links` 及确认记录的 `started_at`
 
 - 认证与 HTTPS 未实现：服务当前只按本机与局域网测试使用，`PATCH /api/operations/{operation_id}/draft` 还不校验操作与任务的归属关系。这两项是阶段 6 的交付内容，公网暴露前必须完成。
 - 触发源插孔仍带邮件域名（`MailSource`、`accept_new_mail`、`create_app(mail_source=...)`），与“通用层不持有域措辞”的约定不一致；第二个触发源接入时改为域中立命名。
-- 生效 Skill 名单恒为空，Memory、Skills、Personal KB 三个域尚无代码。
+- Skills 已实现文件管理、用户审核、受控加载与工具证据；Memory、Personal KB 尚未实现。
 - 真实账号验收（Gmail 发送、iCloud 读写、SDK 模型响应）尚未完成；本地测试通过不代表真实外部操作成功。
+
+### Skills 收尾实现
+
+见 `contracts/skills.md` 与 `skills-acceptance.md`。SDK 保持 setting_sources=[]、skills=[]，手动选择正文进入本轮材料，自动选择经受控 skill_read 加载。Web 新增 /skills。SQLite schema 10 保存加载关联与最小工具证据，正文仍只在文件中。

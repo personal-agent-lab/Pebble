@@ -93,6 +93,9 @@ def build_server(
     target_operation_id: str | None = None,
 ) -> Server:
     """把本轮允许的工具装到一个 MCP server 上：清单与调用都只认这一份。"""
+    from server.skills.runtime import current
+
+    scope = current.get()
     server = Server(TOOL_SERVER_NAME, version="1.0.0")
     known = {tool.name: tool for tool in tools}
 
@@ -108,13 +111,17 @@ def build_server(
         definition = known.get(name)
         if definition is None:
             return error_result({"error": "unknown_tool", "message": UNKNOWN_TOOL_MESSAGE})
-        return await invoke(
-            definition,
-            arguments,
-            task_id=task_id,
-            target_operation_id=target_operation_id,
-            queued=queued,
-        )
+        token = current.set(scope)
+        try:
+            return await invoke(
+                definition,
+                arguments,
+                task_id=task_id,
+                target_operation_id=target_operation_id,
+                queued=queued,
+            )
+        finally:
+            current.reset(token)
 
     return server
 
@@ -143,14 +150,23 @@ async def invoke(
         return error_result({"error": "wrong_target", "message": TARGET_TOOL_MESSAGE})
     if definition.needs_task_id:
         fields["task_id"] = task_id
+    from server.skills.evidence import record
+
     try:
         result = await asyncio.to_thread(definition.func, **fields)
     except Exception as error:
+        record(definition.name, arguments, False)
         details = error_details(error)
         if details is None:
             logger.exception("工具 %s 执行失败", definition.name)
             details = {"error": "unexpected", "message": TOOL_ERROR_MESSAGE}
         return error_result(details)
+    # 外部写入必须有明确成功结果；准备草稿只证明本地准备步骤完成。
+    success = not isinstance(result, dict) or (
+        not result.get("error")
+        and result.get("status") not in {"failed", "unknown", "error", "conflict", "conflicts"}
+    )
+    record(definition.name, arguments, success)
     if definition.emits_draft_saved:
         queued.put_nowait(
             {

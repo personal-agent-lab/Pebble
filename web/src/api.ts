@@ -116,7 +116,7 @@ type ErrorBody = {
   detail?: unknown;
 };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`/api${path}`, {
@@ -127,7 +127,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError("offline", `无法连接 Pebble 服务：${String(error)}`, 0);
   }
   const text = await response.text();
-  const payload: unknown = text ? JSON.parse(text) : null;
+  let payload: unknown = null;
+  try { payload = text ? JSON.parse(text) : null; }
+  catch { throw new ApiError("invalid_response", `服务返回了无效响应（HTTP ${response.status}）`, response.status); }
   if (!response.ok) {
     const body = (payload ?? {}) as ErrorBody;
     const gatewayFailure = body.error === undefined && [502, 503, 504].includes(response.status);
@@ -154,9 +156,10 @@ export const sendMessage = (
   taskId: string,
   message: string,
   target: MessageTarget | null = null,
+  selection?: import("./features/skills/api").Selection,
 ) => request<Run>(`/tasks/${taskId}/messages`, {
   method: "POST",
-  body: JSON.stringify({ message, target }),
+  body: JSON.stringify({ message, target, ...selection }),
 });
 
 export const editDraft = (

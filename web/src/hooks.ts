@@ -122,10 +122,11 @@ export function useTaskDetail(taskId: string) {
   const send = useCallback(async (
     message: string,
     target: MessageTarget | null = null,
+    selection?: import("./features/skills/api").Selection,
   ) => {
     setSending(true);
     try {
-      await sendMessage(taskId, message, target);
+      await sendMessage(taskId, message, target, selection);
       await reload();
       return null;
     } catch (failure) { return toApiError(failure); }

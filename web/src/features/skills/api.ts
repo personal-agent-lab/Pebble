@@ -1,0 +1,12 @@
+import { request } from "../../api";
+export type Skill = { id: string; name: string; description: string; body: string; status: string; content_hash: string; triggers: string[]; draft_id?: string; skill_id?: string; base_revision?: string; evidence?: {tasks: string[]; occurrences: number} };
+export type Selection = { skills: {id: string; revision: string}[]; excluded_skill_ids: string[]; auto_match_skills: boolean };
+export const emptySelection = (): Selection => ({skills: [], excluded_skill_ids: [], auto_match_skills: true});
+export const listSkills = () => request<Skill[]>("/skills");
+export const listDrafts = () => request<Skill[]>("/skill-drafts");
+export const getSkill = (id: string) => request<Skill>(`/skills/${id}`);
+export const saveSkill = (skill: Partial<Skill>, draft = false) => request<Skill>(skill.draft_id ? `/skill-drafts/${skill.draft_id}` : skill.id ? `/skills/${skill.id}` : "/skills", {method: skill.id || draft ? "PATCH" : "POST", body: JSON.stringify({name: skill.name, description: skill.description, body: skill.body, triggers: skill.triggers, expected_revision: skill.content_hash})});
+export const action = (skill: Skill, verb: string) => request<void>(`/${skill.draft_id ? "skill-drafts" : "skills"}/${skill.draft_id ?? skill.id}/${verb}`, {method: "POST", body: JSON.stringify({expected_revision: skill.content_hash})});
+export type Version = {revision: string; created_at: string; body: string};
+export const versions = (id: string) => request<Version[]>(`/skills/${id}/versions`);
+export const restore = (id: string, revision: string) => request(`/skills/${id}/restore?revision=${encodeURIComponent(revision)}`, {method: "POST"});

@@ -31,7 +31,7 @@ class TurnContext:
     skills: list[str] = field(default_factory=list)
 
 
-def assemble(*, materials: Iterable[Material] = ()) -> TurnContext:
+def assemble(*, materials: Iterable[Material] = (), skills: list[str] | None = None) -> TurnContext:
     """组装一轮的上下文：基础提示在前，本轮材料按序追加在系统提示末尾。"""
     parts = [BASE_PROMPT]
     for material in materials:
@@ -41,4 +41,4 @@ def assemble(*, materials: Iterable[Material] = ()) -> TurnContext:
             else material.content
         )
         parts.append(f"## {material.title}\n{body}")
-    return TurnContext(system_prompt="\n\n".join(parts))
+    return TurnContext(system_prompt="\n\n".join(parts), skills=skills or [])

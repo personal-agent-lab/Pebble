@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import get_settings
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 10
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -180,6 +180,29 @@ SCHEMA_V8 = (
     "ALTER TABLE calendar_preview_versions RENAME TO calendar_event_versions",
 )
 
+# Skill 运行时关联与草稿审计。
+SCHEMA_V9 = (
+    "CREATE TABLE skill_run_links ("
+    "run_id TEXT NOT NULL REFERENCES agent_runs(run_id), "
+    "skill_id TEXT NOT NULL, "
+    "revision TEXT NOT NULL, "
+    "source TEXT NOT NULL CHECK(source IN ('manual', 'auto')), "
+    "loaded_at TEXT NOT NULL, "
+    "PRIMARY KEY(run_id, skill_id))",
+    "CREATE TABLE skill_draft_evidence ("
+    "draft_id TEXT NOT NULL, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "created_at TEXT NOT NULL, "
+    "PRIMARY KEY(draft_id, task_id))",
+)
+
+SCHEMA_V10 = (
+    "CREATE TABLE skill_tool_evidence (id TEXT PRIMARY KEY, "
+    "run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE, "
+    "tool_name TEXT NOT NULL, argument_keys TEXT NOT NULL, succeeded INTEGER NOT NULL, "
+    "created_at TEXT NOT NULL)",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -189,6 +212,8 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     6: SCHEMA_V6,
     7: SCHEMA_V7,
     8: SCHEMA_V8,
+    9: SCHEMA_V9,
+    10: SCHEMA_V10,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

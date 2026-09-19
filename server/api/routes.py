@@ -1,4 +1,4 @@
-"""HTTP 路由与请求结构：健康检查、任务、对话、SSE 和确认。"""
+"""HTTP 路由与请求结构：健康检查、任务、对话、SSE、确认和 Skill。"""
 
 import asyncio
 import json
@@ -13,6 +13,8 @@ from server.config import get_settings
 from server.db import schema_version, session
 from server.gateway.runtime import GatewayRuntime
 from server.sessions.service import SessionStore
+from server.skills import service as skill_service
+from server.skills.models import SkillStatus
 from server.tools.gmail.service import MailDraftStore
 
 
@@ -108,9 +110,17 @@ class MessageTarget(BaseModel):
     operation_id: str
 
 
+class SkillRef(BaseModel):
+    id: str
+    revision: str = Field(min_length=1)
+
+
 class MessageInput(BaseModel):
     message: str = Field(min_length=1)
     target: MessageTarget | None = None
+    skills: list[SkillRef] | None = None
+    excluded_skill_ids: list[str] | None = None
+    auto_match_skills: bool = True
 
 
 @router.post("/tasks/{task_id}/messages", status_code=202, tags=["chat"])
@@ -119,6 +129,10 @@ async def submit_message(task_id: str, body: MessageInput, agent: Agent) -> dict
         task_id,
         body.message,
         target=body.target.model_dump() if body.target is not None else None,
+        skill_ids=[s.id for s in (body.skills or [])],
+        skill_refs=[s.model_dump() for s in (body.skills or [])],
+        excluded_skill_ids=body.excluded_skill_ids or [],
+        auto_match_skills=body.auto_match_skills,
     )
 
 
@@ -212,3 +226,258 @@ def verify(operation_id: str, confirmations: Confirmations, agent: Agent) -> dic
     view = confirmations.verify_pending(operation_id)
     agent.kick()
     return view
+
+
+# ---------- Skill 路由 ----------
+
+
+class SkillCreate(BaseModel):
+    id: str | None = None
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    body: str = ""
+    triggers: list[str] | None = None
+    inputs: list[dict] | None = None
+    tools: list[str] | None = None
+    side_effects: list[str] | None = None
+    requires_confirmation: bool = False
+
+
+class SkillUpdate(BaseModel):
+    expected_revision: str
+    name: str | None = None
+    description: str | None = None
+    body: str | None = None
+    triggers: list[str] | None = None
+    inputs: list[dict] | None = None
+    tools: list[str] | None = None
+    side_effects: list[str] | None = None
+    requires_confirmation: bool | None = None
+
+
+class SkillDraftUpdate(BaseModel):
+    expected_revision: str
+    name: str | None = None
+    description: str | None = None
+    body: str | None = None
+    triggers: list[str] | None = None
+    inputs: list[dict] | None = None
+    tools: list[str] | None = None
+    side_effects: list[str] | None = None
+    requires_confirmation: bool | None = None
+
+
+@router.get("/skills", tags=["skills"])
+def list_skills(status: SkillStatus | None = None, search: str | None = None) -> list[dict]:
+    items = skill_service.list_skills(status=status, search=search)
+    return [
+        {
+            "id": s.id,
+            "name": s.name,
+            "description": s.description,
+            "status": s.status.value,
+            "source": s.source.value,
+            "content_hash": s.content_hash,
+            "created_at": s.created_at,
+            "updated_at": s.updated_at,
+        }
+        for s in items
+    ]
+
+
+@router.post("/skills", status_code=201, tags=["skills"])
+def create_skill(body: SkillCreate) -> dict:
+    skill = skill_service.create_skill(
+        id=body.id,
+        name=body.name,
+        description=body.description,
+        body=body.body,
+        triggers=body.triggers,
+        inputs=body.inputs,
+        tools=body.tools,
+        side_effects=body.side_effects,
+        requires_confirmation=body.requires_confirmation,
+    )
+    return {
+        "id": skill.id,
+        "name": skill.name,
+        "description": skill.description,
+        "status": skill.status.value,
+        "content_hash": skill.content_hash,
+    }
+
+
+@router.get("/skills/{skill_id}", tags=["skills"])
+def get_skill(skill_id: str) -> dict:
+    skill = skill_service.get_skill(skill_id)
+    return {
+        "id": skill.id,
+        "name": skill.name,
+        "description": skill.description,
+        "status": skill.status.value,
+        "source": skill.source.value,
+        "body": skill.body,
+        "triggers": skill.triggers,
+        "inputs": [{"name": i.name, "required": i.required, "note": i.note} for i in skill.inputs],
+        "tools": skill.tools,
+        "side_effects": skill.side_effects,
+        "requires_confirmation": skill.requires_confirmation,
+        "content_hash": skill.content_hash,
+        "approved_version": skill.approved_version,
+        "created_at": skill.created_at,
+        "updated_at": skill.updated_at,
+    }
+
+
+@router.patch("/skills/{skill_id}", tags=["skills"])
+def update_skill(skill_id: str, body: SkillUpdate) -> dict:
+    skill = skill_service.update_skill(
+        skill_id,
+        body.expected_revision,
+        name=body.name,
+        description=body.description,
+        body=body.body,
+        triggers=body.triggers,
+        inputs=body.inputs,
+        tools=body.tools,
+        side_effects=body.side_effects,
+        requires_confirmation=body.requires_confirmation,
+    )
+    return {
+        "id": skill.id,
+        "name": skill.name,
+        "content_hash": skill.content_hash,
+    }
+
+
+@router.post("/skills/{skill_id}/disable", tags=["skills"])
+def disable_skill(skill_id: str) -> dict:
+    skill = skill_service.disable_skill(skill_id)
+    return {"id": skill.id, "status": skill.status.value}
+
+
+@router.post("/skills/{skill_id}/enable", tags=["skills"])
+def enable_skill(skill_id: str) -> dict:
+    skill = skill_service.enable_skill(skill_id)
+    return {"id": skill.id, "status": skill.status.value}
+
+
+@router.post("/skills/{skill_id}/archive", status_code=204, tags=["skills"])
+def archive_skill(skill_id: str) -> None:
+    skill_service.archive_skill(skill_id)
+
+
+@router.get("/skills/{skill_id}/versions", tags=["skills"])
+def get_skill_versions(skill_id: str) -> list[dict]:
+    versions = skill_service.get_versions(skill_id)
+    return [
+        {
+            "skill_id": v.skill_id,
+            "revision": v.revision,
+            "body": v.snapshot.body,
+            "approved_at": v.approved_at,
+            "created_at": v.created_at,
+        }
+        for v in versions
+    ]
+
+
+@router.post("/skills/{skill_id}/restore", tags=["skills"])
+def restore_skill_version(skill_id: str, revision: str) -> dict:
+    draft = skill_service.restore_version(skill_id, revision)
+    return {
+        "draft_id": draft.draft_id,
+        "skill_id": draft.skill_id,
+        "base_revision": draft.base_revision,
+    }
+
+
+@router.get("/skill-drafts/{draft_id}", tags=["skills"])
+def get_skill_draft(draft_id: str) -> dict:
+    from server.skills import repository
+
+    draft = repository.load_draft(draft_id)
+    if draft is None:
+        from server.errors import NotFoundError
+
+        raise NotFoundError(f"草稿不存在: {draft_id}")
+    return {
+        "draft_id": draft.draft_id,
+        "evidence": __import__("dataclasses").asdict(draft.skill.evidence)
+        if draft.skill.evidence
+        else None,
+        "skill_id": draft.skill_id,
+        "base_revision": draft.base_revision,
+        "name": draft.skill.name,
+        "description": draft.skill.description,
+        "body": draft.skill.body,
+        "triggers": draft.skill.triggers,
+        "inputs": [
+            {"name": i.name, "required": i.required, "note": i.note} for i in draft.skill.inputs
+        ],
+        "tools": draft.skill.tools,
+        "side_effects": draft.skill.side_effects,
+        "requires_confirmation": draft.skill.requires_confirmation,
+        "content_hash": draft.skill.content_hash,
+        "created_at": draft.created_at,
+        "updated_at": draft.updated_at,
+    }
+
+
+@router.patch("/skill-drafts/{draft_id}", tags=["skills"])
+def update_skill_draft(draft_id: str, body: SkillDraftUpdate) -> dict:
+    draft = skill_service.update_draft(
+        draft_id,
+        body.expected_revision,
+        name=body.name,
+        description=body.description,
+        body=body.body,
+        triggers=body.triggers,
+        inputs=body.inputs,
+        tools=body.tools,
+        side_effects=body.side_effects,
+        requires_confirmation=body.requires_confirmation,
+    )
+    return {
+        "draft_id": draft.draft_id,
+        "content_hash": draft.skill.content_hash,
+    }
+
+
+@router.post("/skill-drafts/{draft_id}/approve", tags=["skills"])
+def approve_skill_draft(draft_id: str, body: SkillUpdate) -> dict:
+    skill = skill_service.approve_draft(draft_id, body.expected_revision)
+    return {
+        "id": skill.id,
+        "name": skill.name,
+        "status": skill.status.value,
+        "content_hash": skill.content_hash,
+    }
+
+
+@router.post("/skill-drafts/{draft_id}/reject", status_code=204, tags=["skills"])
+def reject_skill_draft(draft_id: str) -> None:
+    skill_service.reject_draft(draft_id)
+
+
+@router.get("/skill-drafts", tags=["skills"])
+def list_skill_drafts() -> list[dict]:
+    from server.skills.repository import list_drafts
+
+    return [get_skill_draft(d.draft_id) for d in list_drafts()]
+
+
+@router.get("/tasks/{task_id}/skill-usage", tags=["skills"])
+def skill_usage(task_id: str, tasks: Tasks) -> list[dict]:
+    from server.db import session
+
+    tasks.get_task(task_id)
+    with session(tasks.path) as conn:
+        return [
+            dict(row)
+            for row in conn.execute(
+                "SELECT l.* FROM skill_run_links l JOIN agent_runs r USING(run_id) "
+                "WHERE r.task_id = ? ORDER BY loaded_at",
+                (task_id,),
+            )
+        ]

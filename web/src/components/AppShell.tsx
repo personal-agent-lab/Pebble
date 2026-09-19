@@ -57,7 +57,7 @@ const SKILL_ICON = (
 const PLACEHOLDERS = [
   { label: "资料", icon: KB_ICON },
   { label: "规则", icon: MEMORY_ICON },
-  { label: "Skill", icon: SKILL_ICON },
+
 ];
 
 /** 收起时显示的任务条数：够认出最近在做什么，又不会把下面的入口顶出视野。 */
@@ -96,6 +96,7 @@ function TasksLink({ unread }: { unread: number }) {
 function Placeholders() {
   return (
     <>
+      <NavLink to="/skills" className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>{SKILL_ICON}Skill</NavLink>
       {PLACEHOLDERS.map((item) => (
         <button key={item.label} type="button" className="nav-item disabled" disabled title="暂未开放">
           {item.icon}

@@ -1,3 +1,4 @@
+import SkillsPage from "./features/skills/SkillsPage";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import TaskListPage from "./pages/TaskListPage";
@@ -12,6 +13,7 @@ export default function App() {
       <SeenProvider>
         <Routes>
           <Route path="/" element={<Navigate to="/tasks" replace />} />
+          <Route path="/skills" element={<SkillsPage />} />
           <Route path="/tasks" element={<TaskListPage />} />
           <Route path="/tasks/:taskId" element={<TaskPage />} />
           <Route path="*" element={<Navigate to="/tasks" replace />} />

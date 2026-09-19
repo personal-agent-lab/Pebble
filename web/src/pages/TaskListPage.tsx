@@ -1,3 +1,5 @@
+import SkillPicker from "../features/skills/SkillPicker";
+import { emptySelection } from "../features/skills/api";
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -22,6 +24,7 @@ const MAX_INPUT_HEIGHT = 200;
  */
 export default function TaskListPage() {
   const navigate = useNavigate();
+  const [selection, setSelection] = useState(emptySelection);
   const { error, reload } = useTasks();
   const [goal, setGoal] = useState("");
   const [starting, setStarting] = useState(false);
@@ -44,7 +47,7 @@ export default function TaskListPage() {
       const task = await createTask(text);
       // 目标同时作为首条消息交给 Agent；Agent 未接入时任务已建立，提交失败只提示。
       try {
-        await sendMessage(task.task_id, text);
+        await sendMessage(task.task_id, text, null, selection);
       } catch (failure) {
         if (!(failure instanceof ApiError) || !failure.unavailable) throw failure;
         setStartError(failure);
@@ -84,6 +87,7 @@ export default function TaskListPage() {
                 }
               }}
             />
+            <SkillPicker value={selection} onChange={setSelection} disabled={starting} />
             <div className="starter-foot">
               <span className="starter-tip">Enter 发起 · Shift + Enter 换行</span>
               <button

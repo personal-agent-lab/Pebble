@@ -1,3 +1,6 @@
+import SkillUsage from "../features/skills/SkillUsage";
+import SkillPicker from "../features/skills/SkillPicker";
+import { emptySelection } from "../features/skills/api";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -16,6 +19,7 @@ const SEND_ICON = <svg className="i" viewBox="0 0 24 24" fill="none" stroke="cur
 export default function TaskPage() {
   const { taskId = "" } = useParams();
   const navigate = useNavigate();
+  const [selection, setSelection] = useState(emptySelection);
   const detail = useTaskDetail(taskId);
   const tasks = useTasks();
   const [message, setMessage] = useState("");
@@ -29,9 +33,10 @@ export default function TaskPage() {
   const submit = async () => {
     const text = message.trim();
     if (text === "" || detail.sending) return;
-    const failure = await detail.send(text, null);
+    const failure = await detail.send(text, null, selection);
     if (failure === null) {
       setMessage("");
+      setSelection(emptySelection());
       setActionError(null);
     } else setActionError(failure);
   };
@@ -61,6 +66,7 @@ export default function TaskPage() {
     </div>
 
     <div className="chat-main"><div className="feed">
+      <SkillUsage taskId={taskId} refresh={detail.items} />
       <TimelineFeed taskId={taskId} items={detail.items} running={running}
         sendMessage={(text, target) => detail.send(text, target)} onChanged={onChanged} />
       {actionError !== null && <Notice tone={actionError.unavailable ? "muted" : "danger"}
@@ -68,6 +74,7 @@ export default function TaskPage() {
     </div></div>
 
     <div className="msg-composer"><div className="composer-wrap">
+      <SkillPicker value={selection} onChange={setSelection} disabled={detail.sending} />
       <div className="composer-row">
         <textarea value={message} placeholder="回复 Agent，或补充修改意见…" aria-label="消息" rows={1}
           onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => {
