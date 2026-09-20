@@ -3,60 +3,134 @@
 每次调用独立启动 CLI 子进程：新会话由 CLI 生成会话标识，后续轮次用 `resume` 接续；进程
 退出后 SDK 自己保存会话状态，网页可见时间线由应用运行时单独持久化。
 
-模型可见的工具只有本进程 MCP server（名字 `pebble`）里的只读与本地写工具：每轮在
-`agent/mcp.py` 的端点上登记一个一次性路径，CLI 经回环地址连接，内置工具与本机设置一律
-关闭。真实发送不在这里、也不经过模型：它由 Confirmation 调用。网关不区分触发来源：
-一轮的消息与材料由调度层与触发域组装后经 `stream_turn` 传入。
+模型可见的工具是本进程 MCP server（名字 `pebble`）里的只读与本地写工具，外加用户亲自
+发起轮次里的内置联网查询（`WEB_TOOLS`）：每轮在 `agent/mcp.py` 的端点上登记一个一次性
+路径，CLI 经回环地址连接，本机设置一律关闭。真实发送不在这里、也不经过模型：它由
+Confirmation 调用。网关不区分触发来源：一轮的消息与材料由调度层与触发域组装后经
+`stream_turn` 传入。
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import logging
 import os
 from collections.abc import AsyncIterator
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from qodercn_agent_sdk import (
     AssistantMessage,
+    HookMatcher,
+    PermissionResultAllow,
+    PermissionResultDeny,
     QoderAgentOptions,
     QoderSDKClient,
     ResultMessage,
     StreamEvent,
     SystemMessage,
     TextBlock,
+    ToolUseBlock,
     access_token,
 )
 
 from server.agent import context
-from server.agent.mcp import TOOL_SERVER_NAME, ToolServer
+from server.agent.mcp import LOOPBACK_HOST, TOOL_ERROR_MESSAGE, TOOL_SERVER_NAME, ToolServer
 from server.agent.prompt import TITLE_PROMPT
 from server.agent.toolset import (
     ALLOWED_EFFECTS,
     ToolDeps,
+    TurnKind,
     build_tools,
     exposed_tools,
 )
 from server.config import Settings, get_settings
-from server.errors import DependencyUnavailableError
+from server.errors import DependencyUnavailableError, error_details
 from server.gateway.agent_contract import AgentEvent, AgentProtocolError, Turn
-from server.tools.registry import ToolDefinition
+from server.memory.service import MemoryStore
+from server.tools.memory.tools import judge_registry, review_registry
+from server.tools.personal_kb.catalog import CATALOG_TITLE
+from server.tools.registry import ToolDefinition, activity
+
+logger = logging.getLogger(__name__)
 
 CONFIG_DIR_ENV = "QODERCN_CONFIG_DIR"
-LOOPBACK_HOST = "127.0.0.1"
 
-# BYOK 供应商标识到协议风格的登记：SDK 目录由 CLI 运行时下发，这里只登记已确认的常见
-# 标识；未登记的一律在装配期报错，接入新供应商时补充本表。
-PROVIDER_STYLES = {
-    "anthropic": "anthropic",
-    "openai": "openai",
-    "deepseek": "openai",
-    "qwen": "openai",
-    "gemini": "openai",
-    "openrouter": "openai",
-}
+# BYOK 供应商标识登记：SDK 目录由 CLI 运行时下发，这里只登记已向目录确认过的标识，
+# 未登记的一律在装配期报错，接入新供应商时补充本表。目录中所有模型的协议风格都是
+# openai，因此风格不再按供应商推导。
+BYOK_PROVIDERS = frozenset(
+    {
+        "bailian",  # Alibaba Cloud Model Studio
+        "deepseek",
+        "kimi",
+        "minimax",
+        "qwencloud-cn",
+        "xiaomi-china",  # Xiaomi MIMO
+        "zhipu",  # Z.ai
+    }
+)
+BYOK_STYLE = "openai"
 
 NO_TERMINAL_MESSAGE = "SDK 调用未给出结束事件"
 MODEL_ERROR_MESSAGE = "模型调用失败"
+COMPACTION_ERROR_MESSAGE = "短期上下文压缩失败"
+
+# SDK 内置的联网查询工具：搜索请求与页面抓取都经 Qoder 后端代理，只在用户亲自发起的
+# 轮次暴露。触发轮与结果回传轮的输入来自外部内容，不能让其指令驱动网络请求把内容
+# 带出实例；WebFetch 是对指定页面的只读抓取，与 WebSearch 合起来才是完整的查资料能力。
+WEB_TOOLS = ("WebSearch", "WebFetch")
+
+
+# 内置联网工具不经本进程注册表，步骤说明在开放它们的这一层给出。
+WEB_TOOL_ACTIVITIES = {
+    "WebSearch": ("正在联网搜索", "query"),
+    "WebFetch": ("正在读取网页", "url"),
+}
+
+
+async def authorize_web_tool(tool_name: str, _input: dict, _context: Any):
+    """批准本轮已显式开放的只读联网工具，拒绝所有意外权限请求。"""
+    if tool_name in WEB_TOOLS:
+        return PermissionResultAllow()
+    return PermissionResultDeny(message=f"未授权的工具：{tool_name}")
+
+
+def turn_context_hooks(additional_context: str):
+    """在本轮 CLI 进程启动或恢复时注入应用材料。"""
+    if not additional_context:
+        return None
+
+    async def inject(_input, _tool_use_id, _hook_context):
+        # SDK hook 返回的是协议字段，保持 camelCase；snake_case 不会被 CLI 识别。
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": additional_context,
+            }
+        }
+
+    return {"SessionStart": [HookMatcher(hooks=[inject])]}
+
+
+def _recording(definition: ToolDefinition, records: list[dict]) -> ToolDefinition:
+    """包一层记录：判断提示要按真实工具结果生成，不能用模型的自述。"""
+
+    def recorded(**kwargs):
+        try:
+            result = definition.func(**kwargs)
+        except Exception as error:
+            details = error_details(error)
+            if details is None:
+                details = {"error": "unexpected", "message": TOOL_ERROR_MESSAGE}
+            records.append({"tool": definition.name, "arguments": kwargs, "error": details})
+            raise
+        records.append({"tool": definition.name, "arguments": kwargs, "result": result})
+        return result
+
+    return replace(definition, func=recorded)
 
 
 class QoderGateway:
@@ -67,15 +141,28 @@ class QoderGateway:
     ):
         self.settings = settings or get_settings()
         self.tool_server = tool_server
+        self.memory_store = deps.memory_store or MemoryStore(self.settings.data_dir)
+        self.kb_store = deps.kb_store
+        self.tasks_store = deps.tasks
         agent_dir = self.settings.data_dir / "agent"
         self.workspace = agent_dir / "workspace"
+        self.workspaces = agent_dir / "workspaces"
         config_dir = agent_dir / "config"
         self.workspace.mkdir(parents=True, exist_ok=True)
+        self.workspaces.mkdir(parents=True, exist_ok=True)
         config_dir.mkdir(parents=True, exist_ok=True)
         # 会话记录的读写都以这里为根：本进程读历史时查环境变量，子进程按继承的环境写入，
         # 两者必须指向同一目录，否则重启后读不到会话。
         os.environ[CONFIG_DIR_ENV] = str(config_dir)
-        self.tools = build_tools(deps)
+        self.tools = build_tools(replace(deps, memory_store=self.memory_store))
+        # 后台记忆回顾的一次性会话用回顾工具集（按行锚点编辑，不能追问），不与前台工具混在一起。
+        self.review_tools = build_tools(
+            replace(deps, memory_store=self.memory_store), registry=review_registry
+        )
+        # 每轮记忆判断的一次性会话用判断工具集：新增、替换与停止使用。
+        self.judge_tools = build_tools(
+            replace(deps, memory_store=self.memory_store), registry=judge_registry
+        )
         self._check_model_config()
 
     # ---------- 输入入口 ----------
@@ -86,9 +173,46 @@ class QoderGateway:
 
     async def generate_title(self, text: str) -> str:
         """一次性标题生成：无工具、不接续会话，也不进入任务的对话历史。"""
+        return await self.generate_text(TITLE_PROMPT, text)
+
+    async def generate_text(self, instructions: str, text: str) -> str:
+        """一次性短文本生成：指令即系统提示，走轻量模型，无工具、不接续会话。"""
+        return await self._light_reply(instructions, text)
+
+    async def describe_image(self, instructions: str, data: bytes, mime_type: str) -> str:
+        """一次性看图生成文字：与 generate_text 同形，只是输入换成一张图片。"""
+
+        async def image() -> AsyncIterator[dict[str, Any]]:
+            yield {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": mime_type,
+                                "data": base64.b64encode(data).decode("ascii"),
+                            },
+                        }
+                    ],
+                },
+                "parent_tool_use_id": None,
+            }
+
+        return await self._light_reply(instructions, image(), vision=True)
+
+    async def _light_reply(
+        self,
+        instructions: str,
+        prompt: str | AsyncIterator[dict[str, Any]],
+        *,
+        vision: bool = False,
+    ) -> str:
         parts: list[str] = []
-        async with QoderSDKClient(self._title_options()) as client:
-            await client.query(text)
+        async with QoderSDKClient(self._light_options(instructions, vision=vision)) as client:
+            await client.query(prompt)
             async for message in client.receive_response():
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
@@ -99,6 +223,42 @@ class QoderGateway:
                         detail = (message.result or "").strip() or MODEL_ERROR_MESSAGE
                         raise AgentProtocolError(detail)
                     return "".join(parts).strip()
+        raise AgentProtocolError(NO_TERMINAL_MESSAGE)
+
+    async def review_memory(self, task_id: str, instructions: str, transcript: str) -> list[dict]:
+        """一次性记忆回顾：带回顾工具集，不接续会话，也不进入任何任务历史。
+
+        返回按调用顺序记录的工具调用与结果，整理提示由调用方按这些真实记录生成。
+        """
+        return await self._memory_session(self.review_tools, task_id, instructions, transcript)
+
+    async def judge_memory(self, task_id: str, instructions: str, message: str) -> list[dict]:
+        """一次性记忆判断：带判断工具集，不接续会话；返回按调用顺序记录的工具调用与结果。
+
+        判断对用户可见的提示由调用方按这些真实记录生成，不使用模型的文本回复。
+        """
+        return await self._memory_session(self.judge_tools, task_id, instructions, message)
+
+    async def _memory_session(
+        self, definitions: list[ToolDefinition], task_id: str, instructions: str, message: str
+    ) -> list[dict]:
+        records: list[dict] = []
+        tools = [_recording(definition, records) for definition in definitions]
+        # 记忆工具不发草稿事件，队列恒为空，仅为满足端点签名传入。
+        queued: asyncio.Queue = asyncio.Queue()
+        async with self.tool_server.serve(tools, task_id=task_id, queued=queued) as path:
+            task = self.tasks_store.get_task(task_id)
+            options = self._oneshot_options(
+                instructions, path, tools, task_id=task_id, model=task["model"]
+            )
+            async with QoderSDKClient(options) as client:
+                await client.query(message)
+                async for reply in client.receive_response():
+                    if isinstance(reply, ResultMessage):
+                        if reply.is_error:
+                            detail = (reply.result or "").strip() or MODEL_ERROR_MESSAGE
+                            raise AgentProtocolError(detail)
+                        return records
         raise AgentProtocolError(NO_TERMINAL_MESSAGE)
 
     # ---------- 调用执行 ----------
@@ -133,7 +293,9 @@ class QoderGateway:
         ) as path:
             options = self._options(turn, visible=visible, path=path)
             async with QoderSDKClient(options) as client:
-                await client.query(turn.message)
+                if turn.sdk_session_id is not None:
+                    await self._compact_if_needed(client)
+                await client.query(self._query_input(turn))
                 async for message in client.receive_response():
                     # 工具事件在产生它的那次调用之后、模型的下一条消息之前送出。
                     while not queued.empty():
@@ -160,9 +322,119 @@ class QoderGateway:
                                 if isinstance(block, TextBlock) and block.text.strip():
                                     yield {"type": "text", "text": block.text}
                         streamed = False
+                        # 模型给出完整的工具调用时、执行开始之前告诉页面这一步在做什么。
+                        for block in message.content:
+                            if isinstance(block, ToolUseBlock):
+                                text = self._activity_text(block, visible)
+                                if text:
+                                    yield {"type": "activity", "text": text}
         while not queued.empty():
             yield queued.get_nowait()
         yield {"type": "error", "message": NO_TERMINAL_MESSAGE}
+
+    @staticmethod
+    def _activity_text(block: ToolUseBlock, visible: list[ToolDefinition]) -> str | None:
+        """把一次工具调用换成用户能读懂的步骤说明；没有声明说明的工具不展示。"""
+        arguments = block.input if isinstance(block.input, dict) else {}
+        prefix = f"mcp__{TOOL_SERVER_NAME}__"
+        if block.name.startswith(prefix):
+            name = block.name[len(prefix) :]
+            definition = next((tool for tool in visible if tool.name == name), None)
+            if definition is None or definition.activity_renderer is None:
+                return None
+            try:
+                return definition.activity_renderer(arguments)
+            except Exception:
+                logger.exception("工具 %s 的步骤说明生成失败", name)
+                return None
+        if block.name in WEB_TOOL_ACTIVITIES:
+            label, field = WEB_TOOL_ACTIVITIES[block.name]
+            return activity(label, arguments.get(field))
+        return None
+
+    async def _compact_if_needed(self, client: QoderSDKClient) -> None:
+        """运行时未启用自动压缩时，在达到其阈值后先完成手动压缩。"""
+        usage = await client.get_context_usage()
+        automatic = usage["autoCompact"]
+        if automatic["enabled"]:
+            return
+        if usage["contextWindow"]["usedPercentage"] < automatic["thresholdPercentage"]:
+            return
+
+        compacted = False
+        await client.query("/compact")
+        async for message in client.receive_response():
+            if isinstance(message, SystemMessage) and message.subtype == "compact_boundary":
+                compacted = True
+            elif isinstance(message, ResultMessage) and message.is_error:
+                detail = (message.result or "").strip() or COMPACTION_ERROR_MESSAGE
+                raise AgentProtocolError(detail)
+        if not compacted:
+            raise AgentProtocolError(COMPACTION_ERROR_MESSAGE)
+
+    def _catalog_materials(self) -> tuple[context.Material, ...]:
+        """常驻的资料目录：记忆全文之后、本轮材料之前。读不出来时本轮不带目录，不中断调用。"""
+        if self.kb_store is None:
+            return ()
+        try:
+            catalog = self.kb_store.catalog()
+        except Exception:
+            logger.exception("资料目录生成失败，本轮不注入")
+            return ()
+        return (context.Material(CATALOG_TITLE, catalog),) if catalog else ()
+
+    async def _image_input(self, turn: Turn) -> AsyncIterator[dict[str, Any]]:
+        content: list[dict[str, Any]] = [{"type": "text", "text": turn.message}]
+        for attachment in turn.attachments:
+            if not attachment.is_image:
+                continue
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": attachment.mime_type,
+                        "data": base64.b64encode(attachment.path.read_bytes()).decode("ascii"),
+                    },
+                }
+            )
+        yield {
+            "type": "user",
+            "message": {"role": "user", "content": content},
+            "parent_tool_use_id": None,
+        }
+
+    def _query_input(self, turn: Turn) -> str | AsyncIterator[dict[str, Any]]:
+        if any(item.is_image for item in turn.attachments):
+            return self._image_input(turn)
+        return turn.message
+
+    def _task_workspace(self, task_id: str) -> Any:
+        workspace = self.workspaces / task_id
+        workspace.mkdir(parents=True, exist_ok=True)
+        return workspace
+
+    def _permission_callback(self, task_id: str, *, web_enabled: bool, read_enabled: bool):
+        workspace = self._task_workspace(task_id).resolve()
+
+        async def authorize(tool_name: str, tool_input: dict, _context: Any):
+            if web_enabled and tool_name in WEB_TOOLS:
+                return PermissionResultAllow()
+            if (
+                read_enabled
+                and tool_name == "Read"
+                and isinstance(tool_input.get("file_path"), str)
+            ):
+                requested = Path(tool_input["file_path"])
+                requested = requested if requested.is_absolute() else workspace / requested
+                try:
+                    requested.resolve().relative_to(workspace)
+                except ValueError:
+                    return PermissionResultDeny(message="只能读取当前任务的附件")
+                return PermissionResultAllow()
+            return PermissionResultDeny(message=f"未授权的工具：{tool_name}")
+
+        return authorize
 
     def _options(
         self, turn: Turn, *, visible: list[ToolDefinition], path: str
@@ -187,7 +459,7 @@ class QoderGateway:
                         content={
                             "说明": (
                                 "按需调用 skill_read 加载相关正文，可以不选。"
-                                "Skill 不覆盖用户本轮要求，冲突时追问。"
+                                "Skill 不覆盖用户本轮要求，Skill 之间冲突时追问。"
                             ),
                             "skills": [
                                 {"id": s.id, "name": s.name, "description": s.description}
@@ -196,11 +468,34 @@ class QoderGateway:
                         },
                     )
                 )
-        ctx = context.assemble(materials=materials)
+        snapshot = self.memory_store.snapshot()
+        memory_materials = tuple(
+            context.Material(title, snapshot[target]["content"])
+            for target, title in (("user", "关于你"), ("memory", "事实与约定"))
+            if snapshot[target]["content"]
+        )
+        ctx = context.assemble(
+            materials=(*memory_materials, *self._catalog_materials(), *materials)
+        )
+        workspace = self._task_workspace(turn.task_id)
+        web_tools = list(WEB_TOOLS) if turn.kind is TurnKind.MESSAGE else []
+        read_enabled = turn.kind is TurnKind.MESSAGE and (workspace / "attachments").is_dir()
+        builtins = [*web_tools, *(["Read"] if read_enabled else [])]
         return QoderAgentOptions(
-            # 内置工具与本机设置一律关闭：模型能看到的只有本轮 MCP 端点里的工具。
-            tools=[],
-            allowed_tools=[f"mcp__{TOOL_SERVER_NAME}__{definition.name}" for definition in visible],
+            # 内置工具只开放联网查询（见 WEB_TOOLS），本机设置一律关闭：模型能看到的其余
+            # 工具只有本轮 MCP 端点里的那些。
+            tools=builtins,
+            allowed_tools=[
+                *builtins,
+                *(f"mcp__{TOOL_SERVER_NAME}__{definition.name}" for definition in visible),
+            ],
+            can_use_tool=(
+                self._permission_callback(
+                    turn.task_id, web_enabled=bool(web_tools), read_enabled=read_enabled
+                )
+                if builtins
+                else None
+            ),
             mcp_servers={
                 TOOL_SERVER_NAME: {"type": "http", "url": self._tool_url(path)},
             },
@@ -209,14 +504,15 @@ class QoderGateway:
             setting_sources=[],
             skills=ctx.skills,
             system_prompt=ctx.system_prompt,
-            cwd=self.workspace,
+            hooks=turn_context_hooks(ctx.additional_context),
+            cwd=workspace,
             resume=turn.sdk_session_id,
             include_partial_messages=True,
             auth=self._auth(),
-            **self._model_options(),
+            model=turn.model or self.settings.qoder_model,
         )
 
-    def _title_options(self) -> QoderAgentOptions:
+    def _light_options(self, instructions: str, *, vision: bool = False) -> QoderAgentOptions:
         return QoderAgentOptions(
             tools=[],
             allowed_tools=[],
@@ -225,15 +521,42 @@ class QoderGateway:
             strict_mcp_config=True,
             setting_sources=[],
             skills=[],
-            system_prompt=TITLE_PROMPT,
+            system_prompt=instructions,
             cwd=self.workspace,
             include_partial_messages=False,
             auth=self._auth(),
-            **self._model_options(),
+            **self._light_model_options(vision=vision),
+        )
+
+    def _oneshot_options(
+        self,
+        instructions: str,
+        path: str,
+        tools: list[ToolDefinition],
+        *,
+        task_id: str,
+        model: str,
+    ) -> QoderAgentOptions:
+        # 与标题生成同形，但经本轮 MCP 端点带上指定工具集；无 resume，每次都是全新会话。
+        return QoderAgentOptions(
+            tools=[],
+            allowed_tools=[f"mcp__{TOOL_SERVER_NAME}__{definition.name}" for definition in tools],
+            mcp_servers={
+                TOOL_SERVER_NAME: {"type": "http", "url": self._tool_url(path)},
+            },
+            allowed_mcp_server_names=[TOOL_SERVER_NAME],
+            strict_mcp_config=True,
+            setting_sources=[],
+            skills=[],
+            system_prompt=instructions,
+            cwd=self._task_workspace(task_id),
+            include_partial_messages=False,
+            auth=self._auth(),
+            model=model or self.settings.qoder_model,
         )
 
     def _tool_url(self, path: str) -> str:
-        return f"http://{LOOPBACK_HOST}:{self.settings.port}{path}"
+        return f"http://{LOOPBACK_HOST}:{self.settings.tool_port}{path}"
 
     def _auth(self) -> Any:
         token = self.settings.qoder_token
@@ -242,42 +565,48 @@ class QoderGateway:
         return access_token(token.get_secret_value())
 
     def _check_model_config(self) -> None:
-        """BYOK 三项要么齐全且供应商已登记，要么都不配，缺项或写错都在装配期报错。
+        """轻量模型三项要么齐全且供应商已登记，要么都不配，缺项或写错都在装配期报错。
 
         只配一部分就静默退回托管模型，会让调用方以为在用自己的账号与额度，
         实际请求却去了别处。
         """
         settings = self.settings
-        if not settings.model_provider and not settings.model_api_key:
+        values = (
+            ("PEBBLE_LIGHT_MODEL_PROVIDER", settings.light_model_provider),
+            ("PEBBLE_LIGHT_MODEL_API_KEY", settings.light_model_api_key),
+            ("PEBBLE_LIGHT_MODEL", settings.light_model),
+        )
+        if not any(value for _, value in values):
             return
-        missing = [
-            name
-            for name, value in (
-                ("PEBBLE_MODEL_PROVIDER", settings.model_provider),
-                ("PEBBLE_MODEL_API_KEY", settings.model_api_key),
-                ("PEBBLE_QODER_MODEL", settings.qoder_model),
-            )
-            if not value
-        ]
+        missing = [name for name, value in values if not value]
         if missing:
-            raise DependencyUnavailableError(f"BYOK 配置不完整，缺少：{', '.join(missing)}")
-        if settings.model_provider not in PROVIDER_STYLES:
-            raise DependencyUnavailableError(f"未登记的模型供应商：{settings.model_provider}")
+            raise DependencyUnavailableError(f"轻量模型配置不完整，缺少：{', '.join(missing)}")
+        if settings.light_model_provider not in BYOK_PROVIDERS:
+            raise DependencyUnavailableError(
+                f"未登记的模型供应商：{settings.light_model_provider}，"
+                f"可选：{', '.join(sorted(BYOK_PROVIDERS))}"
+            )
 
-    def _model_options(self) -> dict[str, Any]:
-        """托管模型直接给型号名；配了第三方模型就转成 BYOK，凭证只在这里读取。"""
+    def _light_model_options(self, *, vision: bool = False) -> dict[str, Any]:
+        """配了轻量模型就转成 BYOK 的 `resolve_model`，凭证只在这里读取；否则沿用托管型号。
+
+        看图调用要声明 `is_vl`：不声明时 CLI 按纯文本模型处理，图片不会发给模型。
+        模型本身不支持图片时这次调用失败或回答看不到，由调用方按空说明处理。
+        """
         settings = self.settings
-        if settings.model_provider:
-            custom: dict[str, Any] = {
-                "provider": settings.model_provider,
-                "model": settings.qoder_model,
-                "api_key": settings.model_api_key.get_secret_value(),
-                "style": PROVIDER_STYLES[settings.model_provider],
-            }
-            if settings.model_base_url:
-                custom["url"] = settings.model_base_url
-            return {"resolve_model": lambda _context: {"model": custom}}
-        return {"model": settings.qoder_model}
+        if not settings.light_model_provider:
+            return {"model": settings.qoder_model}
+        custom: dict[str, Any] = {
+            "provider": settings.light_model_provider,
+            "model": settings.light_model,
+            "api_key": settings.light_model_api_key.get_secret_value(),
+            "style": BYOK_STYLE,
+        }
+        if vision:
+            custom["is_vl"] = True
+        if settings.light_model_base_url:
+            custom["url"] = settings.light_model_base_url
+        return {"resolve_model": lambda _context: {"model": custom}}
 
 
 def _result_event(message: ResultMessage) -> AgentEvent:

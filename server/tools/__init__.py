@@ -6,5 +6,8 @@
 
 from server.tools.calendar import tools as calendar_tools
 from server.tools.gmail import tools as gmail_tools
+from server.tools.history import tools as history_tools
+from server.tools.memory import tools as memory_tools
+from server.tools.personal_kb import tools as personal_kb_tools
 
-__all__ = ["calendar_tools", "gmail_tools"]
+__all__ = ["calendar_tools", "gmail_tools", "history_tools", "memory_tools", "personal_kb_tools"]

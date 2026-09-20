@@ -36,15 +36,20 @@ class GmailSource:
 
     async def start(self, agent):
         self.agent = agent
+        self.worker = asyncio.create_task(self._run())
+
+    async def _initialize(self) -> bool:
         profile = await asyncio.to_thread(self.client.get_profile)
         if self.path.exists():
             self.state = json.loads(self.path.read_text())
             if self.state["email"] != profile["emailAddress"]:
-                raise RuntimeError("Gmail 同步账号与已有游标不一致")
+                self.error = "Gmail 同步账号与已有游标不一致"
+                logger.error(self.error)
+                return False
         else:
             # 首次启动从当前邮箱位置监听，不把已有历史邮件当成新邮件。
             self._save({"email": profile["emailAddress"], "history_id": profile["historyId"]})
-        self.worker = asyncio.create_task(self._run())
+        return True
 
     async def poll(self):
         token = None
@@ -64,12 +69,19 @@ class GmailSource:
                 return
 
     async def _run(self):
+        initialized = False
         while not self.stopping.is_set():
+            polling = False
             try:
+                if not initialized:
+                    initialized = await self._initialize()
+                    if not initialized:
+                        return
+                polling = True
                 await self.poll()
             except HttpError as error:
                 self.error = f"Gmail 检测失败（HTTP {error.resp.status}）"
-                if error.resp.status == 404:
+                if polling and error.resp.status == 404:
                     self.error = "Gmail 同步游标已失效，需要核对邮箱并重新建立同步位置"
                     logger.error(self.error)
                     return

@@ -3,7 +3,7 @@
 import json
 import sqlite3
 
-from server.errors import NotFoundError
+from server.errors import NotFoundError, RetryUnavailableError
 
 KIND_NEW_MAIL = "new_mail"
 KIND_MESSAGE = "message"
@@ -122,3 +122,60 @@ def interrupt_running(conn: sqlite3.Connection, now: str, reason: str) -> list[s
             (reason, now, run_id),
         )
     return run_ids
+
+
+def retryable(conn: sqlite3.Connection, row: dict | sqlite3.Row) -> bool:
+    """只有未产生操作记录的最后一轮已中断用户消息可安全整体重试。"""
+    if row["kind"] != KIND_MESSAGE or row["status"] != "interrupted":
+        return False
+    operation = conn.execute(
+        "SELECT 1 FROM operations WHERE created_task_id = ? AND "
+        "((created_at >= ? AND created_at <= ?) OR (updated_at >= ? AND updated_at <= ?)) "
+        "LIMIT 1",
+        (
+            row["task_id"],
+            row["started_at"],
+            row["finished_at"],
+            row["started_at"],
+            row["finished_at"],
+        ),
+    ).fetchone()
+    return operation is None
+
+
+def retry_latest_message(conn: sqlite3.Connection, task_id: str) -> dict:
+    """把最后一轮已中断的用户消息恢复为待执行，不新增第二条用户消息。"""
+    row = conn.execute(
+        "SELECT * FROM agent_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    if row is None or not retryable(conn, row):
+        raise RetryUnavailableError()
+
+    # 中断前可能已经流出半截回答；重试替换这段未完成文字。程序提示与操作卡代表已经
+    # 发生的事实，必须保留。历史索引是派生数据，但要同时移除对应条目，避免留下孤儿。
+    assistant_ids = [
+        item["item_id"]
+        for item in conn.execute(
+            "SELECT item_id FROM task_timeline_items "
+            "WHERE run_id = ? AND kind = 'text' AND role = 'assistant'",
+            (row["run_id"],),
+        )
+    ]
+    for item_id in assistant_ids:
+        indexed = conn.execute(
+            "SELECT fts_rowid FROM history_items WHERE item_id = ?", (item_id,)
+        ).fetchone()
+        if indexed is not None:
+            conn.execute("DELETE FROM history_fts WHERE rowid = ?", (indexed["fts_rowid"],))
+            conn.execute("DELETE FROM history_items WHERE item_id = ?", (item_id,))
+        conn.execute("DELETE FROM task_timeline_items WHERE item_id = ?", (item_id,))
+
+    cursor = conn.execute(
+        "UPDATE agent_runs SET status = 'pending', error = NULL, started_at = NULL, "
+        "finished_at = NULL WHERE run_id = ? AND status = 'interrupted'",
+        (row["run_id"],),
+    )
+    if cursor.rowcount != 1:
+        raise RetryUnavailableError()
+    return run(conn, row["run_id"])

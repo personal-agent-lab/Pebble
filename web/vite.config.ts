@@ -15,5 +15,8 @@ export default defineConfig(({ mode }) => {
         "/api": { target: backend, changeOrigin: true },
       },
     },
+    test: {
+      setupFiles: ["./src/test-setup.ts"],
+    },
   };
 });

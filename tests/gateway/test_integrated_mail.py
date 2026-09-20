@@ -19,6 +19,7 @@ from server.agent.toolset import ToolDeps, build_tools
 from server.config import Settings
 from server.db import init_db
 from server.main import create_app
+from server.memory.judge import JUDGE_INSTRUCTIONS
 from server.sessions.service import SessionStore
 from server.tools.gmail.sender import send_message
 from server.tools.gmail.service import MailDraftStore
@@ -52,7 +53,9 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
             self.options = options
             self.sid = options.resume or str(uuid4())
             self.is_title = options.system_prompt == TITLE_PROMPT
-            if not self.is_title:
+            # 每轮记忆判断是独立的一次性调用：不登记会话、不进脚本分支，直接结束。
+            self.is_judge = options.system_prompt == JUDGE_INSTRUCTIONS
+            if not self.is_title and not self.is_judge:
                 sessions.append(self.sid)
 
         async def __aenter__(self):
@@ -64,9 +67,15 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
         async def query(self, message):
             self.message = message
 
+        async def get_context_usage(self):
+            return {
+                "contextWindow": {"usedPercentage": 20},
+                "autoCompact": {"enabled": True, "thresholdPercentage": 80},
+            }
+
         async def call(self, name, fields):
             url = self.options.mcp_servers[TOOL_SERVER_NAME]["url"]
-            async with mcp_session(app, url) as session:
+            async with mcp_session(tool_server, url) as session:
                 result = await session.call_tool(name, fields)
             assert result.isError is False, result
             return tool_payload(result)
@@ -76,6 +85,9 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
 
         async def receive_response(self):
             yield SystemMessage("init", {"session_id": self.sid})
+            if self.is_judge:
+                yield ResultMessage("success", 1, 1, False, 1, self.sid)
+                return
             if self.is_title:
                 yield self.say("邀请回复")
                 yield ResultMessage("success", 1, 1, False, 1, self.sid)
@@ -113,7 +125,9 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
                 )
                 yield self.say("已按你的要求补充。")
             else:
-                assert '"status": "sent"' in self.options.system_prompt
+                matcher = self.options.hooks["SessionStart"][0]
+                hook_result = await matcher.hooks[0]({}, None, {})
+                assert '"status": "sent"' in hook_result["hookSpecificOutput"]["additionalContext"]
                 yield self.say("邮件已经发出去了。")
             yield ResultMessage("success", 1, 1, False, 1, self.sid)
 
@@ -123,7 +137,6 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
         send_message=partial(send_message, client=gmail),
         tasks=tasks,
         drafts=drafts,
-        tool_server=tool_server,
     )
     with TestClient(app) as http:
         task = http.portal.call(
@@ -147,11 +160,17 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
             app.state.agent.accept_new_mail, "msg_invite_001", "thread_invite_001"
         )
         assert duplicate["task_id"] == tid
-        for message in ["帮我写一封回信", "询问会议链接"]:
-            response = http.post(f"/api/tasks/{tid}/messages", json={"message": message})
-            assert response.status_code == 202
-            wait()
+        response = http.post(f"/api/tasks/{tid}/messages", data={"message": "帮我写一封回信"})
+        assert response.status_code == 202
+        wait()
         oid = operation["operation_id"]
+        # 卡片上的修改要求定向这份草稿：原地另存一版，不另起卡片。
+        target = json.dumps({"kind": "mail_draft", "operation_id": oid})
+        response = http.post(
+            f"/api/tasks/{tid}/messages", data={"message": "询问会议链接", "target": target}
+        )
+        assert response.status_code == 202
+        wait()
         current = drafts.get_draft(oid)
         assert current["version"] == 2
         assert "会议链接" in current["body"]

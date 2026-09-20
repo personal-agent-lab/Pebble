@@ -135,6 +135,28 @@ class ConfirmationService:
             operations.update_status(conn, operation_id, active, now)
         return self.get_execution(operation_id)
 
+    def cancel(self, task_id: str, operation_id: str, version: int) -> dict:
+        """取消待确认的草稿：只改状态，不产生执行记录，也不向 Agent 回传结果。
+
+        版本规则与确认相同，用户取消的必须是自己看到的那一版；重复取消返回已有状态。
+        """
+        with session(self.path) as conn, write(conn):
+            operations.task(conn, task_id)
+            row = repo.view(conn, operation_id)
+            if not conn.execute(
+                "SELECT 1 FROM task_operations WHERE task_id=? AND operation_id=?",
+                (task_id, operation_id),
+            ).fetchone():
+                raise NotFoundError(operation_id)
+            if row["version"] != version:
+                raise VersionConflictError(row["version"])
+            if row["status"] == "cancelled":
+                return execution_response(row)
+            if row["status"] != "pending":
+                raise NotEditableError(row["status"])
+            operations.update_status(conn, operation_id, "cancelled", timestamp())
+        return self.get_execution(operation_id)
+
     def execute_accepted(self, operation_id: str, *, deliver: bool = True) -> dict | None:
         with session(self.path) as conn, write(conn):
             row = repo.view(conn, operation_id)

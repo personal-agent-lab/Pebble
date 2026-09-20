@@ -1,11 +1,19 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
-import { type ApiError, type MessageTarget, type TimelineItem } from "../api";
+import { FileText } from "@phosphor-icons/react";
+
+import { type ApiError, type Attachment, type MessageTarget, type TimelineItem } from "../api";
+import { isMemoryNotice } from "../memory";
 import MailDraftCard from "./MailDraftCard";
 import Markdown from "./Markdown";
 import MessageActions from "./MessageActions";
 
 const STICK_PX = 48;
+const FOCUS_MS = 2400;
+
+/** 时间线条目的页面锚点：历史搜索结果链接到 `/tasks/:id#item-<item_id>`。 */
+export const itemAnchor = (itemId: string) => `item-${itemId}`;
 
 /**
  * 消息流的滚动容器：桌面是 .feed，手机折叠成整页滚动。
@@ -31,10 +39,29 @@ const scrollEventTarget = (scroller: HTMLElement): EventTarget =>
 function contentSignature(items: TimelineItem[]): string {
   const last = items[items.length - 1];
   if (last === undefined) return "0";
-  const growth = last.kind === "text" ? last.text.length
+  const growth = last.kind === "text" ? `${last.text.length}:${(last.attachments ?? []).map((item) => item.file_id).join(",")}`
     : last.kind === "mail_draft" ? `${last.draft.version}:${last.execution.status}`
     : last.text.length;
   return `${items.length}:${last.item_id}:${growth}`;
+}
+
+const formatSize = (size: number) => size >= 1024 * 1024
+  ? `${(size / 1024 / 1024).toFixed(1)} MB`
+  : `${Math.max(1, Math.round(size / 1024))} KB`;
+
+function MessageAttachments({ items }: { items: Attachment[] }) {
+  if (items.length === 0) return null;
+  return <div className="message-attachments">
+    {items.map((attachment) => attachment.mime_type.startsWith("image/")
+      ? <a className="message-image" href={attachment.url} target="_blank" rel="noreferrer"
+          key={attachment.file_id} aria-label={`查看图片 ${attachment.filename}`}>
+          <img src={attachment.url} alt={attachment.filename} />
+        </a>
+      : <a className="message-file" href={attachment.url} key={attachment.file_id} download>
+          <FileText size={22} weight="regular" />
+          <span><strong>{attachment.filename}</strong><small>{formatSize(attachment.size)}</small></span>
+        </a>)}
+  </div>;
 }
 
 /** 连续几条 Agent 文字读起来是同一个回答，复制要拿到完整一段而不是最后一截。 */
@@ -52,13 +79,27 @@ type Props = {
   taskId: string;
   items: TimelineItem[];
   running: boolean;
+  /** 进行中的当前步骤说明；没有时只显示跳动的点。 */
+  activity?: string | null;
+  /** 从历史搜索跳转过来时要定位的条目：滚到它并短暂高亮，不再自动贴底。 */
+  focusItemId?: string | null;
+  /** 只有任务最后一轮是已中断的用户消息时才有值。 */
+  retryRunId?: string | null;
+  retrying?: boolean;
+  retryMessage?: () => Promise<ApiError | null>;
   sendMessage: (message: string, target: MessageTarget) => Promise<ApiError | null>;
   onChanged: () => Promise<void>;
 };
 
-export default function TimelineFeed({ taskId, items, running, sendMessage, onChanged }: Props) {
+export default function TimelineFeed({
+  taskId, items, running, activity = null, focusItemId = null, retryRunId = null,
+  retrying = false, retryMessage, sendMessage, onChanged,
+}: Props) {
   const anchor = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
+  const stick = useRef(focusItemId === null);
+  const focused = useRef<string | null>(null);
+  const [highlight, setHighlight] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
   useEffect(() => {
     let scroller = scrollParent(anchor.current);
     let target = scrollEventTarget(scroller);
@@ -88,13 +129,35 @@ export default function TimelineFeed({ taskId, items, running, sendMessage, onCh
   const signature = contentSignature(items);
   useEffect(() => { if (stick.current) anchor.current?.scrollIntoView({ block: "end" }); }, [signature, running]);
 
+  // 定位只做一次：条目读出来之后滚到它；之后的新内容照常，不再把视图拽回这里。
+  const present = focusItemId !== null && items.some((item) => item.item_id === focusItemId);
+  useEffect(() => {
+    if (focusItemId === null || !present || focused.current === focusItemId) return;
+    focused.current = focusItemId;
+    stick.current = false;
+    document.getElementById(itemAnchor(focusItemId))?.scrollIntoView({ block: "center" });
+    setHighlight(focusItemId);
+    const timer = window.setTimeout(() => setHighlight(null), FOCUS_MS);
+    return () => window.clearTimeout(timer);
+  }, [focusItemId, present]);
+  const mark = (itemId: string) => ({
+    id: itemAnchor(itemId),
+    "data-focus": highlight === itemId ? "true" : undefined,
+  });
+
   return <>
     {items.map((item, index) => {
-      if (item.kind === "error") return <div className="sys-row" key={item.item_id}>
+      if (item.kind === "error") return <div className="sys-row" key={item.item_id} {...mark(item.item_id)}>
         <span className="error-text">本轮处理失败：{item.text}</span><span className="rule" />
       </div>;
-      if (item.kind === "mail_draft") return <MailDraftCard key={item.item_id} taskId={taskId} item={item}
-        sendMessage={sendMessage} onChanged={onChanged} />;
+      if (item.kind === "notice") return <div className="sys-row" key={item.item_id} {...mark(item.item_id)}>
+        <span>{item.text}</span>
+        {isMemoryNotice(item.text) && <Link className="sys-link" to="/memory">查看记忆</Link>}
+        <span className="rule" />
+      </div>;
+      if (item.kind === "mail_draft") return <div className="focus-frame" key={item.item_id} {...mark(item.item_id)}>
+        <MailDraftCard taskId={taskId} item={item} sendMessage={sendMessage} onChanged={onChanged} />
+      </div>;
       const agent = item.role === "assistant";
       const previous = items[index - 1];
       const next = items[index + 1];
@@ -103,17 +166,34 @@ export default function TimelineFeed({ taskId, items, running, sendMessage, onCh
       // 否则复制到的是半截文字，时间也还不是这段回答的时间。
       const last = index === items.length - 1;
       const ended = !(next?.kind === "text" && next.role === "assistant") && !(last && running);
-      return <div className={`msg ${agent ? "agent" : "user"}${grouped ? " cont" : ""}`} key={item.item_id}>
+      const canRetry = !agent && item.run_id === retryRunId && retryMessage !== undefined;
+      return <div className={`msg ${agent ? "agent" : "user"}${grouped ? " cont" : ""}`} key={item.item_id}
+        {...mark(item.item_id)}>
         <div className="msg-body"><span className="sr-only">{agent ? "Agent 说：" : "我说："}</span>
-          <div className="bubble">{agent ? <Markdown text={item.text} /> : item.text}</div>
+          {item.text && <div className="bubble">{agent ? <Markdown text={item.text} /> : item.text}</div>}
+          {!agent && <MessageAttachments items={item.attachments ?? []} />}
+          {!agent && (canRetry || item.text) && <div className="user-message-actions">
+            {canRetry && retryError !== null && <span className="retry-error" role="status">{retryError}</span>}
+            {canRetry && <button type="button" className="retry-message" disabled={retrying} onClick={() => {
+              setRetryError(null);
+              void retryMessage().then((error) => setRetryError(error?.message ?? null));
+            }} aria-label={retrying ? "正在重试这条消息" : "重试这条消息"} title="重试">
+              <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"
+                strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M20 11a8 8 0 1 0-2.34 5.66" /><polyline points="20 4 20 11 13 11" />
+              </svg>
+            </button>}
+            {item.text && <MessageActions text={item.text} pinned={false} end copyLabel="复制消息" />}
+          </div>}
           {agent && ended && <MessageActions text={answerText(items, index)}
             createdAt={item.created_at} pinned={last} />}
         </div>
       </div>;
     })}
     {running && <div className="thinking" role="status">
-      <span className="sr-only">Agent 正在处理</span>
-      <span className="dot" /><span className="dot" /><span className="dot" />
+      {activity === null && <span className="sr-only">Agent 正在处理</span>}
+      <span className="dot" aria-hidden /><span className="dot" aria-hidden /><span className="dot" aria-hidden />
+      {activity !== null && <span className="thinking-text">{activity}</span>}
     </div>}
     <div ref={anchor} />
   </>;

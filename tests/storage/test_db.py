@@ -19,6 +19,40 @@ def test_schema_version_survives_reconnect(settings: Settings) -> None:
     assert settings.db_path.exists()
 
 
+@pytest.mark.parametrize("existing_skills", [False, True])
+def test_main_v16_migration_preserves_tasks_and_adds_skills(
+    settings: Settings, existing_skills: bool
+) -> None:
+    settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+    with session() as conn, write(conn):
+        conn.execute("CREATE TABLE schema_meta (version INTEGER NOT NULL)")
+        conn.execute("INSERT INTO schema_meta VALUES (16)")
+        for version in range(1, 17):
+            for statement in db.SCHEMA_MIGRATIONS[version]:
+                conn.execute(statement)
+        conn.execute("INSERT INTO tasks VALUES ('existing','保留任务',NULL,'now','auto')")
+        if existing_skills:
+            for statement in (*db.SCHEMA_V17, *db.SCHEMA_V18):
+                conn.execute(statement)
+            conn.execute("INSERT INTO skill_draft_evidence VALUES ('draft','existing','now')")
+    assert init_db() == SCHEMA_VERSION
+    assert init_db() == SCHEMA_VERSION
+    with session() as conn:
+        assert conn.execute("SELECT goal FROM tasks").fetchone()[0] == "保留任务"
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
+        assert {
+            "memory_reviews",
+            "skill_run_links",
+            "skill_draft_evidence",
+            "skill_tool_evidence",
+        } <= tables
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        if existing_skills:
+            assert (
+                conn.execute("SELECT draft_id FROM skill_draft_evidence").fetchone()[0] == "draft"
+            )
+
+
 def test_write_holds_exclusive_lock(settings: Settings) -> None:
     init_db()
 
@@ -71,4 +105,106 @@ def test_v7_migration_preserves_completed_mail_result(settings: Settings) -> Non
             "SELECT result_json FROM approval_executions WHERE operation_id='o1'"
         ).fetchone()
         assert json.loads(row["result_json"]) == {"status": "sent", "message_id": "message-1"}
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_v9_migration_adds_memory_reviews_table(settings: Settings) -> None:
+    settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+    with session() as conn, write(conn):
+        conn.execute("CREATE TABLE schema_meta (version INTEGER NOT NULL)")
+        conn.execute("INSERT INTO schema_meta VALUES (8)")
+        for version in range(1, 9):
+            for statement in db.SCHEMA_MIGRATIONS[version]:
+                conn.execute(statement)
+        conn.execute("INSERT INTO tasks VALUES ('t1','任务',NULL,'2026-09-01T00:00:00Z')")
+
+    assert init_db() == SCHEMA_VERSION
+    with session() as conn:
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        conn.execute(
+            "INSERT INTO memory_reviews (review_id, task_id, status, origin, from_rowid, "
+            "through_rowid, created_at) VALUES ('r1','t1','pending','manual',0,0,"
+            "'2026-09-01T00:00:00Z')"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO memory_reviews (review_id, task_id, status, origin, from_rowid, "
+                "through_rowid, created_at) VALUES ('r2','t1','pending','manual',0,0,"
+                "'2026-09-01T00:00:00Z')"
+            )
+        # 已结束的回顾不阻止下一次登记。
+        conn.execute("UPDATE memory_reviews SET status='done', finished_at='2026-09-01T00:01:00Z'")
+        conn.execute(
+            "INSERT INTO memory_reviews (review_id, task_id, status, origin, from_rowid, "
+            "through_rowid, created_at) VALUES ('r3','t1','pending','interval',0,0,"
+            "'2026-09-01T00:02:00Z')"
+        )
+
+
+def test_v12_migration_drops_run_sources_and_keeps_existing_timeline(
+    settings: Settings,
+) -> None:
+    settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+    with session() as conn, write(conn):
+        conn.execute("CREATE TABLE schema_meta (version INTEGER NOT NULL)")
+        conn.execute("INSERT INTO schema_meta VALUES (11)")
+        for version in range(1, 12):
+            for statement in db.SCHEMA_MIGRATIONS[version]:
+                conn.execute(statement)
+        conn.execute("INSERT INTO tasks VALUES ('t1','任务',NULL,'2026-09-01T00:00:00Z')")
+        conn.execute(
+            "INSERT INTO agent_runs "
+            "(run_id, task_id, kind, input, status, created_at, finished_at) "
+            "VALUES ('run1','t1','message','{}','done','2026-09-01T00:00:00Z',"
+            "'2026-09-01T00:00:01Z')"
+        )
+        conn.execute(
+            "INSERT INTO task_timeline_items "
+            "(item_id, task_id, run_id, kind, role, text, operation_id, created_at) "
+            "VALUES ('i1','t1','run1','text','assistant','旧回答',NULL,'2026-09-01T00:00:00Z')"
+        )
+        conn.execute(
+            "INSERT INTO task_run_sources (source_id, task_id, run_id, sequence, doc_id, path, "
+            "title, heading, start_line, end_line, commit_sha, excerpt, created_at) "
+            "VALUES ('s1', 't1', 'run1', 1, 'kb_1', 'kb/inbox/a.md', '资料', NULL, "
+            "5, 7, 'abc', '原文片段', '2026-09-01T00:00:00Z')"
+        )
+
+    assert init_db() == SCHEMA_VERSION
+    with session() as conn:
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert (
+            conn.execute("SELECT text FROM task_timeline_items WHERE item_id='i1'").fetchone()[
+                "text"
+            ]
+            == "旧回答"
+        )
+        assert (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE name LIKE 'task_run_sources%'"
+            ).fetchall()
+            == []
+        )
+
+
+def test_v14_migration_fixes_existing_task_model_and_adds_attachment_tables(
+    settings: Settings,
+) -> None:
+    settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+    with session() as conn, write(conn):
+        conn.execute("CREATE TABLE schema_meta (version INTEGER NOT NULL)")
+        conn.execute("INSERT INTO schema_meta VALUES (13)")
+        for version in range(1, 14):
+            for statement in db.SCHEMA_MIGRATIONS[version]:
+                conn.execute(statement)
+        conn.execute("INSERT INTO tasks VALUES ('t1','旧任务',NULL,'2026-09-01T00:00:00Z')")
+
+    assert init_db() == SCHEMA_VERSION
+    with session() as conn:
+        task = conn.execute("SELECT model FROM tasks WHERE task_id='t1'").fetchone()
+        assert task["model"] == (settings.qoder_model or "auto")
+        tables = {
+            row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert {"uploaded_files", "timeline_item_attachments"} <= tables
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

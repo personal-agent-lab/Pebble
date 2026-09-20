@@ -40,3 +40,47 @@ def test_skill_http_lifecycle(settings):
         assert client.get(f"/api/skills/{sid}/versions").json()[0]["body"] == "一句话"
         assert client.post(f"/api/skills/{sid}/archive").status_code == 204
         assert client.get("/api/skills?status=archived").json()[0]["id"] == sid
+
+
+def test_skills_selection_survives_multipart_create_and_reply(settings):
+    import json
+
+    from server.db import session
+    from tests.api.test_models_and_attachments import StaticCatalog
+    from tests.support.agent_double import FakeAgentGateway
+
+    skill = service.create_skill(name="汇报", description="简洁汇报", body="先结论，再依据")
+    selection = {
+        "skills": [{"id": skill.id, "revision": skill.content_hash}],
+        "excluded_skill_ids": ["excluded"],
+        "auto_match_skills": False,
+    }
+    app = create_app(gateway=FakeAgentGateway(), model_catalog=StaticCatalog())
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/tasks",
+            data={"model": "model-a", "message": "整理附件", "selection": json.dumps(selection)},
+            files=[("files", ("notes.md", b"notes", "text/markdown"))],
+        )
+        assert created.status_code == 201, created.text
+        task_id = created.json()["task"]["task_id"]
+        reply = client.post(
+            f"/api/tasks/{task_id}/messages",
+            data={"message": "继续", "selection": json.dumps(selection)},
+        )
+        assert reply.status_code == 202, reply.text
+        with session() as conn:
+            rows = conn.execute(
+                "SELECT input FROM agent_runs WHERE task_id=?", (task_id,)
+            ).fetchall()
+        assert len(rows) == 2
+        for row in rows:
+            payload = json.loads(row[0])
+            assert payload["skill_refs"] == selection["skills"]
+            assert payload["excluded_skill_ids"] == ["excluded"]
+            assert payload["auto_match_skills"] is False
+        assert len(json.loads(rows[0][0])["attachment_ids"]) == 1
+        invalid = client.post(
+            f"/api/tasks/{task_id}/messages", data={"message": "继续", "selection": "bad-json"}
+        )
+        assert invalid.status_code == 422

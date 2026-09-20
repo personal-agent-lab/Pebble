@@ -90,6 +90,18 @@ def insert_error(conn: sqlite3.Connection, task_id: str, run_id: str, text: str)
     return item_id
 
 
+def insert_notice(conn: sqlite3.Connection, task_id: str, run_id: str, text: str) -> str:
+    """程序生成的提示（如记忆变更结果）：不是模型输出，role 为空。"""
+    item_id = str(uuid4())
+    conn.execute(
+        "INSERT INTO task_timeline_items "
+        "(item_id, task_id, run_id, kind, role, text, operation_id, created_at) "
+        "VALUES (?, ?, ?, 'notice', NULL, ?, NULL, ?)",
+        (item_id, task_id, run_id, text, timestamp()),
+    )
+    return item_id
+
+
 class TimelineStore:
     def __init__(self, path: Path | None = None):
         self.path = path
@@ -97,10 +109,14 @@ class TimelineStore:
     def list_items(self, task_id: str) -> dict:
         with session(self.path) as conn:
             record = tasks.task(conn, task_id)
+            rows = list(
+                conn.execute(
+                    "SELECT * FROM task_timeline_items WHERE task_id = ? ORDER BY rowid",
+                    (task_id,),
+                )
+            )
             items = []
-            for row in conn.execute(
-                "SELECT * FROM task_timeline_items WHERE task_id = ? ORDER BY rowid", (task_id,)
-            ):
+            for row in rows:
                 item = dict(row)
                 base = {
                     "item_id": item["item_id"],
@@ -109,14 +125,26 @@ class TimelineStore:
                     "created_at": item["created_at"],
                 }
                 if item["kind"] == "text":
-                    items.append(
-                        {
-                            **base,
-                            "role": item["role"],
-                            "text": item["text"],
-                        }
-                    )
-                elif item["kind"] == "error":
+                    attachment_rows = conn.execute(
+                        "SELECT f.file_id,f.filename,f.mime_type,f.size,f.sha256 "
+                        "FROM timeline_item_attachments a JOIN uploaded_files f "
+                        "ON f.file_id=a.file_id WHERE a.item_id=? ORDER BY a.position",
+                        (item["item_id"],),
+                    ).fetchall()
+                    payload = {
+                        **base,
+                        "role": item["role"],
+                        "text": item["text"],
+                        "attachments": [
+                            {
+                                **dict(attachment),
+                                "url": f"/api/tasks/{task_id}/attachments/{attachment['file_id']}",
+                            }
+                            for attachment in attachment_rows
+                        ],
+                    }
+                    items.append(payload)
+                elif item["kind"] in ("error", "notice"):
                     items.append({**base, "text": item["text"]})
                 elif item["kind"] == "mail_draft":
                     operation_id = item["operation_id"]

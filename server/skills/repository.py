@@ -25,9 +25,9 @@ from server.skills.models import (
     SkillVersion,
 )
 from server.skills.validation import compute_skill_hash, validate_skill_id
+from server.storage.datarepo import lock_for
 
 logger = logging.getLogger(__name__)
-_lock = threading.RLock()
 _local = threading.local()
 
 
@@ -36,7 +36,7 @@ def locked(func):
     def wrapped(*args, **kwargs):
         import fcntl
 
-        with _lock:
+        with lock_for(_data_dir()):
             if getattr(_local, "active", False):
                 return func(*args, **kwargs)
             _data_dir().mkdir(parents=True, exist_ok=True)

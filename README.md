@@ -8,25 +8,23 @@
 确认操作；任务不依赖始终开启的浏览器页面。新邮件是首版的系统触发源，收到即自动开始处理，
 但邮件只是它能做的事之一。
 
-当前状态：对话链、任务时间线、Gateway 与 Qoder CN/Gmail/iCloud Calendar 生产装配已接通，SQLite schema 为 10。
-Gmail 支持搜索、单封与完整往来读取、入站附件读取、回复与主动新写邮件；两者共用内嵌草稿卡、
-草稿编辑、最终版本确认、去重发送和结果核实。外发邮件只支持纯文字正文。
-iCloud Calendar 支持查询、详情、冲突检查与创建单次日程：对话里给出标题和起止时间就直接创建，
-缺信息先追问补齐，目标时间已有日程则不创建、在对话里说明冲突，你明确要求照建才覆盖创建；
-日程不渲染卡片，结果只在对话文字里汇报。不邀请参与人。
-Skills 已支持管理、审核、历史恢复、手动多选和按需自动加载；个人知识库、Memory 尚未实现；认证与 HTTPS 远程访问尚未实现，
-目前只能本机和同局域网访问。真实账号验收仍在进行，本地测试通过不代表真实邮件或日程操作成功。
+已接通对话与任务、Gmail、iCloud Calendar、长期记忆、历史对话检索、个人资料库，以及经 Tailscale 的
+HTTPS 远程访问；主题页尚未实现；Skills 支持管理、审核与受控加载。完整的实现状态与已知偏差见 `docs/status.md`。真实账号验收仍在进行，本地测试通过不代表真实邮件或日程操作成功。
 
 ## 文档
 
 - `docs/v1-spec.md`：需求范围、产品行为、验收标准。内容冲突时以此为准。
-- `docs/v1-design.md`：组件划分、交付阶段、验证要求、当前实现与已知偏差。
-- `docs/contracts/mail.md`：Gmail 工具、同步触发、确认发送与核实的字段与语义（已实现）。
-- `docs/contracts/calendar.md`：iCloud Calendar 工具、直连创建与冲突处理的字段与语义（已实现）。
-- `docs/contracts/personal-kb.md`：个人知识库约定，尚未实现。
-- `docs/contracts/skills.md`：Skills 生命周期、受控加载与证据审核契约。
+- `docs/v1-design.md`：组件划分、交付阶段、验证要求与实现要点。
+- `docs/status.md`：实现状态与已知偏差，唯一的状态记录。
+- `docs/memory-spec.md`：记忆功能规格：短期上下文、长期记忆、常驻上下文与按需检索、历史检索。
+- `docs/kb-spec.md`：个人资料库功能规格：保存与主动保存、检索作答、删除与恢复、主题页。
+- `docs/contracts/mail.md`：Gmail 工具、同步触发、确认发送与核实的字段与语义。
+- `docs/contracts/calendar.md`：iCloud Calendar 工具、直连创建与冲突处理的字段与语义。
+- `docs/contracts/memory.md`：长期记忆与历史检索的文件格式、工具与接口。
+- `docs/contracts/skills.md`：Skills 的文件格式、工具与加载边界。
+- `docs/contracts/personal-kb.md`：个人知识库的工具、存储与引用语义。
 
-设计文档第 2 节的组件表与代码结构是目标结构，第 10 节记录已实现部分与已知偏差。
+设计文档第 2 节的组件表与代码结构是目标结构。
 
 ## 前置依赖
 
@@ -47,10 +45,14 @@ cp .env.example .env
 | 变量 | 含义 |
 | --- | --- |
 | `PEBBLE_DATA_DIR` | 实例数据目录，默认 `<仓库根>/.data` |
-| `PEBBLE_HOST`、`PEBBLE_PORT` | 监听地址与端口，默认 `127.0.0.1:8000` |
+| `PEBBLE_HOST`、`PEBBLE_PORT` | 监听地址与端口，默认 `127.0.0.1:8000`；远程访问时保持回环地址 |
+| `PEBBLE_TOOL_PORT` | 工具端点的回环端口，默认 `8001`，只供本机 CLI 子进程连接 |
+| `PEBBLE_AUTH` | `tailscale`（默认）只接受经 Tailscale Serve 转发、账号在名单内的请求；`off` 关闭校验，只用于本机开发 |
+| `PEBBLE_ALLOWED_USERS` | 允许访问的 Tailscale 登录名，逗号分隔；`tailscale` 模式必填 |
+| `PEBBLE_PUBLIC_ORIGIN` | 对外地址，如 `https://mac.example.ts.net`，写请求的来源必须与它一致；`tailscale` 模式必填 |
 | `QODERCN_PERSONAL_ACCESS_TOKEN` | Qoder CN 访问令牌，注意没有 `PEBBLE_` 前缀 |
-| `PEBBLE_QODER_MODEL` | 托管模型型号 |
-| `PEBBLE_MODEL_PROVIDER`、`PEBBLE_MODEL_API_KEY`、`PEBBLE_MODEL_BASE_URL` | 自定义模型（BYOK）。供应商、密钥、型号必须同时给全，`BASE_URL` 可选；provider 必须匹配账号的 BYOK 目录 |
+| `PEBBLE_QODER_MODEL` | 新任务默认选中的型号标识（如 `qmodel_38max`），取值见 `GET /api/models` 的 `id`；未配置时默认 `auto` |
+| `PEBBLE_LIGHT_MODEL_PROVIDER`、`PEBBLE_LIGHT_MODEL`、`PEBBLE_LIGHT_MODEL_API_KEY`、`PEBBLE_LIGHT_MODEL_BASE_URL` | 轻量模型（自有 API Key），只用于任务标题、资料说明与资料图片说明生成；图片说明需要所配模型支持图片输入。供应商、型号、密钥必须同时给全，`BASE_URL` 可选；provider 与型号取自账号的 BYOK 目录（如 `deepseek` / `deepseek-flash-pg`）。都不配时沿用 `PEBBLE_QODER_MODEL` |
 | `PEBBLE_GMAIL_CREDENTIALS_PATH` | Gmail OAuth 桌面应用 JSON，默认 `<data_dir>/credentials.json` |
 | `PEBBLE_GMAIL_TOKEN_PATH` | Gmail 授权结果，默认 `<data_dir>/gmail_token.json` |
 | `PEBBLE_ICLOUD_ACCOUNT` | Apple ID 账号，仅在服务端使用 |
@@ -61,7 +63,13 @@ cp .env.example .env
 Gmail 首次启动在浏览器授权读取和发送权限。Key 仅交给 SDK 的模型配置，不进入系统提示或工具结果。
 Qoder CN 与国际版的 SDK、Token 和配置目录不能混用。
 
-生产运行需要有效的 Qoder CN、Gmail 和 iCloud Calendar 凭证；仅测试使用不装配真实依赖的 `create_app()`。
+生产运行只要求 Qoder CN 模型配置。Gmail 与 iCloud Calendar 是可选服务：没配凭证时服务照常启动，
+对话、记忆与个人资料库都能用，只是该服务的工具、新邮件检测与确认执行一并关闭（草稿工具也不交给
+模型，免得起草出发不出去的邮件）；启动日志会说明哪项未接入，`/api/health` 的 `services` 也会列出
+`unconfigured` 与原因。补齐凭证后重启即可启用。仅测试使用不装配真实依赖的 `create_app()`。
+
+访问控制缺配置时服务拒绝启动，不会静默退回无校验。只在本机开发、不做远程访问时，在 `.env` 里写
+`PEBBLE_AUTH=off`。
 
 ## 启动
 
@@ -74,7 +82,8 @@ uv sync --project server
 uv run --project server python -m server.main
 ```
 
-服务监听 `http://127.0.0.1:8000`，带热重载。
+服务监听 `http://127.0.0.1:8000`，带热重载，使用生产入口 `server.main:create_production_app`
+（Uvicorn factory）。
 
 前端：
 
@@ -84,54 +93,76 @@ npm install
 npm run dev
 ```
 
-页面在 `http://127.0.0.1:5173`，Vite 把 `/api` 代理到后端；`host` 已开放局域网，
-手机连同一网络后可用 Vite 打印的 Network 地址直接访问。
+页面在 `http://127.0.0.1:5173`，Vite 把 `/api` 代理到后端，需配合 `PEBBLE_AUTH=off`。`host` 已开放
+局域网，手机连同一网络后可用 Vite 打印的 Network 地址访问；这条路径没有访问控制，只在开发时用。
+
+生产运行不用 Vite：在 `web/` 执行 `npm run build`，后端检测到 `web/dist/` 就同源提供页面，
+页面、接口与 SSE 共用一个端口。
 
 ## 远程访问
 
-规格要求手机不与服务在同一局域网也能完整使用（HTTPS + 单用户认证，见 `docs/v1-spec.md` §4.6）。
-该能力属于交付阶段 6，尚未实现：当前服务只监听本机，认证与来源校验都没有接入，
-因此只能在本机和同局域网内测试，不要暴露到公网。
+经 [Tailscale](https://tailscale.com/) 私有网络访问：服务只监听本机，由 Tailscale Serve 提供带正式证书的
+HTTPS 地址并转发；只有你 tailnet 里的设备能连上，Pebble 再按 Tailscale 账号与请求来源校验
+（`docs/v1-design.md` §6）。服务不暴露在公网，不要开启 Tailscale Funnel。
 
-设计只固定安全要求，不固定传输方案；反向隧道、反向代理加域名或私有网络的选定结果与配置步骤
-会在实现后写回本节。
+1. 服务所在电脑与手机都安装 Tailscale，登录同一账号；管理后台开启 MagicDNS 与 HTTPS Certificates。
+2. 构建前端：`cd web && npm run build`。
+3. `.env` 写入访问控制（登录名见 `tailscale status` 或管理后台，对外地址见下一步输出）：
 
-## 网页
+   ```
+   PEBBLE_AUTH=tailscale
+   PEBBLE_ALLOWED_USERS=you@example.com
+   PEBBLE_PUBLIC_ORIGIN=https://<机器名>.<tailnet>.ts.net
+   ```
 
-`web/` 是 TypeScript + React + Vite 单页应用，路由为 `/tasks`（任务列表与发起新任务）和
-`/tasks/:taskId`（统一时间线、完整草稿卡与逐项执行结果）。
-视觉设计系统 token 见 `src/styles/tokens.css`，分种子、原语与语义三层。
-断点 900px：以上为侧栏布局，以下折叠为底部 tab，两端功能一致。
-任务列表就是导航本身：PC 在侧栏，手机在任务页内，默认列最近 5 条，其余折在「展开显示」后面。
+4. 启动后端（见“启动”），再让 Tailscale Serve 转发业务端口：
 
-邮件草稿固定在 Agent 生成时的对话位置，卡片内展示完整正文，并支持直接编辑、定向对话修改与最终确认。
-未保存的修改不能确认，确认绑定卡片当前展示的草稿版本；发送状态和结果继续显示在原卡片上。
-编辑收件人时每行填写一个地址，可保留显示名。
-日程不渲染卡片：创建结果由 Agent 在对话文字里汇报，操作与执行记录通过接口查询。
+   ```bash
+   tailscale serve --bg http://127.0.0.1:8000
+   ```
 
-任务列表没有列表级事件流，按 5 秒轮询刷新（页面不可见时暂停），新邮件自动触发的任务无需手动刷新；
-任务详情用 SSE，确认后的执行在后台进行，事件流不携带执行状态，页面对执行结果按 1.5 秒轮询直到
-草稿卡状态离开 `sending`，SSE 重连后整体重读时间线对账。
-界面只呈现接口能支撑的内容：来源引用面板与搜索框对应的接口尚未提供，暂不渲染。
+5. 手机打开 `https://<机器名>.<tailnet>.ts.net`。`tailscale serve status` 查看转发，`tailscale serve reset`
+   撤销。
 
-## 验证
+撤销访问：在 Tailscale 管理后台移除设备或让其密钥过期，该设备立即连不上。
+
+注意事项：
+
+- 只转发业务端口；工具端点单独监听 `PEBBLE_TOOL_PORT`，不要转发它。
+- 手机同一时间只能开一个 VPN 类 App，开着其他代理时连不上 Pebble。
+- 电脑同时使用 Clash 等代理时，让 `*.ts.net` 与 `100.64.0.0/10` 直连；TUN 模式还要把该网段排除出
+  TUN 路由，并把 `ts.net` 交给 `100.100.100.100` 解析。
+- 本机进程可以绕过 Serve 直连后端并伪造身份头，这在防护范围之外（本机进程本就能读数据目录）。
+
+## 检查
 
 浏览器打开 `http://127.0.0.1:5173`，应看到任务列表（PC 在左侧侧栏）。后端不可达时页面显示
-「无法连接服务」并提供重试，不白屏。
-
-或直接请求接口：
+「无法连接服务」并提供重试，不白屏。也可以直接请求接口：
 
 ```bash
 curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/models
 ```
 
-重启后端后确认数据文件仍在：
+返回里的 `services.gmail` 与 `services.calendar` 为 `ok` 表示已接入，`unconfigured` 表示缺凭证、相关功能已关闭。
 
-```bash
-ls .data/pebble.db
-```
+## 数据位置
 
-## 检查命令
+以下都在实例数据目录 `<PEBBLE_DATA_DIR>`（默认 `.data/`）下，可以直接查看：
+
+| 路径 | 内容 |
+| --- | --- |
+| `pebble.db` | 任务、时间线、草稿、确认与执行状态（SQLite） |
+| `memory/USER.md`、`memory/MEMORY.md` | 长期记忆，可直接编辑，下一轮生效；上限 1375 / 2200 字符 |
+| `kb/` | 个人资料（Markdown），直接编辑、新增、移动、删除都会在下一次资料库操作前自动纳入版本 |
+| `kb-index.sqlite3` | 资料检索索引，派生数据，可随时重建 |
+| `agent/` | SDK 会话记录、模型目录缓存与每个任务的工作目录（含上传附件） |
+| `gmail_sync.json` | 新邮件检测的游标 |
+
+`kb/` 属于数据目录内的独立本地 Git 仓库，每次写入即一次提交，可用 Git 查看历史与差异；数据库、凭证、
+SDK 会话与 `memory/` 不进入该仓库。
+
+## 测试
 
 后端测试与静态检查（仓库根执行）：
 
@@ -152,95 +183,14 @@ npm test
 npm run build
 ```
 
-## 本地任务、草稿与确认执行服务
+自动化测试替换 SDK 子进程、Gmail 投递和 iCloud CalDAV 这三个外部边界，其余模块、SQLite、HTTP 都是真的；
+测试通过不代表真实外部操作成功。
 
-初始化数据库后使用 `server.sessions.service.SessionStore`、`server.sessions.timeline.TimelineStore`、
-`server.tools.gmail.service.MailDraftStore`、`server.tools.calendar.service.CalendarEventStore` 和
-`server.approval.service.ConfirmationService`。它们默认使用实例数据库，也可显式传入
-`path=Path(...)`。邮件草稿与日程字段分别在对应域内校验，日程每次创建保存一份不可变内容版本；
-`ConfirmationService` 必须注入实际的
-Gmail 发送或 iCloud 创建函数，生产代码没有默认成功的外部写入。输入输出字段及错误含义见
-[Gmail 契约](docs/contracts/mail.md)和 [Calendar 契约](docs/contracts/calendar.md)。
+`tests/acceptance/` 下是使用真实 Qoder 模型的验收脚本，不随 pytest 运行，会消耗真实额度。每个脚本
+单独运行，例如：
 
-任务保存用户目标与 SDK 会话关联；操作管理版本与状态；邮件字段和原邮件去重留在邮件能力内。
-跨任务复用同一操作后，各任务看到相同的最新草稿与状态，SDK 会话仍独立。
+```bash
+uv run --project server python -m tests.acceptance.qoder_memory
+```
 
-### 确认执行
-
-- `accept_confirmation(task_id, operation_id, version)`：检查版本、保存确认并取得执行权。
-- `execute_accepted(operation_id, deliver=True)`：读取已确认版本、执行并保存结果；重复调用不再次执行。
-  日程直连创建传 `deliver=False`：结果就地返回给模型，不登记回传轮，避免同一件事汇报两遍。
-- `get_execution(operation_id)`：操作当前状态、确认信息及已保存结果。
-- `get_agent_result(operation_id)`：回传数据；尚无结果或回传任务未关联会话时返回 `None`。
-- `verify_pending(operation_id)`：只读核实 `unknown`，找到对应外部结果后更新状态并登记回传。
-- `recover_interrupted_executions()`：重启时已开始的外部执行记 `unknown`，尚未开始的记 `failed`；
-  在数据库初始化后、接受请求前调用，不自动重试。
-
-外部执行函数的输入输出见对应契约；异常、中断及不符契约的返回都记 `unknown`，不自动重试，
-`unknown` 可以显式核实，重复确认不会再次产生外部写入。
-
-## 验证范围
-
-- `tests/storage/`：真实 SQLite 的版本、并发、回滚、恢复与确认去重。
-- `tests/gateway/`：后台调度、SDK 选项装配与事件映射、工具端点与工具边界、执行结果回传、邮件全链路衔接。
-- `tests/api/`：健康检查，以及独立进程的 HTTP/SSE、断线后继续执行与重启。
-- `tests/tools/`：邮件与日历的解析、字段校验、协议内容、结果核实、日程直连创建与冲突覆盖、工具声明。
-
-测试替换 SDK 子进程、Gmail 投递和 iCloud CalDAV 这三个外部边界，其余模块、SQLite、HTTP 都是真的。
-SDK 模型响应、Gmail 投递与 iCloud 读写仍须用明确授权的账号和内容验收；测试通过不代表真实外部操作成功。
-
-触发源通过 `create_app(mail_source=...)` 装配，接口是 `server/gateway/runtime.py` 的 `MailSource`
-（`start` / `stop` / `error`）。真实 Gmail 检测由 `server/tools/gmail/sync.py` 实现同一接口，
-生产工厂统一装配。
-
-## 生产装配
-
-生产入口为 `server.main:create_production_app`（Uvicorn factory），上面的 `python -m server.main`
-已使用该入口。`create_app()` 保留为显式依赖注入的应用构造函数，供测试使用。启动顺序为
-初始化数据库 → 恢复中断的发送 → 恢复调用调度 → 启动邮件检测；关闭时先停检测再等发送落盘。
-
-Gmail 首次启动记录当前 historyId，随后每 10 秒检测新增的收件箱邮件；首次启动前的旧邮件不会批量触发。
-跨进程游标保存在 `.data/gmail_sync.json`。邮件成功交给 Gateway 的持久化任务入口后才推进游标，
-重复通知由 Gateway 去重。游标失效明确停止检测，health 显示原因，需要核对后重新建立同步位置，
-不静默跳过缺口。常规检测错误保留游标，在下一轮重新查询。
-
-新邮件轮次只开放只读工具，结果回传轮次开放只读与本地写；只有用户亲自发起的对话轮能看到日程直连
-创建工具，因此邮件或资料内容里的指令无法驱动外部写入。用户要求起草后，SDK 才可调用准备、读取及
-更新草稿工具；更新使用当前已保存版本，直接编辑与 Agent 修改共用 `MailDraftStore` 的版本控制。
-草稿保存事件交给网页。邮件发送函数只由 Confirmation 在用户确认最终版本后调用，执行结果回到确认
-任务的原 SDK 会话。
-
-模型经应用进程内的 MCP 端点（server 名 `pebble`）调用工具，内置工具与本机设置关闭：每轮登记一个
-一次性路径供 qodercli 子进程按回环地址连接，轮次结束即撤销。每轮独立启动一次 qodercli 子进程，
-会话标识由 SDK 生成并按任务保存，重启后靠它接续。会话记录落在 `.data/agent/config/` 下，
-模型上下文由该记录恢复；网页时间线由 SQLite 独立持久化，刷新后仍保持文字与草稿卡的生成顺序。
-
-联合测试 `tests/gateway/test_integrated_mail.py` 覆盖实际模块衔接、Agent 修改与手动编辑、
-旧版本拒绝、最终内容一致性、重复确认、结果会话关联与游标推进；`tests/gateway/test_agent_stream.py`
-覆盖选项装配、事件映射与工具边界；`tests/api/test_http_flow.py` 覆盖内嵌时间线、原卡片更新和确认发送。
-其中 SDK 模型响应和 Gmail 投递仍为测试边界替身；真实验收结果需另行记录。
-
-启动：
-PYTHONPATH=. uv run --project server python -m server.main
-cd web
-npm run dev
-
-## Skills
-
-在侧栏或手机导航打开 **Skill**，填写名称、描述和提示词正文，保存并启用。
-新任务和任务回复输入框均支持多选；移除项本轮不会自动加载，可以关闭自动匹配。
-页面展示运行时已加载的 Skill ID、版本及手动/自动来源。
-已启用、待审核、已停用和已归档分别管理；历史恢复先生成草稿，用户保存并批准后生效。
-
-自动总结由同一 Agent 在任务收尾时按需提出，无额外后台循环。
-服务端验证至少三个不同已完成任务中的相同成功工具序列；仅记录工具名、参数键与状态，
-不保存参数值或结果正文。准备草稿的成功只证明准备步骤完成，不代表邮件已发送。
-恢复旧 SDK 会话会刷新本轮目录，历史上下文中已经出现的文字不能被程序抹除。
-
-Skill 文件与历史在实例数据目录中，使用独立 Git 仓库，不推送。
-受控正文装配与 skill_read 加载保持 SDK 内置工具和配置发现关闭。
-直接修改文件不会自动批准；内容校验不符时停止加载，可在管理页审阅后保存。
-旧开发版本的短哈希内容同样需要审阅后保存，不能直接启用。
-
-测试与实现说明见 `docs/skills-acceptance.md`。认证与 HTTPS 仍属于独立的远程访问工作，
-本轮未进行真实账号的 SDK、邮件发送和日历创建验收。
+`qoder_context` 加 `--compact` 会发送较长的合成文本验证上下文压缩，消耗更多额度。

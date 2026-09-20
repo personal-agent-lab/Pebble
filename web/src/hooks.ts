@@ -15,6 +15,7 @@ import {
   listOperations,
   listTasks,
   sendMessage,
+  retryLastMessage,
   subscribeEvents,
 } from "./api";
 
@@ -72,6 +73,9 @@ export function useTaskDetail(taskId: string) {
   const [items, setItems] = useState<TimelineItem[]>([]);
   const [error, setError] = useState<ApiError | null>(null);
   const [sending, setSending] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  // 当前步骤只来自实时事件与重读时服务端记住的那一步，不进时间线。
+  const [activity, setActivity] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -79,6 +83,7 @@ export function useTaskDetail(taskId: string) {
         getTask(taskId), listOperations(taskId), getTimeline(taskId),
       ]);
       setTask(detail);
+      setActivity(detail.latest_run?.activity ?? null);
       setOperations(loadedOperations);
       setItems(timeline.items);
       setError(null);
@@ -92,7 +97,12 @@ export function useTaskDetail(taskId: string) {
         setTask((current) => current === null ? current : { ...current, sdk_session_id: event.sdk_session_id });
         return;
       }
+      if (event.type === "activity") {
+        setActivity(event.text);
+        return;
+      }
       if (event.type === "text") {
+        setActivity(null);
         setItems((current) => {
           const index = current.findIndex((item) => item.item_id === event.item_id);
           if (index === -1) return [...current, {
@@ -122,16 +132,27 @@ export function useTaskDetail(taskId: string) {
   const send = useCallback(async (
     message: string,
     target: MessageTarget | null = null,
+    files: File[] = [],
     selection?: import("./features/skills/api").Selection,
   ) => {
     setSending(true);
     try {
-      await sendMessage(taskId, message, target, selection);
+      await sendMessage(taskId, message, target, files, selection);
       await reload();
       return null;
     } catch (failure) { return toApiError(failure); }
     finally { setSending(false); }
   }, [taskId, reload]);
 
-  return { task, operations, items, error, sending, send, reload };
+  const retry = useCallback(async () => {
+    setRetrying(true);
+    try {
+      await retryLastMessage(taskId);
+      await reload();
+      return null;
+    } catch (failure) { return toApiError(failure); }
+    finally { setRetrying(false); }
+  }, [taskId, reload]);
+
+  return { task, operations, items, activity, error, sending, retrying, send, retry, reload };
 }

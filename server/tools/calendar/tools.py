@@ -3,7 +3,7 @@
 from typing import Protocol
 
 from server.tools.calendar.service import PRIMARY_CALENDAR, CalendarEventStore, validate_event
-from server.tools.registry import SideEffect, tool
+from server.tools.registry import SideEffect, activity, tool
 
 
 class CalendarReader(Protocol):
@@ -23,7 +23,19 @@ class EventCreator(Protocol):
     def get_execution(self, operation_id: str) -> dict: ...
 
 
-@tool(name="calendar_list_events", side_effect=SideEffect.READONLY)
+def _span(args: dict, start: str, end: str) -> str | None:
+    """步骤说明里的时间范围：只取日期与时分，省去秒与时区，读起来更短。"""
+    first, last = args.get(start), args.get(end)
+    if not isinstance(first, str) or not isinstance(last, str):
+        return None
+    return f"{first[:16].replace('T', ' ')} 至 {last[:16].replace('T', ' ')}"
+
+
+@tool(
+    name="calendar_list_events",
+    side_effect=SideEffect.READONLY,
+    activity_renderer=lambda args: activity("正在查询日程", _span(args, "time_min", "time_max")),
+)
 def list_events(
     time_min: str,
     time_max: str,
@@ -36,13 +48,21 @@ def list_events(
     return calendar.list_events(time_min, time_max, calendar_id, max_results)
 
 
-@tool(name="calendar_get_event", side_effect=SideEffect.READONLY)
+@tool(
+    name="calendar_get_event",
+    side_effect=SideEffect.READONLY,
+    activity_renderer=lambda args: activity("正在读取日程"),
+)
 def get_event(event_id: str, *, calendar: CalendarReader) -> dict:
     """按 event_id 读取主日历中的单个事件完整内容。"""
     return calendar.get_event(event_id)
 
 
-@tool(name="calendar_check_conflicts", side_effect=SideEffect.READONLY)
+@tool(
+    name="calendar_check_conflicts",
+    side_effect=SideEffect.READONLY,
+    activity_renderer=lambda args: activity("正在检查日程冲突", _span(args, "start", "end")),
+)
 def check_conflicts(
     start: str, end: str, calendar_id: str = PRIMARY_CALENDAR, *, calendar: CalendarReader
 ) -> dict:
@@ -50,7 +70,11 @@ def check_conflicts(
     return calendar.check_conflicts(start, end, calendar_id)
 
 
-@tool(name="calendar_create_event", side_effect=SideEffect.DIRECT_EXTERNAL_WRITE)
+@tool(
+    name="calendar_create_event",
+    side_effect=SideEffect.DIRECT_EXTERNAL_WRITE,
+    activity_renderer=lambda args: activity("正在创建日程", args.get("summary")),
+)
 def create_event(
     summary: str,
     start: str,

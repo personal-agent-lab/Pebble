@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Literal, TypedDict
 
 from server.db import session, write
-from server.errors import DraftValidationError, NotFoundError
+from server.errors import (
+    DraftValidationError,
+    NotEditableError,
+    NotFoundError,
+    VersionConflictError,
+)
 from server.sessions import repository as operations
 from server.sessions.service import check_editable, create_operation, next_version, timestamp
 
@@ -104,8 +109,12 @@ def validate_mail_draft(
 
 
 def find_reply(conn: sqlite3.Connection, source_message_id: str) -> str | None:
+    """同一原邮件未取消的回复操作；用户取消过的不再复用，再起草时另建一份。"""
     row = conn.execute(
-        "SELECT operation_id FROM mail_drafts WHERE source_message_id = ?", (source_message_id,)
+        "SELECT d.operation_id FROM mail_drafts d "
+        "JOIN operations o ON o.operation_id = d.operation_id "
+        "WHERE d.source_message_id = ? AND o.status != 'cancelled'",
+        (source_message_id,),
     ).fetchone()
     return row["operation_id"] if row else None
 
@@ -164,6 +173,13 @@ def draft(conn: sqlite3.Connection, operation_id: str, version: int | None) -> d
         result.pop("source_message_id")
         result.pop("thread_id")
     return result
+
+
+def check_superseded(operation: dict, expected_version: int) -> None:
+    if operation["version"] != expected_version:
+        raise VersionConflictError(operation["version"])
+    if operation["status"] != "cancelled":
+        raise NotEditableError(operation["status"])
 
 
 def summary(operation: dict) -> dict:
@@ -246,6 +262,45 @@ class MailDraftStore:
     def get_draft(self, operation_id: str, version: int | None = None) -> dict:
         with session(self.path) as conn:
             return draft(conn, operation_id, version)
+
+    def supersede_draft(
+        self,
+        task_id: str,
+        operation_id: str,
+        expected_version: int,
+        to: list[str],
+        subject: str,
+        body: str,
+    ) -> dict:
+        """以已取消的草稿为底另起一份新草稿：原卡片停在已取消，新卡片出现在当前位置。
+
+        版本规则同 `update_draft`；回复沿用原邮件与往来，新邮件仍是新邮件。
+        同一原邮件已有未取消的回复时不另起，免得出现两份待确认。
+        """
+        recipients = list(to)
+        current = self.get_draft(operation_id)
+        check_superseded(current, expected_version)
+        self._validate(
+            kind=current["kind"],
+            source_message_id=current.get("source_message_id"),
+            thread_id=current.get("thread_id"),
+            to=recipients,
+            subject=subject,
+            body=body,
+        )
+        with session(self.path) as conn, write(conn):
+            check_superseded(operations.operation(conn, operation_id), expected_version)
+            source = current.get("source_message_id")
+            if source is not None and find_reply(conn, source) is not None:
+                raise NotEditableError("cancelled")
+            operation = create_operation(conn, task_id, "mail")
+            insert_draft(
+                conn, operation["operation_id"], current["kind"], source, current.get("thread_id")
+            )
+            insert_version(
+                conn, operation["operation_id"], 1, recipients, subject, body, timestamp()
+            )
+            return summary(operation)
 
     def update_draft(
         self,

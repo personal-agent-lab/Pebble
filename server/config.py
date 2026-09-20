@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,14 +21,31 @@ class Settings(BaseSettings):
     data_dir: Path = REPO_ROOT / ".data"
     host: str = "127.0.0.1"
     port: int = 8000
+    # 工具端点单独监听的回环端口：只供本机 CLI 子进程连接，不经对外转发。
+    tool_port: int = 8001
+
+    # 访问控制：tailscale 只接受经 Tailscale Serve 转发、账号在名单内的请求；
+    # off 不做任何校验，只用于本机开发与测试。
+    auth: Literal["tailscale", "off"] = "tailscale"
+    # 允许访问的 Tailscale 登录名，逗号分隔。
+    allowed_users: str = ""
+    # 对外地址（如 https://mac.example.ts.net），写请求的 Origin 必须与它一致。
+    public_origin: str | None = None
 
     qoder_model: str | None = None
     qoder_token: SecretStr | None = Field(
         default=None, validation_alias="QODERCN_PERSONAL_ACCESS_TOKEN"
     )
-    model_provider: str | None = None
-    model_api_key: SecretStr | None = None
-    model_base_url: str | None = None
+    # 轻量调用（任务标题、资料说明等一次性短文本）用自有 API Key 的低价模型；
+    # 供应商、密钥、型号都不配时沿用托管的 qoder_model，主对话与记忆调用不受影响。
+    light_model: str | None = None
+    light_model_provider: str | None = None
+    light_model_api_key: SecretStr | None = None
+    light_model_base_url: str | None = None
+
+    # 后台记忆回顾：每完成多少个用户消息轮触发一次；开关只管自动触发，手动接口不受限。
+    memory_review_interval: int = Field(default=5, ge=1)
+    memory_review_enabled: bool = True
 
     gmail_credentials_path: Path | None = None
     gmail_token_path: Path | None = None
@@ -35,6 +53,12 @@ class Settings(BaseSettings):
     icloud_account: str | None = None
     icloud_password_path: Path | None = None
     icloud_calendar_url: str | None = None
+
+    @property
+    def allowed_logins(self) -> frozenset[str]:
+        return frozenset(
+            login.strip().lower() for login in self.allowed_users.split(",") if login.strip()
+        )
 
     @property
     def db_path(self) -> Path:
@@ -52,3 +76,8 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def default_model(settings: Settings | None = None) -> str:
+    """未指定型号时的服务端有效模型：配置值，否则为 Auto。"""
+    return (settings or get_settings()).qoder_model or "auto"

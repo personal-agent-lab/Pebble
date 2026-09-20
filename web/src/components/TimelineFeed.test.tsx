@@ -2,6 +2,7 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
 import type { TimelineItem } from "../api";
@@ -108,15 +109,103 @@ test("用户消息与邮件卡不挂落款", () => {
   expect(screen.queryByRole("button", { name: "复制回答" })).toBeNull();
 });
 
-test("调用进行中在消息流末尾留思考占位，结束后撤掉", () => {
+test("只在最后一轮已中断的用户消息右下方显示重试", async () => {
+  const retryMessage = vi.fn(async () => null);
   const items: TimelineItem[] = [
-    { item_id: "text-1", kind: "text", role: "user", run_id: "run-1", text: "帮我看邮件", created_at: "2026-09-14T00:00:00Z" },
+    { item_id: "old", kind: "text", role: "user", run_id: "run-old", text: "旧问题", created_at: "2026-09-14T00:00:00Z" },
+    { item_id: "latest", kind: "text", role: "user", run_id: "run-latest", text: "最后问题", created_at: "2026-09-14T00:00:01Z" },
   ];
-  const props = { taskId: "task-1", items, sendMessage: vi.fn(), onChanged: vi.fn() };
-  const { container, rerender } = render(<TimelineFeed {...props} running={true} />);
-  expect(container.querySelectorAll(".thinking .dot").length).toBe(3);
-  expect(screen.getByRole("status").textContent).toContain("Agent 正在处理");
+  render(<TimelineFeed taskId="task-1" items={items} running={false} retryRunId="run-latest"
+    retryMessage={retryMessage} sendMessage={vi.fn()} onChanged={vi.fn()} />);
 
-  rerender(<TimelineFeed {...props} running={false} />);
-  expect(container.querySelector(".thinking")).toBeNull();
+  const retry = screen.getByRole("button", { name: "重试这条消息" });
+  expect(retry.textContent).toBe("");
+  expect(retry.closest(".msg")?.textContent).toContain("最后问题");
+  await userEvent.click(retry);
+  expect(retryMessage).toHaveBeenCalledTimes(1);
+});
+
+test("重试进行中禁用按钮且不在非中断消息上显示", () => {
+  const item: TimelineItem = {
+    item_id: "latest", kind: "text", role: "user", run_id: "run-latest",
+    text: "最后问题", created_at: "2026-09-14T00:00:01Z",
+  };
+  const props = { taskId: "task-1", items: [item], running: false,
+    retryMessage: vi.fn(async () => null), sendMessage: vi.fn(), onChanged: vi.fn() };
+  const { rerender } = render(<TimelineFeed {...props} retryRunId="run-latest" retrying />);
+  expect(screen.getByRole("button", { name: "正在重试这条消息" }).hasAttribute("disabled")).toBe(true);
+
+  rerender(<TimelineFeed {...props} retryRunId={null} />);
+  expect(screen.queryByRole("button", { name: "重试这条消息" })).toBeNull();
+});
+
+test("附件单独消息刷新后仍按顺序显示图片与下载文件", () => {
+  const items: TimelineItem[] = [{
+    item_id: "ask", kind: "text", role: "user", run_id: "run-1", text: "",
+    created_at: "2026-09-14T00:00:00Z", attachments: [
+      { file_id: "image", filename: "photo.png", mime_type: "image/png", size: 12,
+        sha256: "a", url: "/api/tasks/t/attachments/image" },
+      { file_id: "text", filename: "notes.md", mime_type: "text/markdown", size: 1024,
+        sha256: "b", url: "/api/tasks/t/attachments/text" },
+    ],
+  }];
+  render(<TimelineFeed taskId="task-1" items={items} running={false}
+    sendMessage={vi.fn()} onChanged={vi.fn()} />);
+
+  expect(screen.getByRole("link", { name: "查看图片 photo.png" }).getAttribute("href"))
+    .toBe("/api/tasks/t/attachments/image");
+  const download = screen.getByText("notes.md").closest("a");
+  expect(download?.getAttribute("href")).toBe("/api/tasks/t/attachments/text");
+  expect(download?.hasAttribute("download")).toBe(true);
+});
+
+test("从搜索结果跳进来时滚到命中条目并高亮，之后的新内容不再拽回底部", () => {
+  const items: TimelineItem[] = [
+    { item_id: "text-1", kind: "text", role: "user", run_id: "run-1", text: "预算怎么定", created_at: "2026-09-14T00:00:00Z" },
+    { item_id: "text-2", kind: "text", role: "assistant", run_id: "run-1", text: "提高一成", created_at: "2026-09-14T00:00:01Z" },
+    draft,
+  ];
+  const props = { taskId: "task-1", running: false, sendMessage: vi.fn(), onChanged: vi.fn() };
+  const { container, rerender } = render(<TimelineFeed {...props} items={items} focusItemId="text-2" />);
+
+  const target = container.querySelector("#item-text-2");
+  expect(target?.getAttribute("data-focus")).toBe("true");
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  expect(scrollIntoView.mock.contexts[0]).toBe(target);
+  // 邮件卡也有可定位的锚点
+  expect(container.querySelector("#item-card-1")).toBeTruthy();
+
+  rerender(<TimelineFeed {...props} focusItemId="text-2" items={[...items, {
+    item_id: "text-3", kind: "text", role: "assistant", run_id: "run-2",
+    text: "新回答", created_at: "2026-09-14T00:00:02Z",
+  }]} />);
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+});
+
+test("处理中显示当前步骤；没有步骤时只有跳动的点", () => {
+  const props = { taskId: "task-1", items: [] as TimelineItem[], sendMessage: vi.fn(), onChanged: vi.fn() };
+  const { rerender } = render(<TimelineFeed {...props} running activity={null} />);
+  expect(screen.getByRole("status").textContent).toBe("Agent 正在处理");
+
+  rerender(<TimelineFeed {...props} running activity="正在检索资料：星云验收" />);
+  expect(screen.getByRole("status").textContent).toBe("正在检索资料：星云验收");
+
+  rerender(<TimelineFeed {...props} running={false} activity="正在检索资料：星云验收" />);
+  expect(screen.queryByRole("status")).toBeNull();
+});
+
+test("后台记忆整理提示带查看记忆入口，其他提示不带", () => {
+  const notice = (item_id: string, text: string): TimelineItem => ({
+    item_id, kind: "notice", run_id: "run-1", text, created_at: "2026-09-14T00:00:00Z",
+  });
+  const items = [
+    notice("n-1", "已整理记忆"),
+    notice("n-2", "已修改资料：周会纪要。位置：kb/inbox/周会.md。版本：a → b"),
+  ];
+  render(<MemoryRouter><TimelineFeed taskId="task-1" items={items} running={false}
+    sendMessage={vi.fn()} onChanged={vi.fn()} /></MemoryRouter>);
+
+  const links = screen.getAllByRole("link", { name: "查看记忆" });
+  expect(links).toHaveLength(1);
+  expect(links.every((link) => link.getAttribute("href") === "/memory")).toBe(true);
 });

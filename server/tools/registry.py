@@ -24,7 +24,11 @@ class SideEffect(StrEnum):
     """工具副作用声明，程序强制约束，模型不可篡改。"""
 
     READONLY = "readonly"  # 只读查询，不改变任何系统状态
-    LOCAL_WRITE = "local_write"  # 本地写入（如草稿生成、KB 保存）
+    LOCAL_WRITE = "local_write"  # 本地写入：用户对话轮与执行结果回传轮可见（如草稿生成）
+    # 本地写入，触发轮同样可见：结果有提示、有版本、可恢复（如资料的新建与修改）。
+    LOCAL_WRITE_ALL_TURNS = "local_write_all_turns"
+    # 本地写入，只在用户亲自发起的对话轮可见（如资料的删除、移动与恢复）。
+    LOCAL_WRITE_USER_TURN = "local_write_user_turn"
     # 外部写入，按轮次暴露给模型；可见范围由 `agent/toolset.py` 的 ALLOWED_EFFECTS 决定。
     DIRECT_EXTERNAL_WRITE = "direct_external_write"
     # 外部写入，严禁注册给模型；只由 Confirmation 在用户确认最终版本后调用。
@@ -59,6 +63,10 @@ class ToolDefinition:
     needs_task_id: bool = False
     # 保存成功后需要通知页面可读取草稿的工具；网关在调用成功后据此发 draft_saved 事件。
     emits_draft_saved: bool = False
+    # 工具成功后的用户可见提示由所属领域生成；通用工具边界只负责转发文本。
+    notice_renderer: Callable[[dict[str, Any]], str] | None = None
+    # 模型发起调用时向用户说明“正在做什么”，输入是模型给出的参数；措辞由所属领域提供。
+    activity_renderer: Callable[[dict[str, Any]], str] | None = None
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.func(*args, **kwargs)
@@ -78,13 +86,23 @@ class ToolRegistry:
         description: str | None = None,
         side_effect: SideEffect = SideEffect.READONLY,
         emits_draft_saved: bool = False,
+        notice_renderer: Callable[[dict[str, Any]], str] | None = None,
+        activity_renderer: Callable[[dict[str, Any]], str] | None = None,
+        param_schemas: dict[str, dict[str, Any]] | None = None,
     ) -> Any:
-        """注册工具。可作为普通函数调用，也可作为装饰器使用。"""
+        """注册工具。可作为普通函数调用，也可作为装饰器使用。
+
+        `param_schemas` 按参数名覆盖自动生成的 schema：自动映射只能给嵌套结构最粗的
+        类型（如 object），声明了必填字段与嵌套形状的参数由工具自行提供。
+        """
 
         def decorator(fn: Callable[..., Any]) -> ToolDefinition:
             tool_name = name or fn.__name__
             tool_desc = description or inspect.getdoc(fn) or ""
             schema = self._generate_parameters_schema(fn)
+            for param_name, replacement in (param_schemas or {}).items():
+                if param_name in schema["properties"]:
+                    schema["properties"][param_name] = replacement
             parameters = inspect.signature(fn).parameters
             needs_task_id = (
                 "task_id" in parameters
@@ -99,6 +117,8 @@ class ToolRegistry:
                 parameters_schema=schema,
                 needs_task_id=needs_task_id,
                 emits_draft_saved=emits_draft_saved,
+                notice_renderer=notice_renderer,
+                activity_renderer=activity_renderer,
             )
 
             self._tools[tool_name] = tool_def
@@ -118,6 +138,20 @@ class ToolRegistry:
         每轮的允许集合由它的 `exposed_tools` 按副作用声明筛选，全流程只有那一处筛选。
         """
         return list(self._tools.values())
+
+    @staticmethod
+    def _concrete_type(param_type: Any) -> Any:
+        """剥离 `Optional[X]` / `X | None`，返回真实类型 X。
+
+        可选的数组/对象参数若直接取 `get_origin` 会得到 UnionType，落到默认 string；
+        先解包出唯一的非 None 成员，才能映射成正确的 array/object。
+        """
+        args = get_args(param_type)
+        if args and type(None) in args:
+            non_null = [arg for arg in args if arg is not type(None)]
+            if len(non_null) == 1:
+                return non_null[0]
+        return param_type
 
     @staticmethod
     def _generate_parameters_schema(fn: Callable[..., Any]) -> dict[str, Any]:
@@ -146,7 +180,7 @@ class ToolRegistry:
             if param_name in ("self", "cls") or param.kind is inspect.Parameter.KEYWORD_ONLY:
                 continue
 
-            param_type = type_hints.get(param_name, Any)
+            param_type = ToolRegistry._concrete_type(type_hints.get(param_name, Any))
             json_type = type_mapping.get(get_origin(param_type) or param_type, "string")
 
             prop: dict[str, Any] = {"type": json_type}
@@ -168,6 +202,20 @@ class ToolRegistry:
         }
 
 
+# 步骤说明里参数的最长显示长度：足够认出在查什么，又不把一行撑长。
+ACTIVITY_DETAIL_LIMIT = 40
+
+
+def activity(label: str, detail: object = None) -> str:
+    """拼一条步骤说明：“动作：对象”，对象取自模型参数，过长截断，缺省时只有动作。"""
+    text = " ".join(str(detail).split()) if isinstance(detail, (str, int, float)) else ""
+    if not text:
+        return label
+    if len(text) > ACTIVITY_DETAIL_LIMIT:
+        text = text[:ACTIVITY_DETAIL_LIMIT] + "…"
+    return f"{label}：{text}"
+
+
 # 全局默认注册表实例
 default_registry = ToolRegistry()
 
@@ -179,6 +227,9 @@ def tool(
     description: str | None = None,
     side_effect: SideEffect = SideEffect.READONLY,
     emits_draft_saved: bool = False,
+    notice_renderer: Callable[[dict[str, Any]], str] | None = None,
+    activity_renderer: Callable[[dict[str, Any]], str] | None = None,
+    param_schemas: dict[str, dict[str, Any]] | None = None,
 ) -> Any:
     """快捷 @tool 装饰器，向全局默认工具注册表注册。"""
     return default_registry.register(
@@ -187,4 +238,7 @@ def tool(
         description=description,
         side_effect=side_effect,
         emits_draft_saved=emits_draft_saved,
+        notice_renderer=notice_renderer,
+        activity_renderer=activity_renderer,
+        param_schemas=param_schemas,
     )

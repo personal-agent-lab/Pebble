@@ -1,6 +1,4 @@
-# Memory 与 Skills 契约
-
-状态：Skills 已实现；Memory 保留约定，尚未实现。Skills 的本地验收记录见 `../skills-acceptance.md`。
+# Skills 契约
 
 ## 1. 存储与职责
 
@@ -8,28 +6,11 @@ Skill 正文保存在 `<data_dir>/skills/<skill_id>/SKILL.md`；待审核草稿�
 `skill_drafts/<draft_id>/SKILL.md`；正式归档在 `skill_archives/<skill_id>/SKILL.md`。
 已批准或驳回的草稿保留关闭状态与 Git 历史，不再出现在待审核列表中。
 实例数据目录使用独立 Git 仓库，只提交指定 Skill 路径，不提交凭证、数据库或 SDK 会话，不推送。
-SQLite schema 10 仅保存运行与 Skill 版本关联、工具执行证据，不保存正文。
+SQLite schema 18 仅保存运行与 Skill 版本关联、工具执行证据，不保存正文。
 
-## 2. Memory 文件格式
+## 2. 与 Memory 的边界
 
-```yaml
----
-id: mem_01HZR2K9QX4T1B
-kind: correction            # preference | correction | fact
-summary: 会议默认时长 30 分钟
-created_at: 2026-09-14T10:22:31+08:00
-updated_at: 2026-09-14T10:22:31+08:00
-source:                     # 触发该规则的用户纠正
-  task_id: task_01HZR2K0
-  quote: 以后约会议默认半小时，别写一小时
----
-
-规则本身，一句话可执行。
-
-**适用边界：** 只用于内部会议；对外邀请按对方给出的时长。
-```
-
-每轮系统提示装配时加载全部生效规则，作为一个固定标题的材料块（`## 当前生效规则`）追加在基础提示之后、本轮触发材料之前。规则不得覆盖外部写确认约束：该约束由程序（每轮工具可见范围与 Confirmation）保证，不依赖规则文本或模型自律。
+长期记忆遵循 `memory.md`；Skills 保存经批准的可复用流程，不替代记忆判断与回顾。
 
 ## 3. Skill 文件与版本
 
@@ -62,11 +43,10 @@ content_hash、approved_version、base_revision、evidence、created_at、update
 
 ## 6. 每轮受控加载
 
-消息协议兼容旧客户端，增加：
+消息与任务创建沿用 multipart 表单；`selection` 字段为以下 JSON（省略时自动匹配）：
 
 ```json
 {
-  "message": "整理这周安排",
   "skills": [{"id": "sk_example", "revision": "sha256:..."}],
   "excluded_skill_ids": [],
   "auto_match_skills": true
@@ -78,7 +58,7 @@ content_hash、approved_version、base_revision、evidence、created_at、update
 由同一个 Agent 按需调用 skill_read；无需相关流程时可以不加载。排除项与关闭自动匹配在工具端强制执行。
 Skill 与用户本轮要求冲突时以用户要求为准；Skill 之间冲突时追问。
 
-SDK 保持 tools=[]、setting_sources=[]、skills=[]。不依赖项目配置发现，也不导出到 `.qoder/skills/`。
+SDK 保持 setting_sources=[]、skills=[]；内置工具继续按主分支的轮次权限开放。不依赖项目配置发现，也不导出到 `.qoder/skills/`。
 理由：原实现仅传名称且没有受控加载验证，不能证明正文加载；改为材料装配与受限读取。
 恢复会话时重新构造目录与校验版本，但已存在于 SDK 历史上下文中的文字不能被抹除。
 运行时记录实际装配/读取的 Skill ID、版本与 manual/auto 来源；网页展示这些加载记录。
@@ -98,7 +78,7 @@ SDK 保持 tools=[]、setting_sources=[]、skills=[]。不依赖项目配置发�
 失败、冲突或待核实状态不计入成功；准备草稿成功只证明准备步骤成功，不证明外部投递成功。
 同名且来源相同的待审核建议复用已有草稿；模型应抽象参数，避免私密内容，优先改进同类 Skill。
 任务收尾是否值得总结由现有 Agent 判断，不新增循环、定时任务或强制每轮建议。
-Memory 尚未实现，因此不宣称已核验跨任务“无重复纠正”。
+Skill 证据校验不宣称已核验跨任务“无重复纠正”。
 
 ## 8. HTTP 与界面
 
@@ -117,4 +97,4 @@ Web `/skills` 提供创建、搜索、状态筛选、编辑、审核、依据查
 不提供批准、启用、删除正式版本的模型工具。local_write 仍按已有轮次权限开放，
 新邮件轮仅 readonly；批准 Skill 不授予外部工具权限，既有邮件确认与日历用户轮限制不变。
 Markdown/正文按文本展示，不执行任意 HTML、脚本或 Shell。
-认证和 HTTPS 远程访问尚未实现，本机使用；真实账号验收属于单独明确授权的工作。
+认证与 HTTPS 远程访问遵循主分支的 Tailscale 访问控制；真实账号验收属于单独明确授权的工作。

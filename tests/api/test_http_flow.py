@@ -10,6 +10,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import pytest
@@ -96,10 +97,21 @@ def test_http_sse_flow_and_process_restart(settings, outcome, monkeypatch):
         port = sock.getsockname()[1]
     base = f"http://127.0.0.1:{port}/api"
 
-    def request(path, body=None, method=None):
-        data = None if body is None else json.dumps(body).encode()
+    def request(path, body=None, method=None, form=False):
+        data = (
+            None
+            if body is None
+            else (urlencode(body).encode() if form else json.dumps(body).encode())
+        )
         req = Request(
-            base + path, data=data, method=method, headers={"Content-Type": "application/json"}
+            base + path,
+            data=data,
+            method=method,
+            headers={
+                "Content-Type": (
+                    "application/x-www-form-urlencoded" if form else "application/json"
+                )
+            },
         )
         try:
             with urlopen(req, timeout=5) as response:
@@ -181,7 +193,7 @@ def test_http_sse_flow_and_process_restart(settings, outcome, monkeypatch):
         listener.start()
         assert connected.wait(5)
         log("3/8 用户要求准备回信，不授权发送")
-        assert request(f"/tasks/{tid}/messages", {"message": "帮我写一封回信"})[0] == 202
+        assert request(f"/tasks/{tid}/messages", {"message": "帮我写一封回信"}, form=True)[0] == 202
         listener.join(5)
         assert received and not listener.is_alive()
         wait_for(lambda: request(f"/tasks/{tid}")[1]["latest_run"]["status"] == "done")
@@ -189,16 +201,32 @@ def test_http_sse_flow_and_process_restart(settings, outcome, monkeypatch):
         assert not (settings.data_dir / "sent.jsonl").exists()
         with session() as conn:
             assert conn.execute("SELECT COUNT(*) FROM approval_executions").fetchone()[0] == 0
+        # 两轮修改都从卡片上的修改要求发出：定向这份草稿，原地另存版本。
+        target = json.dumps({"kind": "mail_draft", "operation_id": oid})
         log(
             "4/8 PASS SSE 已断开，后台仍完成草稿；无确认、无发送",
             event=received,
             draft=request(f"/operations/{oid}/draft")[1],
         )
-        assert request(f"/tasks/{tid}/messages", {"message": "第二稿：请写得更正式"})[0] == 202
+        assert (
+            request(
+                f"/tasks/{tid}/messages",
+                {"message": "第二稿：请写得更正式", "target": target},
+                form=True,
+            )[0]
+            == 202
+        )
         wait_for(lambda: request(f"/tasks/{tid}")[1]["latest_run"]["status"] == "done")
-        assert request(f"/tasks/{tid}/messages", {"message": "第三稿：请再简短一些"})[0] == 202
+        assert (
+            request(
+                f"/tasks/{tid}/messages",
+                {"message": "第三稿：请再简短一些", "target": target},
+                form=True,
+            )[0]
+            == 202
+        )
         wait_for(lambda: request(f"/tasks/{tid}")[1]["latest_run"]["status"] == "done")
-        log("5/8 Agent 已完成两轮修改，接下来模拟网页直接编辑")
+        log("5/8 Agent 已按卡片上的两轮修改要求改完，接下来模拟网页直接编辑")
         final = {
             "to": ["b@example.com", "a@example.com"],
             "subject": " 最终主题 ",
@@ -290,10 +318,11 @@ def test_http_sse_flow_and_process_restart(settings, outcome, monkeypatch):
 
 
 def test_missing_dependencies_reject_before_mutation(settings):
-    with TestClient(create_app()) as client:
-        tid = client.post("/api/tasks", json={"goal": "测试"}).json()["task_id"]
+    app = create_app()
+    with TestClient(app) as client:
+        tid = app.state.tasks.create_task("测试")["task_id"]
         assert (
-            client.post(f"/api/tasks/{tid}/messages", json={"message": "你好"}).status_code == 503
+            client.post(f"/api/tasks/{tid}/messages", data={"message": "你好"}).status_code == 503
         )
         drafts = MailDraftStore()
         op = drafts.save_reply_draft(tid, "m", "thread", ["a@example.com"], "主题", "正文")
@@ -325,7 +354,7 @@ def test_verification_route_upgrades_and_delivers(settings):
 
     app = create_app(send_message=send, verify_message=verify)
     with TestClient(app) as client:
-        tid = client.post("/api/tasks", json={"goal": "测试"}).json()["task_id"]
+        tid = app.state.tasks.create_task("测试")["task_id"]
         drafts = app.state.drafts
         op = drafts.save_reply_draft(tid, "m", "t", ["a@example.com"], "主题", "正文")
         oid = op["operation_id"]
@@ -366,8 +395,9 @@ def test_confirmation_rejects_draft_without_recipients(settings):
         calls.append(fields)
         return {"status": "sent", "message_id": "gmail-1"}
 
-    with TestClient(create_app(send_message=send)) as client:
-        tid = client.post("/api/tasks", json={"goal": "测试"}).json()["task_id"]
+    app = create_app(send_message=send)
+    with TestClient(app) as client:
+        tid = app.state.tasks.create_task("测试")["task_id"]
         op = MailDraftStore().save_email_draft(tid, [], "会议通知", "正文")
         oid = op["operation_id"]
         assert client.get(f"/api/operations/{oid}/draft").json()["to"] == []
@@ -396,8 +426,9 @@ def test_confirmation_rejects_draft_without_recipients(settings):
 
 def test_verification_of_unconfirmed_operation_calls_nothing(settings):
     """只有待核实结果才需要核实：其余状态原样返回，不调用外部接口，也不需要核实依赖。"""
-    with TestClient(create_app()) as client:
-        tid = client.post("/api/tasks", json={"goal": "测试"}).json()["task_id"]
+    app = create_app()
+    with TestClient(app) as client:
+        tid = app.state.tasks.create_task("测试")["task_id"]
         op = MailDraftStore().save_reply_draft(tid, "m", "t", ["a@example.com"], "主题", "正文")
         oid = op["operation_id"]
 
@@ -406,3 +437,41 @@ def test_verification_of_unconfirmed_operation_calls_nothing(settings):
         assert response.status_code == 200
         assert response.json() == client.get(f"/api/operations/{oid}/execution").json()
         assert response.json()["status"] == "pending"
+
+
+def test_cancellation_stops_draft_without_sending(settings):
+    """取消后草稿不能再编辑或确认，重复取消返回原状态；已进入执行的草稿不能取消。"""
+    calls = []
+
+    def send(**fields):
+        calls.append(fields)
+        return {"status": "sent", "message_id": "gmail-1"}
+
+    app = create_app(send_message=send)
+    with TestClient(app) as client:
+        tid = app.state.tasks.create_task("测试")["task_id"]
+        oid = MailDraftStore().save_email_draft(tid, ["a@example.com"], "主题", "正文")[
+            "operation_id"
+        ]
+        body = {"operation_id": oid, "version": 1}
+
+        stale = client.post(f"/api/tasks/{tid}/cancellations", json={**body, "version": 2})
+        assert stale.status_code == 409
+
+        cancelled = client.post(f"/api/tasks/{tid}/cancellations", json=body)
+        assert cancelled.status_code == 200
+        assert cancelled.json()["status"] == "cancelled"
+        assert cancelled.json()["confirmation"] is None
+        assert client.post(f"/api/tasks/{tid}/cancellations", json=body).json() == cancelled.json()
+
+        assert client.post(f"/api/tasks/{tid}/confirmations", json=body).status_code == 409
+        edit = {"expected_version": 1, "to": ["a@example.com"], "subject": "主题", "body": "改"}
+        assert client.patch(f"/api/operations/{oid}/draft", json=edit).status_code == 409
+        assert calls == []
+
+        sent_id = MailDraftStore().save_email_draft(tid, ["a@example.com"], "主题", "正文")[
+            "operation_id"
+        ]
+        sent = {"operation_id": sent_id, "version": 1}
+        assert client.post(f"/api/tasks/{tid}/confirmations", json=sent).status_code == 202
+        assert client.post(f"/api/tasks/{tid}/cancellations", json=sent).status_code == 409

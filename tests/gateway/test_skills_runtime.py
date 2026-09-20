@@ -3,12 +3,11 @@ import asyncio
 from server.agent.mcp import ToolServer
 from server.agent.toolset import TurnKind
 from server.db import init_db, session, write
-from server.main import create_app
 from server.sessions.service import SessionStore
 from server.skills import service
 from server.skills.runtime import Scope, current
 from server.tools.registry import default_registry
-from tests.gateway.test_agent_stream import make_gateway, options_for
+from tests.gateway.test_agent_stream import injected_context, make_gateway, options_for
 from tests.support.mcp_http import mcp_session, tool_payload
 
 
@@ -21,15 +20,15 @@ def test_manual_body_and_automatic_catalog(settings):
         skill_ids=[skill.id],
         skill_refs=({"id": skill.id, "revision": skill.content_hash},),
     )
-    assert skill.body in options.system_prompt
+    assert skill.body in injected_context(options)
     assert options.skills == []
     assert options.setting_sources == []
     options = options_for(gateway, TurnKind.MESSAGE, sdk_session_id="resume")
-    assert skill.description in options.system_prompt
-    assert skill.body not in options.system_prompt
+    assert skill.description in injected_context(options)
+    assert skill.body not in injected_context(options)
     service.disable_skill(skill.id)
     options = options_for(gateway, TurnKind.MESSAGE, sdk_session_id="resume")
-    assert skill.description not in options.system_prompt
+    assert options.hooks is None or skill.description not in injected_context(options)
 
 
 def test_mcp_scope_and_actual_usage(settings):
@@ -45,7 +44,6 @@ def test_mcp_scope_and_actual_usage(settings):
 
     async def scenario():
         server = ToolServer()
-        app = create_app(tool_server=server)
         definitions = [
             d for d in default_registry.list_tools() if d.name in {"skill_read", "skill_list"}
         ]
@@ -55,7 +53,7 @@ def test_mcp_scope_and_actual_usage(settings):
             async with server.serve(definitions, task_id=task, queued=asyncio.Queue()) as path:
                 # 模拟 HTTP 请求运行在不同上下文。
                 current.set(None)
-                async with mcp_session(app, f"http://test{path}") as client:
+                async with mcp_session(server, f"http://test{path}") as client:
                     result = await client.call_tool("skill_read", {"skill_id": skill.id})
                     assert result.isError
                     scope.excluded.clear()

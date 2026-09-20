@@ -1,7 +1,9 @@
+import { ArrowUp } from "@phosphor-icons/react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   ApiError,
+  cancelOperation,
   confirmOperation,
   editDraft,
   type MessageTarget,
@@ -51,7 +53,7 @@ export default function MailDraftCard({ taskId, item, sendMessage, onChanged }: 
   const [asking, setAsking] = useState(false);
   const [request, setRequest] = useState("");
   const [toOpen, setToOpen] = useState(false);
-  const [busy, setBusy] = useState<"request" | "confirm" | "verify" | null>(null);
+  const [busy, setBusy] = useState<"request" | "confirm" | "cancel" | "verify" | null>(null);
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<ApiError | null>(null);
 
@@ -63,6 +65,7 @@ export default function MailDraftCard({ taskId, item, sendMessage, onChanged }: 
   const savedRef = useRef<Form>(formOf(item));
   const versionRef = useRef(item.draft.version);
   const flightRef = useRef<Promise<number> | null>(null);
+  const askRef = useRef<HTMLDivElement>(null);
   const subjectRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   formRef.current = form;
@@ -78,6 +81,18 @@ export default function MailDraftCard({ taskId, item, sendMessage, onChanged }: 
     versionRef.current = item.draft.version;
     setForm(formOf(item));
   }, [item.draft.version]);
+
+  // 点在修改要求输入框之外就收起，恢复成按钮；已输入的文字保留，再点开还在。
+  // 用 pointerdown 而不是 blur：Safari 点按钮不给焦点，blur 分不清点的是不是框里的提交按钮。
+  useEffect(() => {
+    if (!asking) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (askRef.current?.contains(event.target as Node)) return;
+      setAsking(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [asking]);
 
   // 主题和正文都随内容撑高：长主题要能折行，卡片里也不出现内层滚动条。
   // 用 layout effect 量：先置 auto 再读 scrollHeight 会让输入框瞬间塌回一行，
@@ -151,6 +166,13 @@ export default function MailDraftCard({ taskId, item, sendMessage, onChanged }: 
     await onChanged();
   });
 
+  // 取消前先把未保存的改动写回：取消针对的是用户眼前这一版，版本号与服务端对得上。
+  const cancel = () => run("cancel", async () => {
+    const { version } = await flush();
+    await cancelOperation(taskId, item.operation_id, version);
+    await onChanged();
+  });
+
   const verify = () => run("verify", async () => {
     await verifyExecution(item.operation_id);
     await onChanged();
@@ -167,9 +189,9 @@ export default function MailDraftCard({ taskId, item, sendMessage, onChanged }: 
   const result = item.execution.result;
   return (
     <section className="mail-card" data-component="MailDraftCard">
-      <div className="mail-toolbar">
+      <div className={`mail-toolbar${editable ? " with-actions" : ""}`}>
         {asking ? (
-          <div className="mail-ask">
+          <div className="mail-ask" ref={askRef}>
             <input
               value={request}
               autoFocus
@@ -182,20 +204,29 @@ export default function MailDraftCard({ taskId, item, sendMessage, onChanged }: 
                 if (event.key === "Escape") { setRequest(""); setAsking(false); }
               }}
             />
-            <button type="button" className="icon-action" aria-label="提交修改要求"
-              disabled={busy !== null || request.trim() === ""} onClick={submitRequest}>↑</button>
+            <button type="button" className="mail-ask-send" aria-label="提交修改要求"
+              disabled={busy !== null || request.trim() === ""} onClick={submitRequest}>
+              <ArrowUp size={14} weight="bold" />
+            </button>
           </div>
         ) : (
           <button type="button" className="mail-ghost" disabled={!editable || busy !== null}
             onClick={() => setAsking(true)}>{ASK_ICON}<span>修改要求</span></button>
         )}
 
-        <StatusBadge badge={operationBadge(status)} />
+        {status === "cancelled"
+          ? <span className="mail-cancel mail-cancelled" aria-disabled="true">已取消</span>
+          : <StatusBadge badge={operationBadge(status)} />}
 
-        {editable && <button type="button" className="mail-send"
-          disabled={busy !== null || recipients.length === 0} onClick={confirm}>
-          {SEND_ICON}<span>{busy === "confirm" ? "确认中…" : "确认并发送"}</span>
-        </button>}
+        {editable && <div className="mail-actions">
+          <button type="button" className="mail-cancel" disabled={busy !== null} onClick={cancel}>
+            {busy === "cancel" ? "取消中…" : "取消"}
+          </button>
+          <button type="button" className="mail-send"
+            disabled={busy !== null || recipients.length === 0} onClick={confirm}>
+            {SEND_ICON}<span>{busy === "confirm" ? "确认中…" : "确认并发送"}</span>
+          </button>
+        </div>}
         {status === "unknown" && <button type="button" className="btn-secondary mail-verify"
           disabled={busy !== null} onClick={verify}>
           {busy === "verify" ? "核实中…" : "核实实际结果"}

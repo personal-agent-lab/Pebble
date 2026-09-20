@@ -13,6 +13,7 @@ export type Badge = { tone: BadgeTone; label: string };
 
 export const OPERATION_BADGES: Record<OperationStatus, Badge> = {
   pending: { tone: "wait", label: "待确认" },
+  cancelled: { tone: "neutral", label: "已取消" },
   sending: { tone: "run", label: "执行中" },
   sent: { tone: "ok", label: "已发送" },
   creating: { tone: "run", label: "创建中" },
@@ -23,6 +24,11 @@ export const OPERATION_BADGES: Record<OperationStatus, Badge> = {
 
 export function operationBadge(status: OperationStatus): Badge {
   return OPERATION_BADGES[status];
+}
+
+/** 还在等用户确认的操作条数；确认或取消后才不再计入。 */
+export function pendingCount(operations: OperationSummary[]): number {
+  return operations.filter((operation) => operation.status === "pending").length;
 }
 
 /**

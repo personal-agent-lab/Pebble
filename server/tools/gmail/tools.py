@@ -9,7 +9,7 @@ from server.errors import NotFoundError
 from server.sessions.service import SessionStore
 from server.tools.gmail.client import BaseGmailClient, GmailAttachment, GmailMessage
 from server.tools.gmail.service import MailDraftStore
-from server.tools.registry import SideEffect, ToolFileResult, tool
+from server.tools.registry import SideEffect, ToolFileResult, activity, tool
 
 
 def attachment_fields(attachment: GmailAttachment) -> dict[str, Any]:
@@ -43,6 +43,7 @@ def message_fields(message: GmailMessage, *, include_body: bool) -> dict[str, An
     name="gmail_search",
     description=("使用 Gmail 搜索条件查找邮件。返回每封邮件统一的基本信息和附件列表。"),
     side_effect=SideEffect.READONLY,
+    activity_renderer=lambda args: activity("正在搜索邮件", args.get("query")),
 )
 def search_emails(
     query: str, max_results: int = 10, *, gmail: BaseGmailClient
@@ -55,6 +56,7 @@ def search_emails(
     name="gmail_get_thread",
     description="读取指定 Gmail 往来中按时间排列的全部邮件。",
     side_effect=SideEffect.READONLY,
+    activity_renderer=lambda args: activity("正在读取邮件往来"),
 )
 def get_email_thread(thread_id: str, *, gmail: BaseGmailClient) -> dict[str, Any]:
     return {
@@ -69,6 +71,7 @@ def get_email_thread(thread_id: str, *, gmail: BaseGmailClient) -> dict[str, Any
     name="gmail_get_message",
     description="读取单封 Gmail 邮件的完整正文、收发件人、时间和附件列表。",
     side_effect=SideEffect.READONLY,
+    activity_renderer=lambda args: activity("正在读取邮件"),
 )
 def get_email_detail(message_id: str, *, gmail: BaseGmailClient) -> dict[str, Any]:
     return message_fields(gmail.get_message(message_id), include_body=True)
@@ -78,6 +81,7 @@ def get_email_detail(message_id: str, *, gmail: BaseGmailClient) -> dict[str, An
     name="gmail_get_attachment",
     description="读取指定 Gmail 邮件中的一个附件，返回附件信息和原始文件。",
     side_effect=SideEffect.READONLY,
+    activity_renderer=lambda args: activity("正在读取邮件附件"),
 )
 def get_attachment(
     message_id: str, attachment_id: str, *, gmail: BaseGmailClient
@@ -109,6 +113,7 @@ def get_attachment(
     ),
     side_effect=SideEffect.LOCAL_WRITE,
     emits_draft_saved=True,
+    activity_renderer=lambda args: activity("正在起草回复", args.get("subject")),
 )
 def prepare_reply(
     source_message_id: str,
@@ -140,6 +145,7 @@ def prepare_reply(
     ),
     side_effect=SideEffect.LOCAL_WRITE,
     emits_draft_saved=True,
+    activity_renderer=lambda args: activity("正在起草邮件", args.get("subject")),
 )
 def prepare_email(
     to: list[str],
@@ -152,7 +158,11 @@ def prepare_email(
     return drafts.save_email_draft(task_id, to, subject, body)
 
 
-@tool(name="gmail_read_draft", side_effect=SideEffect.READONLY)
+@tool(
+    name="gmail_read_draft",
+    side_effect=SideEffect.READONLY,
+    activity_renderer=lambda args: activity("正在读取邮件草稿"),
+)
 def read_draft(
     operation_id: str, *, task_id: str, drafts: MailDraftStore, tasks: SessionStore
 ) -> dict:
@@ -165,11 +175,14 @@ def read_draft(
 @tool(
     name="gmail_update_draft",
     description=(
-        "按用户修改意见保存邮件草稿的完整新版本，不发送。"
-        "保存成功后系统会把新版本以审阅卡片呈现给用户。"
+        "按用户修改意见保存邮件草稿的完整新内容，不发送。读到的草稿状态是 pending 或 cancelled"
+        "都可以用它保存；cancelled 时系统以一张新卡片呈现，之后以返回的 operation_id 为准。"
+        "保存成功后系统会把草稿以审阅卡片呈现给用户。"
+        "向用户只说明改了什么，不提及原草稿被取消、作废或另起新稿等系统处理。"
     ),
     side_effect=SideEffect.LOCAL_WRITE,
     emits_draft_saved=True,
+    activity_renderer=lambda args: activity("正在修改邮件草稿", args.get("subject")),
 )
 def update_draft(
     operation_id: str,
@@ -182,5 +195,7 @@ def update_draft(
     drafts: MailDraftStore,
     tasks: SessionStore,
 ) -> dict:
-    read_draft(operation_id, task_id=task_id, drafts=drafts, tasks=tasks)
+    current = read_draft(operation_id, task_id=task_id, drafts=drafts, tasks=tasks)
+    if current["status"] == "cancelled":
+        return drafts.supersede_draft(task_id, operation_id, expected_version, to, subject, body)
     return drafts.update_draft(operation_id, expected_version, to, subject, body)

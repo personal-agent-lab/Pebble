@@ -7,9 +7,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from server.config import get_settings
+from server.config import default_model, get_settings
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 18
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -180,24 +180,118 @@ SCHEMA_V8 = (
     "ALTER TABLE calendar_preview_versions RENAME TO calendar_event_versions",
 )
 
-# Skill 运行时关联与草稿审计。
+# 后台记忆回顾：按任务记录每次回顾的覆盖范围与状态，独立于 agent_runs，不进入任务时间线。
+# through_rowid 是本次回顾覆盖到的 agent_runs 行号（软引用，任务删除时一并清理）。
+# origin 区分周期触发与手动触发；每个任务至多一条待处理或运行中的回顾，由部分唯一索引强制。
 SCHEMA_V9 = (
-    "CREATE TABLE skill_run_links ("
-    "run_id TEXT NOT NULL REFERENCES agent_runs(run_id), "
-    "skill_id TEXT NOT NULL, "
-    "revision TEXT NOT NULL, "
-    "source TEXT NOT NULL CHECK(source IN ('manual', 'auto')), "
-    "loaded_at TEXT NOT NULL, "
-    "PRIMARY KEY(run_id, skill_id))",
-    "CREATE TABLE skill_draft_evidence ("
-    "draft_id TEXT NOT NULL, "
+    "CREATE TABLE memory_reviews (review_id TEXT PRIMARY KEY, "
     "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
-    "created_at TEXT NOT NULL, "
+    "status TEXT NOT NULL CHECK(status IN ('pending','running','done','error','interrupted')), "
+    "origin TEXT NOT NULL CHECK(origin IN ('interval','manual')), "
+    "from_rowid INTEGER NOT NULL CHECK(from_rowid >= 0), "
+    "through_rowid INTEGER NOT NULL CHECK(through_rowid >= from_rowid), "
+    "error TEXT, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, "
+    "CHECK ((finished_at IS NULL) = (status IN ('pending','running'))), "
+    "CHECK (error IS NULL OR status IN ('error','interrupted')))",
+    "CREATE UNIQUE INDEX memory_reviews_open ON memory_reviews(task_id) "
+    "WHERE status IN ('pending','running')",
+)
+
+# 程序提示（如后台记忆回顾结果）是时间线上的独立一类，不由模型输出，
+# role 为空以区别于对话文本。重建表以放宽 kind 检查。
+SCHEMA_V10 = (
+    "CREATE TABLE task_timeline_items_new (item_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "run_id TEXT NOT NULL REFERENCES agent_runs(run_id), "
+    "kind TEXT NOT NULL CHECK(kind IN ('text','mail_draft','error','notice')), "
+    "role TEXT CHECK(role IN ('user','assistant')), text TEXT, "
+    "operation_id TEXT REFERENCES operations(operation_id), created_at TEXT NOT NULL, "
+    "CHECK ((kind = 'text') = (role IS NOT NULL AND text IS NOT NULL)), "
+    "CHECK ((kind = 'mail_draft') = (operation_id IS NOT NULL)), "
+    "CHECK (kind NOT IN ('error','notice') OR (role IS NULL AND text IS NOT NULL)))",
+    "INSERT INTO task_timeline_items_new SELECT * FROM task_timeline_items",
+    "DROP TABLE task_timeline_items",
+    "ALTER TABLE task_timeline_items_new RENAME TO task_timeline_items",
+    "CREATE UNIQUE INDEX task_timeline_mail_draft ON task_timeline_items(task_id,operation_id) "
+    "WHERE kind='mail_draft'",
+)
+
+# 回答的来源：模型成功读取资料原文时按轮次记录引用与本次实际读到的片段，供时间线在
+# 该轮最后一段回答下展示。同一轮重复读取同一版本与行号只记一次；摘要不作为来源。
+SCHEMA_V11 = (
+    "CREATE TABLE task_run_sources (source_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "run_id TEXT NOT NULL REFERENCES agent_runs(run_id), "
+    "sequence INTEGER NOT NULL CHECK(sequence >= 1), "
+    "doc_id TEXT NOT NULL, path TEXT NOT NULL, title TEXT, heading TEXT, "
+    "start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, commit_sha TEXT NOT NULL, "
+    "excerpt TEXT NOT NULL, created_at TEXT NOT NULL)",
+    "CREATE UNIQUE INDEX task_run_sources_ref "
+    "ON task_run_sources(run_id, commit_sha, path, start_line, end_line)",
+)
+
+# 撤销回答来源：产品不再向用户展示资料来源，来源记录表随之删除。
+SCHEMA_V12 = ("DROP TABLE task_run_sources",)
+
+# 历史对话检索：时间线条目的全文索引，是可从时间线重建的派生数据。检索前按需增量同步——
+# 已结束轮次里还没进索引的条目补进来，内容或执行状态变了的邮件草稿重写——不挂写入钩子。
+# 不设外键：删除任务时按任务清理，不受子表删除顺序约束。
+SCHEMA_V13 = (
+    "CREATE TABLE history_items (item_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, "
+    "fts_rowid INTEGER NOT NULL UNIQUE, op_version INTEGER, op_status TEXT)",
+    "CREATE INDEX history_items_task ON history_items(task_id)",
+    "CREATE VIRTUAL TABLE history_fts USING fts5(body, tokenize='trigram')",
+)
+
+# 任务固定模型；附件使用任务内不可变标识，时间线只保存有序关联。
+SCHEMA_V14 = (
+    "ALTER TABLE tasks ADD COLUMN model TEXT NOT NULL DEFAULT 'auto'",
+    "CREATE TABLE uploaded_files (file_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), filename TEXT NOT NULL, "
+    "mime_type TEXT NOT NULL, size INTEGER NOT NULL CHECK(size >= 0), sha256 TEXT NOT NULL, "
+    "storage_path TEXT NOT NULL, created_at TEXT NOT NULL)",
+    "CREATE INDEX uploaded_files_task ON uploaded_files(task_id)",
+    "CREATE TABLE timeline_item_attachments ("
+    "item_id TEXT NOT NULL REFERENCES task_timeline_items(item_id), "
+    "file_id TEXT NOT NULL REFERENCES uploaded_files(file_id), position INTEGER NOT NULL, "
+    "PRIMARY KEY(item_id,file_id), UNIQUE(item_id,position))",
+)
+
+# 用户可以取消待确认的邮件草稿：cancelled 是不产生外部写入的终止状态，没有执行记录。
+SCHEMA_V15 = (
+    SCHEMA_V7[0].replace("'created'", "'created','cancelled'"),
+    "INSERT INTO operations_new SELECT * FROM operations",
+    "DROP TABLE operations",
+    "ALTER TABLE operations_new RENAME TO operations",
+)
+
+# 同一原邮件的回复被用户取消后，再起草时新建操作与卡片，不复用已取消的那份：
+# 原邮件标识不再唯一，“每封原邮件至多一份未取消的回复”由保存草稿的写事务保证。
+SCHEMA_V16 = (
+    SCHEMA_V4[0]
+    .replace("CREATE TABLE mail_drafts", "CREATE TABLE mail_drafts_new")
+    .replace("source_message_id TEXT UNIQUE", "source_message_id TEXT"),
+    "INSERT INTO mail_drafts_new SELECT * FROM mail_drafts",
+    "DROP TABLE mail_drafts",
+    "ALTER TABLE mail_drafts_new RENAME TO mail_drafts",
+    "CREATE INDEX mail_drafts_source ON mail_drafts(source_message_id)",
+)
+
+# Skills migrations follow main's existing versions; never reuse 9/10.
+# Some development databases already contain these tables under main's version 16.
+SCHEMA_V17 = (
+    "CREATE TABLE IF NOT EXISTS skill_run_links ("
+    "run_id TEXT NOT NULL REFERENCES agent_runs(run_id), "
+    "skill_id TEXT NOT NULL, revision TEXT NOT NULL, "
+    "source TEXT NOT NULL CHECK(source IN ('manual', 'auto')), "
+    "loaded_at TEXT NOT NULL, PRIMARY KEY(run_id, skill_id))",
+    "CREATE TABLE IF NOT EXISTS skill_draft_evidence (draft_id TEXT NOT NULL, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), created_at TEXT NOT NULL, "
     "PRIMARY KEY(draft_id, task_id))",
 )
 
-SCHEMA_V10 = (
-    "CREATE TABLE skill_tool_evidence (id TEXT PRIMARY KEY, "
+SCHEMA_V18 = (
+    "CREATE TABLE IF NOT EXISTS skill_tool_evidence (id TEXT PRIMARY KEY, "
     "run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE, "
     "tool_name TEXT NOT NULL, argument_keys TEXT NOT NULL, succeeded INTEGER NOT NULL, "
     "created_at TEXT NOT NULL)",
@@ -214,6 +308,14 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     8: SCHEMA_V8,
     9: SCHEMA_V9,
     10: SCHEMA_V10,
+    11: SCHEMA_V11,
+    12: SCHEMA_V12,
+    13: SCHEMA_V13,
+    14: SCHEMA_V14,
+    15: SCHEMA_V15,
+    16: SCHEMA_V16,
+    17: SCHEMA_V17,
+    18: SCHEMA_V18,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000
@@ -281,6 +383,12 @@ def init_db(path: Path | None = None) -> int:
             for version in range(current + 1, SCHEMA_VERSION + 1):
                 for statement in SCHEMA_MIGRATIONS[version]:
                     conn.execute(statement)
+                if version == 14:
+                    # 旧任务此前逐轮使用全局配置；迁移时把当下有效型号固化到任务。
+                    conn.execute(
+                        "UPDATE tasks SET model = ?",
+                        (default_model(),),
+                    )
             if current != SCHEMA_VERSION:
                 conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
             if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:

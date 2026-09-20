@@ -5,9 +5,11 @@
 
 * { box-sizing: border-box; }
 
+/* 两块底色：侧栏是浅灰导航区，主区（顶栏、内容、输入区）是一整块白面。
+   顶栏与输入区不再各自铺底，交界靠滚动区边缘的渐隐过渡，而不是色块拼接。 */
 body {
   margin: 0;
-  background: var(--color-bg);
+  background: var(--color-surface);
   color: var(--color-fg);
   font-family: var(--font-body);
   /* 正文就是默认字号：没有显式声明的文字也落在 scale 内，不会退回浏览器的 16px。 */
@@ -60,7 +62,7 @@ svg.i { width: 16px; height: 16px; flex: none; }
 .btn:focus-visible,
 .btn-secondary:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-ring);
+  box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-ring);
 }
 
 .btn:disabled,
@@ -80,10 +82,10 @@ svg.i { width: 16px; height: 16px; flex: none; }
   min-width: 0;
 }
 
+/* 聚焦只加深边框一条线，不再叠外圈光晕，和对话输入框保持一致。 */
 .input:focus-visible {
   outline: none;
-  border-color: var(--input-focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--input-focus-ring) 20%, transparent);
+  border-color: color-mix(in oklch, var(--color-fg) 28%, var(--color-border));
 }
 
 textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-body); }
@@ -93,14 +95,14 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 /* ===== 应用外壳 ===== */
 /* 定位上下文放在外壳上：.sr-only 是绝对定位，没有它就以视口为包含块，
    随内容滚到视口以外时会把整页撑高，出现第二条滚动条。 */
-.app { position: relative; display: flex; min-height: 100vh; min-height: 100dvh; background: var(--color-bg); }
+.app { position: relative; display: flex; min-height: 100vh; min-height: 100dvh; background: var(--color-surface); }
 
 .sidebar {
   /* 任务名是模型生成的 12 字以内短标题：正文宽度按它取整，
      再留出圆点、间距与右侧三点按钮的位置，常见标题一行放得下不靠省略号。 */
   width: 260px;
   flex: none;
-  background: var(--color-surface);
+  background: var(--color-bg);
   display: flex;
   flex-direction: column;
   padding: 14px 12px;
@@ -114,7 +116,6 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   font: 700 var(--text-sm)/1 var(--font-mono);
 }
 .brand-name { font-weight: 600; font-size: var(--text-md); line-height: 1.2; }
-.brand-sub { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-muted); margin-top: 2px; }
 
 .nav-item {
   display: flex; align-items: center; gap: 10px;
@@ -122,37 +123,39 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   font-size: var(--text-md); font-weight: 510; color: var(--color-muted);
   margin-bottom: 2px; width: 100%; text-align: left;
   border: none; background: none; font-family: var(--font-body); cursor: pointer;
+  /* 按钮默认 line-height: normal，比链接矮一截：置灰的 Skill 按钮与上面的链接行高对齐。 */
+  line-height: inherit;
 }
-.nav-item:hover { color: var(--color-fg); }
+/* 侧栏各行悬停一律用半透明深色提示可点，文字颜色不变；比选中态更浅，
+   悬停不会和“当前所在”混淆。侧栏本身是灰底，选中态不能再用 --color-bg。 */
+.nav-item:hover:not(.active):not(.disabled) { background: color-mix(in oklch, var(--color-fg) 3%, transparent); }
 .nav-item.active {
-  background: var(--color-bg); color: var(--color-fg); font-weight: 600;
+  background: color-mix(in oklch, var(--color-fg) 6%, transparent); color: var(--color-fg); font-weight: 600;
 }
 .nav-item.disabled { opacity: 0.55; cursor: not-allowed; }
-.nav-item.disabled:hover { color: var(--color-muted); }
 .nav-count { margin-left: auto; font-size: var(--text-xs); color: var(--color-muted); }
 
 /* ===== 侧栏任务区（任务列表即导航） ===== */
-/* 任务多了由导航区自己滚动，品牌区与连接状态始终留在原位。 */
-.sidebar-nav { flex: 1; min-height: 0; overflow-y: auto; }
-.nav-group { margin-bottom: 10px; }
+/* 固定入口在上，任务区占满剩余高度；任务多了只在列表内滚动，品牌区、固定入口与连接状态始终留在原位。 */
+.sidebar-nav { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.nav-group { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-top: 16px; }
+.nav-group .nav-list { flex: 1; min-height: 0; overflow-y: auto; }
 
-/* 分区标题一行说清三件事：这是任务、有没有待确认、从哪里发起新任务。 */
+/* 分区标题：字号与资料、记忆等入口一致，颜色浅、不带图标，读起来是一组列表的标题而不是页面入口。
+   它不可点，也就没有悬停与选中底色；右侧是待确认计数、搜索与发起新任务。 */
 .nav-head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 7px 6px 7px 10px; border-radius: var(--radius-md);
-  background: var(--color-bg);
-  font-size: var(--text-md); font-weight: 600; color: var(--color-fg);
+  display: flex; align-items: center; gap: 6px;
+  padding: 2px 6px 2px 10px;
+  font-size: var(--text-md); font-weight: 600; color: var(--color-muted);
 }
 .nav-head-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nav-head-count {
-  margin-left: auto; font-size: var(--text-xs); font-weight: 600; color: var(--color-accent);
-}
 .nav-new {
   flex: none; margin-left: auto; width: 24px; height: 24px;
   display: grid; place-items: center; border-radius: var(--radius-sm);
   color: var(--color-muted);
 }
-.nav-head-count + .nav-new { margin-left: 0; }
+/* 搜索与新任务并排：搜索在前，只有它推到行尾，新任务紧挨着。 */
+.nav-search + .nav-new { margin-left: 0; }
 .nav-new:hover { color: var(--color-fg); background: color-mix(in oklch, var(--color-fg) 6%, transparent); }
 .nav-new.active { color: var(--color-fg); }
 .nav-new:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
@@ -214,14 +217,19 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   padding: 6px 30px 6px 10px; border-radius: var(--radius-md);
   font-size: var(--text-sm); color: var(--color-muted); min-width: 0;
 }
-.nav-task-row:hover .nav-task { color: var(--color-fg); }
 .nav-task.active { color: var(--color-fg); font-weight: 600; }
 .nav-task:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
 /* 任务名一行截断：侧栏是索引，完整文案在任务对话里，悬停另有 title。 */
 .nav-task .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 侧栏只标出还没读过的待确认，读过与其余状态都留给任务页，列表保持一列干净的标题。 */
-.nav-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--color-border); }
+/* 来源图标每行都有（邮件触发 / 自己发起），跟着整行的颜色走，只压低一档：它说明来源，
+   不该比任务名更显眼。负 margin 把图标和标题之间的间距从行内的 8px 收到 6px，读起来仍是一组。 */
+.nav-task-source { display: flex; width: 14px; flex: none; margin-right: -2px; opacity: 0.65; }
+.nav-task-source .i { width: 14px; height: 14px; }
+/* 右侧至多一个圆点：蓝色是待确认，需要动手，处理完才消失；灰色是新结果，
+   只是提醒去看，打开任务就消失。 */
+.nav-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; }
 .nav-dot.wait { background: var(--color-accent); }
+.nav-dot.fresh { background: var(--color-muted); }
 
 .nav-more {
   align-self: flex-start; margin-top: 2px; padding: 5px 10px;
@@ -240,6 +248,7 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 
 .main {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
+  background: var(--color-surface);
   /* 对话栏窄一档保证行长可读；表单与列表页要放下两列，用宽一档的页面栏。 */
   --feed-col: 760px; --page-col: 1000px;
 }
@@ -250,13 +259,18 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 @media (min-width: 900px) {
   .app { height: 100vh; height: 100dvh; overflow: hidden; }
   .content { overflow-y: auto; }
+  /* 滚动区上下边缘渐隐：内容滚进顶栏或输入框时淡出，不在同色面上切出一道硬边。
+     渐隐落在内边距里，滚到顶或底时正文不受影响。 */
+  .content, .feed {
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 16px, #000 calc(100% - 16px), transparent);
+    mask-image: linear-gradient(to bottom, transparent, #000 16px, #000 calc(100% - 16px), transparent);
+  }
 }
 
 /* ===== 顶栏 ===== */
 .topbar {
   display: flex; align-items: center; gap: 14px;
   padding: 12px 20px;
-  background: var(--color-surface);
 }
 .topbar h2 { font-size: var(--text-lg); font-weight: 600; margin: 0; }
 .topbar .sub { font-size: var(--text-xs); color: var(--color-muted); }
@@ -278,45 +292,109 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   font-family: var(--font-display); font-size: var(--text-xl); font-weight: 600;
 }
 
-/* 输入与操作是一张卡片：正文一行起，底栏放提示与发起按钮。 */
-.starter {
-  border: 1px solid var(--color-border); border-radius: var(--radius-lg);
+/* Codex 式输入框：附件在顶部、正文居中、操作在底部，只有一层外框。 */
+.codex-composer {
+  position: relative;
+  border: 1px solid var(--color-border); border-radius: 20px;
   background: var(--color-surface);
-  box-shadow: 0 1px 2px color-mix(in oklch, var(--color-fg) 5%, transparent),
-    0 8px 24px color-mix(in oklch, var(--color-fg) 4%, transparent);
-  transition: border-color var(--duration-fast) ease-in-out, box-shadow var(--duration-fast) ease-in-out;
+  box-shadow: 0 1px 2px color-mix(in oklch, var(--color-fg) 4%, transparent),
+    0 6px 20px color-mix(in oklch, var(--color-fg) 4%, transparent);
+  transition: border-color var(--duration-fast) ease-in-out;
+  padding: 12px 12px 8px;
 }
-.starter:focus-within {
-  border-color: var(--input-focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--input-focus-ring) 18%, transparent);
-}
-.starter-input {
+.codex-composer:focus-within { border-color: color-mix(in oklch, var(--color-fg) 8%, var(--color-border)); }
+.codex-composer > textarea {
   display: block; width: 100%; border: none; background: none; resize: none;
-  padding: 16px 18px 4px;
+  padding: 2px 6px; min-height: 52px; max-height: 180px; overflow-y: auto;
   font: 400 var(--text-md)/var(--leading-ui) var(--font-body); color: var(--color-fg);
-  max-height: 200px; overflow-y: auto;
 }
-.starter-input::placeholder { color: var(--color-muted); }
-.starter-input:focus-visible { outline: none; }
+.codex-composer > textarea::placeholder { color: color-mix(in oklch, var(--color-muted) 60%, transparent); }
+.codex-composer > textarea:focus { outline: none; }
+.composer-toolbar { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
+.composer-spacer { flex: 1; }
+.composer-add, .composer-send, .composer-file button, .model-trigger {
+  border: none; font-family: var(--font-body); cursor: pointer;
+}
+.composer-add, .composer-send {
+  flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+  transition: background-color var(--duration-fast) ease-in-out, color var(--duration-fast) ease-in-out;
+}
+.composer-add { color: var(--color-muted); background: transparent; }
+.composer-add:hover:not(:disabled) { color: var(--color-fg); background: var(--color-border-subtle); }
+.composer-send { margin-left: 4px; color: var(--button-fg); background: var(--button-bg); }
+.composer-send:hover:not(:disabled) { background: var(--button-bg-hover); }
+.composer-add:disabled, .composer-send:disabled { opacity: 0.38; cursor: not-allowed; }
+.composer-add:focus-visible, .composer-send:focus-visible, .composer-file button:focus-visible,
+.model-trigger:focus-visible {
+  outline: none; box-shadow: 0 0 0 2px var(--color-ring);
+}
+.composer-model-locked {
+  padding: 0 8px; color: var(--color-muted); font-size: var(--text-sm); white-space: nowrap;
+}
 
-.starter-foot { display: flex; align-items: center; gap: 10px; padding: 8px 10px 10px 18px; }
-.starter-tip { font-size: var(--text-xs); color: var(--color-muted); }
-.starter-send {
-  margin-left: auto; flex: none; width: 32px; height: 32px;
-  display: grid; place-items: center; border-radius: 50%;
-  border: 1px solid var(--button-border); background: var(--button-bg); color: var(--button-fg);
-  cursor: pointer; transition: background-color var(--duration-fast) ease-in-out;
+.composer-catalog-notice {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0;
+  color: var(--color-muted); font-size: var(--text-xs); white-space: nowrap;
 }
-.starter-send svg { width: 16px; height: 16px; }
-.starter-send:hover:not(:disabled) { background: var(--button-bg-hover); }
-.starter-send:disabled {
-  background: color-mix(in oklch, var(--color-fg) 8%, transparent);
-  border-color: transparent; color: var(--color-muted); cursor: not-allowed;
+.composer-catalog-notice > span { overflow: hidden; text-overflow: ellipsis; }
+.composer-catalog-notice button {
+  border: none; background: none; padding: 2px 4px; border-radius: var(--radius-sm);
+  color: var(--color-accent); font: inherit; cursor: pointer;
 }
-.starter-send:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-ring); }
+.composer-catalog-notice button:disabled { color: var(--color-muted); cursor: default; }
+.composer-catalog-notice button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
+
+/* 模型选择：幽灵按钮触发，菜单贴着按钮右缘展开，放不下时向上。 */
+.model-picker { position: relative; min-width: 0; }
+.model-trigger {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 220px; height: 32px;
+  padding: 0 10px; border-radius: 999px; background: transparent;
+  color: var(--color-muted); font-size: var(--text-sm); white-space: nowrap;
+  transition: background-color var(--duration-fast) ease-in-out, color var(--duration-fast) ease-in-out;
+}
+.model-trigger span { overflow: hidden; text-overflow: ellipsis; }
+.model-trigger:hover:not(:disabled), .model-trigger[aria-expanded="true"] {
+  color: var(--color-fg); background: var(--color-border-subtle);
+}
+.model-trigger:disabled { cursor: default; opacity: 0.6; }
+.model-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
+  min-width: 220px; max-height: 320px; overflow-y: auto; margin: 0; padding: 6px; list-style: none;
+  border: 1px solid var(--color-border-subtle); border-radius: 14px; background: var(--color-surface);
+  box-shadow: 0 12px 32px color-mix(in oklch, var(--color-fg) 12%, transparent);
+}
+.model-menu.upward { top: auto; bottom: calc(100% + 6px); }
+.model-menu:focus { outline: none; }
+.model-option {
+  display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 8px 0 10px;
+  border-radius: 8px; font-size: var(--text-sm); color: var(--color-fg); cursor: pointer;
+}
+.model-option.active { background: var(--color-border-subtle); }
+.model-option-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-option-kind {
+  flex: none; padding: 1px 6px; border-radius: 999px; font-size: var(--text-xs);
+  color: var(--color-muted); background: var(--color-bg);
+}
+.model-option-check { flex: none; width: 14px; display: grid; place-items: center; color: var(--color-accent); }
+
+.composer-files { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px; }
+.composer-file {
+  display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 240px;
+  border-radius: 10px; padding: 5px 4px 5px 5px; background: var(--color-bg);
+}
+.composer-file-preview {
+  flex: none; width: 32px; height: 32px; border-radius: 7px; display: grid; place-items: center;
+  overflow: hidden; color: var(--color-muted); background: var(--color-surface);
+}
+.composer-file-preview img { width: 100%; height: 100%; object-fit: cover; }
+.composer-file-copy { min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.composer-file-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); font-weight: 500; }
+.composer-file-copy span { color: var(--color-muted); font-size: var(--text-xs); }
+.composer-file button { flex: none; display: grid; place-items: center; padding: 5px; border-radius: 50%; background: transparent; color: var(--color-muted); }
+.composer-file button:hover { color: var(--color-fg); background: var(--color-border-subtle); }
+.composer-error { padding: 2px 6px 4px; color: var(--color-danger); font-size: var(--text-sm); }
 
 /* ===== 列表卡片 ===== */
-.list-card { border-radius: var(--radius-lg); background: var(--color-surface); }
 
 /* ===== 徽标 ===== */
 .badge {
@@ -352,7 +430,6 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 /* ===== 对话 ===== */
 .chat-top {
   display: flex; align-items: center; gap: 12px; padding: 12px 20px;
-  background: var(--color-surface);
 }
 /* 标题一行截断：首轮结束前这里是触发文案或用户首句，原文在下方对话里读得到；
    首个调用结束后会被模型的短标题替换，与侧栏同一份文案。 */
@@ -361,8 +438,8 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .chat-top .sub { font-size: var(--text-xs); color: var(--color-muted); margin-top: 2px; }
-.chat-top .back { flex: none; color: var(--color-muted); background: none; border: none; padding: 4px; cursor: pointer; display: grid; }
-.chat-top .back:hover { color: var(--color-fg); }
+.chat-top .back, .topbar .back { flex: none; color: var(--color-muted); background: none; border: none; padding: 4px; cursor: pointer; display: grid; }
+.chat-top .back:hover, .topbar .back:hover { color: var(--color-fg); }
 
 .chat-main { flex: 1; display: flex; min-height: 0; }
 .feed {
@@ -381,6 +458,20 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
    与下方操作卡、结果卡逐像素同边。用户消息才是靠右收缩的气泡。 */
 .msg { display: flex; }
 .msg.user { justify-content: flex-end; }
+.message-attachments { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.message-image {
+  display: block; width: 156px; height: 112px; border-radius: 14px; overflow: hidden;
+  border: 1px solid var(--color-border-subtle); background: var(--color-bg);
+}
+.message-image img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.message-file {
+  display: flex; align-items: center; gap: 9px; max-width: 260px; padding: 9px 11px;
+  border: 1px solid var(--color-border-subtle); border-radius: 14px; background: var(--color-surface);
+}
+.message-file > svg { flex: none; color: var(--color-muted); }
+.message-file span { min-width: 0; display: flex; flex-direction: column; }
+.message-file strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); }
+.message-file small { color: var(--color-muted); font-size: var(--text-xs); }
 .msg-body { min-width: 0; flex: 1; }
 .msg.user .msg-body { flex: 0 1 auto; max-width: 78%; }
 .bubble {
@@ -394,6 +485,25 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   background: var(--bubble-bg); color: var(--bubble-fg);
   padding: 10px 18px;
 }
+.user-message-actions {
+  display: flex; justify-content: flex-end; align-items: center; gap: var(--spacing-sm);
+  min-height: 24px; margin-top: 3px; color: var(--color-muted); font-size: var(--text-xs);
+}
+.retry-message {
+  display: inline-flex; align-items: center; border: none; background: none;
+  padding: 4px; border-radius: var(--radius-sm); color: inherit; cursor: pointer;
+}
+.retry-message:hover:not(:disabled) { color: var(--color-fg); background: var(--color-border-subtle); }
+.retry-message:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
+.retry-message:disabled { cursor: default; opacity: 0.6; }
+.retry-message .i { width: 14px; height: 14px; }
+.retry-error { color: var(--color-danger); }
+/* 新建任务没发出去：原因与操作挂在用户气泡下方，右对齐跟随气泡。 */
+.send-failure {
+  display: flex; flex-direction: column; align-items: flex-end; gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm); font-size: var(--text-sm); text-align: right;
+}
+.send-failure-actions { display: flex; gap: var(--spacing-sm); }
 /* 同一角色连说几条时收紧间距，读起来是一段话而不是几条独立消息。 */
 .msg.cont { margin-top: calc(var(--spacing-md) * -0.5); }
 
@@ -410,6 +520,11 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   animation: thinking 1.3s ease-in-out infinite;
 }
 .thinking .dot + .dot { animation-delay: 0.16s; }
+/* 当前步骤跟在点后面：说清这一轮正在做什么，一行放不下就截断，完整内容等结果出来再看。 */
+.thinking-text {
+  margin-left: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--text-sm); color: var(--color-muted);
+}
 .thinking .dot + .dot + .dot { animation-delay: 0.32s; }
 /* 紧跟在回答后面时收紧间距：占位属于这段回答的延续，不是消息流里的新一条。 */
 .msg.agent + .thinking { margin-top: calc(var(--spacing-lg) * -0.6); }
@@ -444,6 +559,9 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .msg-time { font-variant-numeric: tabular-nums; }
 /* 复制结果是一闪而过的提示，排在时间之后：它出现、消失都不会把时间推着左右跳。 */
 .msg-actions-note:not(:empty)::before { content: "· "; }
+/* 用户消息的落款：按钮贴气泡右边缘，提示排在按钮左侧，不带分隔点。 */
+.msg-actions.end { flex-direction: row-reverse; margin: 0 -5px 0 0; }
+.msg-actions.end .msg-actions-note:not(:empty)::before { content: none; }
 
 /* ===== 消息里的 Markdown ===== */
 /* 这一块不继承 .bubble 的 pre-wrap：换行已经由块级元素承担，
@@ -497,7 +615,12 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 
 .md a { color: var(--color-accent); text-decoration: underline; text-underline-offset: 2px; }
 .md hr { border: none; border-top: 1px solid var(--color-border-subtle); margin: var(--spacing-lg) 0; }
-.md img { max-width: 100%; height: auto; border-radius: var(--radius-md); }
+/* 图片按比例缩到栏宽与限高之内：大图不占满整屏，点开可看原图。 */
+.md img:not(.ProseMirror-separator) {
+  display: block; max-width: 100%; max-height: 360px; width: auto; height: auto;
+  object-fit: contain; border-radius: var(--radius-md);
+}
+.md a:has(> img) { display: inline-block; }
 
 .md-table { margin: 0 0 var(--md-block-gap); overflow-x: auto; }
 .md table { border-collapse: collapse; font-size: var(--text-sm); }
@@ -508,31 +631,10 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .md th { font-weight: 600; white-space: nowrap; background: color-mix(in oklch, var(--color-fg) 4%, transparent); }
 
 .msg-composer {
-  background: var(--color-surface);
-  padding: 12px 24px;
+  padding: 4px 24px 16px;
 }
 .composer-wrap { width: 100%; max-width: var(--feed-col); margin: 0 auto; }
-.composer-row {
-  width: 100%;
-  display: flex; gap: 10px; align-items: flex-end;
-}
-.msg-composer textarea {
-  flex: 1; border: 1px solid var(--color-border); border-radius: var(--radius-md);
-  background: var(--color-bg); padding: 10px 12px; font: 400 var(--text-md)/var(--leading-ui) var(--font-body);
-  color: var(--color-fg); resize: none; min-height: 40px; max-height: 140px;
-}
-.msg-composer textarea:focus-visible {
-  outline: none; border-color: var(--input-focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--input-focus-ring) 20%, transparent);
-}
-.send-btn {
-  width: 40px; height: 40px; flex: none; border: 1px solid var(--button-border);
-  border-radius: var(--radius-md); background: var(--button-bg); color: var(--button-fg);
-  display: grid; place-items: center; cursor: pointer;
-}
-.send-btn:hover:not(:disabled) { background: var(--button-bg-hover); }
-.send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.send-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-ring); }
+.msg-composer .codex-composer > textarea { min-height: 36px; }
 
 /* ===== 对话内完整邮件草稿 =====
  * 结构是两层盒子：外层卡片承载工具条与收件人，内层 compose 盒是可直接编辑的信件本体。
@@ -546,7 +648,9 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 /* 工具条：左侧修改要求、中间状态，主操作靠右，整行不加分隔线。 */
 .mail-toolbar { display: flex; gap: 8px; align-items: center; min-height: 34px; }
 .mail-toolbar .badge { margin-left: 4px; }
-.mail-toolbar .mail-send, .mail-toolbar .mail-verify { margin-left: auto; }
+.mail-toolbar .mail-actions, .mail-toolbar .mail-verify { margin-left: auto; }
+/* 取消与确认成组：窄屏换行时一起换到下一行靠右，不会被拆开。 */
+.mail-actions { display: flex; gap: 4px; align-items: center; flex: none; }
 
 .mail-ghost {
   display: flex; align-items: center; gap: 6px; flex: none;
@@ -566,15 +670,35 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   height: 34px; padding: 0 4px 0 12px; border-radius: var(--radius-md);
   border: 1px solid var(--color-border); background: var(--color-surface);
 }
-.mail-ask:focus-within {
-  border-color: var(--input-focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--input-focus-ring) 20%, transparent);
-}
+.mail-ask:focus-within { border-color: color-mix(in oklch, var(--color-fg) 28%, var(--color-border)); }
 .mail-ask input {
   min-width: 0; flex: 1; border: none; background: transparent; color: var(--color-fg);
   font: 400 var(--text-sm)/var(--leading-ui) var(--font-body);
 }
 .mail-ask input:focus { outline: none; }
+/* 提交修改要求：和对话输入框的发送按钮同一套样式，缩小一号放进短输入里。 */
+.mail-ask-send {
+  flex: none; width: 26px; height: 26px; border: none; border-radius: 50%;
+  display: grid; place-items: center; cursor: pointer;
+  color: var(--button-fg); background: var(--button-bg);
+  transition: background-color var(--duration-fast) ease-in-out;
+}
+.mail-ask-send:hover:not(:disabled) { background: var(--button-bg-hover); }
+.mail-ask-send:disabled { opacity: 0.38; cursor: not-allowed; }
+.mail-ask-send:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-ring); }
+
+/* 取消：次要操作，紧挨主操作左侧，只有文字，不和“确认并发送”争视线。 */
+.mail-cancel {
+  flex: none; height: 34px; padding: 0 12px; border: none; border-radius: var(--radius-md);
+  background: transparent; color: var(--color-muted);
+  font: 510 var(--text-sm)/1 var(--font-body); cursor: pointer; white-space: nowrap;
+  transition: background-color var(--duration-fast) ease-in-out, color var(--duration-fast) ease-in-out;
+}
+.mail-cancel:hover:not(:disabled, .mail-cancelled) { color: var(--color-fg); background: var(--color-border-subtle); }
+.mail-cancel:disabled { opacity: 0.45; cursor: not-allowed; }
+/* 取消之后，取消按钮原位留下“已取消”：同一个样式，不可点，不再有悬停反馈。 */
+.mail-cancelled { display: flex; align-items: center; margin-left: auto; cursor: default; }
+.mail-cancel:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-ring); }
 
 /* 主操作：浅主色底 + 深主色字，和用户气泡同一套配色，不做整块实心。 */
 .mail-send {
@@ -641,16 +765,342 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .mail-saving { color: var(--color-muted); font-size: var(--text-xs); }
 .error-text { color: var(--color-danger); }
 
+/* ===== 历史对话搜索 ===== */
+.history-hit-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.history-hit-head .kb-hit-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-hit-meta { flex: none; font-size: var(--text-xs); color: var(--color-muted); }
+
+/* 从搜索结果跳进对话时，命中的那条短暂亮一下，随后淡出。 */
+.feed [data-focus="true"] {
+  border-radius: var(--radius-md);
+  animation: focus-flash 2.4s ease-out;
+}
+@keyframes focus-flash {
+  0%, 35% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-accent) 22%, transparent); background: color-mix(in srgb, var(--color-accent) 8%, transparent); }
+  100% { box-shadow: 0 0 0 6px transparent; background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .feed [data-focus="true"] { animation: none; box-shadow: 0 0 0 2px var(--color-accent); }
+}
+
+/* ===== 资料管理 ===== */
+/* 列表页：按文件夹逐层浏览，文件夹在前、资料在后，同一张卡片里一行一项。 */
+.kb-content { display: flex; flex-direction: column; gap: var(--spacing-md); }
+.kb-search { font-size: var(--text-md); }
+.kb-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.kb-title .i { width: 18px; height: 18px; color: var(--color-muted); }
+.kb-crumbs {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0;
+  font-size: var(--text-xs); color: var(--color-muted);
+}
+.kb-crumbs a { color: var(--color-muted); }
+.kb-crumbs a:hover { color: var(--color-fg); }
+.kb-crumbs > span + .kb-crumb-count::before { content: "·"; margin-right: 8px; }
+.kb-crumb-sep { padding: 0 4px; }
+.kb-new { position: relative; flex: none; }
+/* 带下拉箭头的按钮比通用主按钮小一档；箭头自带留白，右内边距收窄，让文字在视觉上居中。 */
+.btn.kb-new-button {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 7px 9px 7px 12px; font-size: var(--text-sm);
+}
+.kb-new-button .i { width: 12px; height: 12px; }
+.kb-new-menu { position: absolute; top: calc(100% + 4px); right: 0; min-width: 160px; }
+.kb-new-menu .task-menu-item { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.kb-new-menu .task-menu-item .i { color: var(--color-muted); }
+/* 新建文件夹对话框：遮罩轻微模糊背景，卡片居中，操作按钮靠右。 */
+.kb-dialog-backdrop {
+  position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px;
+  background: color-mix(in oklch, var(--color-bg) 55%, transparent); backdrop-filter: blur(3px);
+}
+.kb-dialog {
+  width: min(440px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 20px;
+  background: var(--color-surface); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg);
+  box-shadow: 0 16px 48px color-mix(in oklch, var(--color-fg) 16%, transparent);
+}
+.kb-dialog-title { margin: 0; font-size: var(--text-lg); font-weight: 600; }
+.kb-dialog-sub { margin-top: -8px; font-size: var(--text-xs); color: var(--color-muted); overflow-wrap: anywhere; }
+.kb-dialog-field { display: flex; flex-direction: column; gap: 6px; font-size: var(--text-sm); }
+.kb-dialog-error { font-size: var(--text-xs); color: var(--color-danger); }
+.kb-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.kb-dialog.wide { width: min(560px, 100%); }
+.kb-dialog-text { margin: 0; font-size: var(--text-sm); color: var(--color-muted); line-height: var(--leading-body); overflow-wrap: anywhere; }
+/* 次要动作靠左，确认与取消靠右。 */
+.kb-dialog-left { margin-right: auto; }
+
+/* 资料的“⋯”菜单：列表行里悬浮才出现，资料页顶栏里常显。 */
+.kb-more { flex: none; }
+.kb-more-button {
+  width: 28px; height: 28px; display: grid; place-items: center;
+  border: none; padding: 0; background: none; border-radius: var(--radius-sm);
+  color: var(--color-muted); cursor: pointer;
+}
+.kb-more-button:hover, .kb-more.open .kb-more-button { color: var(--color-fg); background: color-mix(in oklch, var(--color-fg) 8%, transparent); }
+.kb-more-button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
+.kb-more-button .i { width: 16px; height: 16px; }
+.kb-row .kb-more-button { opacity: 0; pointer-events: none; }
+.kb-row:hover .kb-more-button,
+.kb-row .kb-more.open .kb-more-button,
+.kb-row .kb-more-button:focus-visible { opacity: 1; pointer-events: auto; }
+@media (hover: none) { .kb-row .kb-more-button { opacity: 1; pointer-events: auto; } }
+.kb-more-menu { min-width: 160px; }
+.kb-more-menu .task-menu-item { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.kb-more-menu .task-menu-item .i { width: 15px; height: 15px; color: var(--color-muted); }
+.kb-more-menu .task-menu-item.danger .i { color: inherit; }
+.kb-more-hint { padding: 4px 10px 6px; font-size: var(--text-xs); color: var(--color-muted); }
+
+/* “移动到…”：面包屑回到上层，列表逐层进入文件夹，同层资料只灰着列出。 */
+.kb-move-crumbs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 2px; font-size: var(--text-sm); color: var(--color-muted); }
+.kb-move-crumb {
+  border: none; background: none; padding: 0; font: inherit; color: var(--color-muted); cursor: pointer;
+}
+.kb-move-crumb:hover:not(:disabled) { color: var(--color-fg); }
+.kb-move-crumb:disabled { color: var(--color-fg); font-weight: 600; cursor: default; }
+.kb-move-list {
+  display: flex; flex-direction: column; height: min(320px, 50vh); overflow-y: auto;
+  border-top: 1px solid var(--color-border-subtle); border-bottom: 1px solid var(--color-border-subtle);
+}
+.kb-move-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 8px; flex: none;
+  border: none; border-bottom: 1px solid var(--color-border-subtle); background: none; text-align: left;
+  font: inherit; font-size: var(--text-sm); color: var(--color-fg);
+}
+.kb-move-row:last-child { border-bottom: none; }
+.kb-move-row .i { flex: none; width: 16px; height: 16px; color: var(--color-muted); }
+.kb-move-folder { cursor: pointer; border-radius: var(--radius-sm); }
+.kb-move-folder:hover { background: var(--color-bg); }
+.kb-move-folder:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--color-ring); }
+.kb-move-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-move-doc { color: var(--color-muted); opacity: 0.6; }
+.kb-move-here { flex: none; font-size: var(--text-xs); }
+.kb-move-new .input { flex: 1; min-width: 0; padding-top: 5px; padding-bottom: 5px; }
+.kb-move-new .btn { padding-top: 5px; padding-bottom: 5px; }
+.kb-move-empty { padding: 24px 8px; text-align: center; font-size: var(--text-sm); color: var(--color-muted); }
+/* 列表不加卡片边框：每行悬浮时整行铺满底色。 */
+.kb-list { display: flex; flex-direction: column; }
+/* 表头与行共用左右内边距和时间列宽度，两列上下对齐。 */
+/* 右内边距让出行尾“⋯”按钮的位置（行右内边距 + 按钮 + 间距），时间列与资料行对齐。 */
+.kb-list-head {
+  display: flex; align-items: center; gap: 8px; padding: 0 48px 8px 12px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--text-xs); color: var(--color-muted);
+}
+/* 整行是容器：链接占满左侧，行尾是“⋯”菜单（按钮不能放进链接里）。 */
+.kb-row {
+  display: flex; align-items: center; gap: 2px; padding-right: 6px; border-radius: var(--radius-md); min-width: 0;
+}
+.kb-row-link {
+  flex: 1; display: flex; align-items: center; gap: 8px; padding: 10px 12px; min-width: 0;
+  border-radius: var(--radius-md); color: var(--color-fg);
+}
+.kb-row-slot { flex: none; width: 28px; }
+.kb-row:hover { background: var(--color-bg); }
+/* 行间分隔线与文字左右对齐；悬浮行的底色盖住它上下两条线，避免线穿过圆角底色。 */
+.kb-row { position: relative; }
+.kb-row + .kb-row::before {
+  content: ""; position: absolute; top: 0; left: 12px; right: 12px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.kb-row:hover::before,
+.kb-row:hover + .kb-row::before { opacity: 0; }
+.kb-row-link:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
+.kb-list-note { font-size: var(--text-sm); color: var(--status-success); }
+.kb-row .i { color: var(--color-muted); }
+.kb-row-title { flex: none; max-width: 60%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-row-summary {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--text-sm); color: var(--color-muted);
+}
+/* 时间列定宽靠右，是次要信息，不抢标题的宽度。 */
+.kb-row-time {
+  margin-left: auto; flex: none; width: 120px; padding-left: 12px; white-space: nowrap;
+  font-size: var(--text-xs); color: var(--color-muted); font-variant-numeric: tabular-nums;
+}
+
+.kb-hits { display: flex; flex-direction: column; gap: 8px; }
+.kb-hit {
+  display: block; padding: 12px 14px; border-radius: var(--radius-lg); background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+}
+.kb-hit:hover { border-color: var(--color-border); }
+.kb-hit:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
+.kb-hit-title { font-weight: 600; overflow-wrap: anywhere; }
+.kb-hit-snippet { margin-top: 4px; color: var(--color-muted); line-height: var(--leading-body); overflow-wrap: anywhere; }
+.kb-hit-path { margin-top: 6px; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-muted); overflow-wrap: anywhere; }
+
+/* 资料页：标题像文档标题一样直接可改，字段一行排开，正文编辑区占满阅读栏。
+   页面本身是滚动容器：子项不参与收缩，否则长正文会把编辑区压扁，文字溢出到区外。 */
+/* 资料页是长文阅读：正文收窄到中文舒适行长（约 45 字），顶栏与正文同一栏宽对齐。 */
+.kb-doc-top, .kb-doc { --doc-col: 760px; }
+.kb-doc-top { width: 100%; max-width: calc(var(--doc-col) + 48px); margin: 0 auto; padding-left: 16px; padding-right: 24px; }
+.kb-doc-where {
+  flex: 1; min-width: 0; font-size: var(--text-sm); color: var(--color-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kb-doc-where a { color: var(--color-muted); }
+.kb-doc-where a:hover { color: var(--color-fg); }
+.kb-dirty { font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; }
+/* 滚动容器占满主区宽度，滚动条贴在页面最右侧；阅读栏靠左右内边距居中收窄。 */
+.kb-doc {
+  display: flex; flex-direction: column; gap: 0; max-width: none; padding-top: 12px;
+  padding-left: max(24px, calc((100% - var(--doc-col)) / 2));
+  padding-right: max(24px, calc((100% - var(--doc-col)) / 2));
+}
+.kb-doc > * { flex-shrink: 0; }
+.kb-title {
+  width: 100%; border: none; background: none; padding: 0; color: var(--color-fg);
+  font: 600 26px/1.3 var(--font-display);
+}
+.kb-title:focus-visible { outline: none; }
+.kb-title::placeholder { color: var(--color-muted); }
+.kb-summary { display: flex; align-items: center; gap: 8px; margin: 20px 0 0; min-width: 0; }
+.kb-summary-input {
+  flex: 1; min-width: 0; border: none; background: none; padding: 2px 0;
+  font: var(--text-md)/var(--leading-body) var(--font-body); color: var(--color-muted);
+}
+.kb-summary-input:focus { outline: none; color: var(--color-fg); }
+.kb-summary-input::placeholder { color: var(--color-muted); opacity: 0.6; }
+/* 生成按钮平时只是一个淡色图标，悬停说明行或获得焦点时才显出文字。 */
+.kb-summary-draft {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px;
+  border: none; border-radius: var(--button-radius); background: none; cursor: pointer;
+  font-size: var(--text-xs); color: var(--color-muted); opacity: 0.55;
+  transition: opacity var(--duration-fast) ease-in-out, background-color var(--duration-fast) ease-in-out;
+}
+.kb-summary-draft > span { display: none; }
+.kb-summary:hover .kb-summary-draft, .kb-summary:focus-within .kb-summary-draft, .kb-summary-draft:focus-visible { opacity: 1; }
+.kb-summary:hover .kb-summary-draft > span, .kb-summary:focus-within .kb-summary-draft > span { display: inline; }
+/* 生成中始终显示文字提示，不随悬停消失。 */
+.kb-summary-draft.drafting, .kb-summary-draft.drafting:disabled { opacity: 1; }
+.kb-summary-draft.drafting > span { display: inline; }
+.kb-summary-draft:hover:not(:disabled) { background: var(--color-bg); color: var(--color-fg); }
+.kb-summary-draft:disabled { cursor: default; opacity: 0.3; }
+.kb-summary-draft .i { width: 14px; height: 14px; }
+.kb-field-error { margin: 4px 0 0; font-size: var(--text-xs); color: var(--color-danger); }
+
+.kb-editor {
+  min-height: 320px; padding: 16px 18px; border-radius: var(--radius-lg);
+  background: var(--color-surface); line-height: var(--leading-body);
+  border: 1px solid var(--color-border-subtle); transition: border-color var(--duration-fast) ease-in-out;
+}
+.kb-editor:focus-within { border-color: var(--color-border); }
+/* ProseMirror 需要保留空白才能正确处理光标与连续空格；.md 默认的 normal 在编辑区里要改回来。 */
+.kb-editor .ProseMirror { min-height: 288px; white-space: pre-wrap; overflow-wrap: anywhere; outline: none; }
+.kb-editor .ProseMirror > :first-child { margin-top: 0; }
+.kb-editor .ProseMirror > :last-child { margin-bottom: 0; }
+/* 正文为空时给一行提示：空文档只剩一个带换行占位的段落。 */
+.kb-editor .ProseMirror > p:only-child:has(> br:only-child)::before {
+  content: "在这里写正文…"; color: var(--color-muted); pointer-events: none; float: left; height: 0;
+}
+.kb-editor td > p, .kb-editor th > p { margin: 0; }
+/* 编辑区里的图片单独成段。图注就是 alt 文本，宽度跟随图片、不被文字撑开，点击原地修改。 */
+.kb-image { display: block; width: fit-content; min-width: min(100%, 320px); max-width: 100%; margin: 4px 0; }
+/* “展开”按钮不做尺寸隔离：按钮即使 display:block 也按内容收缩宽度，隔离后内容宽度为 0，文字会逐字竖排。 */
+.kb-image > :not(img, .kb-image-more) { contain: inline-size; }
+/* 以图片结尾的段落里，ProseMirror 会补一个占位图与换行供光标停靠；图片独占一段时它只会多出一空行。 */
+.kb-editor p:has(> .kb-image) > :is(img.ProseMirror-separator, br.ProseMirror-trailingBreak) { display: none; }
+/* 选中图片只描出图片本身，不把图注一起框进去。 */
+.kb-editor .kb-image.ProseMirror-selectednode { outline: none; }
+.kb-editor .kb-image.ProseMirror-selectednode img {
+  outline: 2px solid color-mix(in oklch, var(--color-accent) 45%, transparent); outline-offset: 2px;
+}
+/* 显示与编辑共用同一套排版：进入编辑只多一层淡底色，文字位置、宽度、颜色都不变。 */
+.kb-image-caption {
+  display: block; width: 100%; margin: 6px 0 0; padding: 0; border: none; border-radius: 2px;
+  font: inherit; font-size: var(--text-xs); line-height: var(--leading-ui); color: var(--color-muted);
+  white-space: normal; overflow-wrap: anywhere; text-align: left; cursor: text; background: none;
+  transition: background-color var(--duration-fast) ease-in-out, box-shadow var(--duration-fast) ease-in-out;
+}
+.kb-image-caption:hover, .kb-image-caption:focus-visible, .kb-image-caption-editing {
+  outline: none; background: color-mix(in oklch, var(--color-fg) 4%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--color-fg) 4%, transparent);
+}
+.kb-image-caption-folded { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
+.kb-image-caption-empty { font-style: italic; }
+.kb-image-caption-pending { animation: kb-caption-pending 1.6s ease-in-out infinite; }
+@keyframes kb-caption-pending { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .kb-image-caption-pending { animation: none; } }
+.kb-image-caption-editing { resize: none; overflow: hidden; }
+.kb-image-caption-editing::placeholder { color: var(--color-muted); font-style: italic; }
+.kb-image-more, .kb-image-hint {
+  display: block; margin-top: 4px; padding: 0; border: none; background: none;
+  font: inherit; font-size: 11px; line-height: var(--leading-ui); color: var(--color-muted);
+}
+.kb-image-more { cursor: pointer; }
+.kb-image-more:hover { color: var(--color-fg); }
+.kb-image-more[hidden] { display: none; }
+.kb-editor-status { margin: 6px 2px 0; font-size: var(--text-xs); color: var(--color-muted); }
+.kb-editor-status.danger { color: var(--color-danger); }
+.kb-doc .kb-editor {
+  min-height: 0; margin-top: 6px; padding: 20px 0 0; border: none; border-top: 1px solid var(--color-border-subtle);
+  border-radius: 0; background: none; font-size: 15px; line-height: 1.8;
+}
+.kb-doc .kb-editor .ProseMirror { min-height: 320px; }
+.kb-doc .kb-editor p { margin-bottom: 0.6em; }
+.kb-doc .kb-editor h1, .kb-doc .kb-editor h2, .kb-doc .kb-editor h3, .kb-doc .kb-editor h4 { line-height: 1.4; margin-bottom: 0.5em; }
+.kb-doc .kb-editor h1 { font-size: 20px; margin-top: 1.4em; }
+.kb-doc .kb-editor h2 { font-size: 18px; margin-top: 1.3em; }
+.kb-doc .kb-editor h3 { font-size: 16px; margin-top: 1.2em; }
+.kb-doc .kb-editor h4, .kb-doc .kb-editor h5, .kb-doc .kb-editor h6 { font-size: 15px; margin-top: 1.0em; }
+.kb-doc .kb-editor :is(h1, h2, h3, h4, h5, h6) + :is(h1, h2, h3, h4, h5, h6) { margin-top: 1.0em; }
+.kb-doc .kb-editor .ProseMirror > :first-child { margin-top: 0; }
+.kb-doc .kb-meta { margin-top: var(--spacing-lg); }
+.kb-editor .ProseMirror span[data-type="html"] { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-muted); }
+
+.kb-meta {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; padding-bottom: var(--spacing-lg);
+  font-size: var(--text-xs); color: var(--color-muted);
+}
+.kb-meta-id { font-family: var(--font-mono); overflow-wrap: anywhere; }
+.kb-note { font-size: var(--text-xs); color: var(--status-success); white-space: nowrap; }
+.btn-secondary.danger { color: var(--color-danger); }
+.btn.danger { background: var(--color-danger); border-color: var(--color-danger); }
+.btn.danger:hover:not(:disabled) { background: color-mix(in oklch, var(--color-danger) 88%, var(--color-fg)); }
+
+/* ===== 长期记忆 ===== */
+/* 两个分区各是一份 Markdown 文档：标题与容量条一行，下面是渲染后可直接编辑的正文。 */
+.memory-content { display: flex; flex-direction: column; gap: var(--spacing-lg); max-width: var(--feed-col); }
+.memory-section { display: flex; flex-direction: column; gap: 10px; }
+.memory-head { display: flex; align-items: flex-end; gap: 16px; }
+.memory-head-text { flex: 1; min-width: 0; }
+.memory-head h3 { margin: 0; font-size: var(--text-md); font-weight: 600; }
+.memory-hint { margin-top: 2px; font-size: var(--text-xs); color: var(--color-muted); }
+
+.memory-usage { flex: none; display: flex; align-items: center; gap: 8px; font-size: var(--text-xs); color: var(--color-muted); }
+.memory-meter {
+  width: 96px; height: 4px; border-radius: 999px; overflow: hidden;
+  background: color-mix(in oklch, var(--color-fg) 8%, transparent);
+}
+.memory-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--color-muted); }
+.memory-usage.near .memory-meter > span { background: var(--color-accent); }
+.memory-usage.over { color: var(--color-danger); }
+.memory-usage.over .memory-meter > span { background: var(--color-danger); }
+.memory-usage-text { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* 记忆比资料短：编辑区不占满一屏，空内容给出记忆专用的提示。 */
+.kb-editor.memory-editor { min-height: 120px; }
+.kb-editor.memory-editor .ProseMirror { min-height: 88px; }
+.kb-editor.memory-editor .ProseMirror > p:only-child:has(> br:only-child)::before {
+  content: "还没有内容。对话中提到的相关信息会自动记在这里，也可以直接写。";
+}
+
+.memory-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.memory-over { margin-right: auto; font-size: var(--text-sm); color: var(--color-danger); }
+.memory-note { font-size: var(--text-xs); color: var(--status-success); }
+
+/* 时间线里记忆提示的入口：跟在提示文字后面，同一行。 */
+.sys-row .sys-link { flex: none; color: var(--color-accent); font-weight: 510; }
+.sys-row .sys-link:hover { text-decoration: underline; }
+
 /* ===== 提示与空态 ===== */
 .notice {
   border-radius: var(--radius-md);
-  background: var(--color-surface); padding: 12px 14px;
+  background: var(--color-bg); padding: 12px 14px;
   font-size: var(--text-md); line-height: var(--leading-body); color: var(--color-muted);
   display: flex; gap: 10px; align-items: flex-start;
 }
 .notice .t { font-weight: 600; color: var(--color-fg); display: block; margin-bottom: 3px; }
 .notice.danger {
-  background: color-mix(in oklch, var(--color-danger) 8%, var(--color-surface));
+  background: color-mix(in oklch, var(--color-danger) 6%, var(--color-surface));
   box-shadow: inset 3px 0 0 var(--color-danger);
 }
 .notice.danger .t { color: var(--color-danger); }
@@ -677,14 +1127,19 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
     flex: 1; flex-direction: column; gap: 3px; justify-content: center;
     padding: 6px 0; font-size: var(--text-xs); margin: 0; border-radius: var(--radius-md);
   }
+  .tabbar .nav-item:hover:not(.disabled) { background: none; }
   .tabbar .nav-item.active { background: none; box-shadow: none; color: var(--color-accent); }
   .tabbar .nav-item svg.i { width: 20px; height: 20px; }
   .tabbar .nav-count { display: none; }
 
   .narrow-only { display: block; }
   /* 手机上这是唯一的任务入口，行距与字号按可点击目标放大。 */
-  .task-nav { background: var(--color-surface); border-radius: var(--radius-lg); padding: 8px 6px 10px; }
-  .task-nav-head { font-size: var(--text-xs); font-weight: 600; color: var(--color-muted); padding: 6px 10px; }
+  .task-nav { background: var(--color-surface); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg); padding: 8px 6px 10px; }
+  .task-nav-head {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: var(--text-xs); font-weight: 600; color: var(--color-muted); padding: 6px 10px;
+  }
+  .task-nav-search { font-size: var(--text-sm); font-weight: 510; color: var(--color-accent); }
   .task-nav .nav-task { font-size: var(--text-md); padding: 10px 34px 10px 10px; }
   .task-nav .nav-more { font-size: var(--text-md); padding: 10px; }
   .empty { padding: 24px 12px; }
@@ -694,15 +1149,14 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   /* 窄屏内容不够高时仍然居中，够高了就从顶部开始正常滚动。 */
   .hero { padding: 16px 14px 24px; align-items: flex-start; }
   .hero-inner { margin: auto 0; }
-  .starter-input { padding: 14px 14px 4px; }
-  /* 手机软键盘没有 Shift + Enter，这条提示只会占位。 */
-  .starter-tip { display: none; }
-  .starter-foot { padding: 6px 8px 8px 14px; }
+  .codex-composer { padding: 14px 12px 10px; border-radius: 24px; }
+  .codex-composer > textarea { min-height: 64px; padding: 0 4px; }
+  .composer-model select { max-width: 150px; font-size: var(--text-md); }
 
   .chat-top { padding: 12px 14px; }
   .feed { padding: 12px 14px; overflow: visible; }
   .msg.user .msg-body { max-width: 92%; }
-  .msg-composer { padding: 10px 14px; }
+  .msg-composer { padding: 4px 14px 12px; }
 
   .mail-card { padding: 8px 10px 10px; }
   /* 工具条在窄屏换行：修改要求占满一行，状态与发送留在下一行。 */
@@ -710,10 +1164,27 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   /* 展开的修改要求独占一行，状态与主操作留在下一行，谁都不被挤成一个字。 */
   .mail-ask { flex: 1 1 100%; max-width: none; }
   .mail-ghost { flex: none; }
+  /* 待确认时工具条放不下状态徽标：整个交给读屏，修改要求与两个操作才能排在一行；
+     操作按钮本身已说明在等确认。其余状态没有操作按钮，徽标照常显示。 */
+  .mail-toolbar.with-actions .badge {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
   .mail-head { padding: 4px 0 8px; }
   .mail-row { grid-template-columns: 56px minmax(0, 1fr); gap: 8px; padding: 4px 8px; }
   .mail-compose { padding: 10px 12px; }
   .mail-result { flex-direction: column; }
+
+  .kb-row-summary { display: none; }
+  .kb-row-title { max-width: none; flex: 1; }
+  .kb-row-time { width: 96px; }
+  .kb-editor { padding: 12px 14px; }
+  .kb-doc .kb-editor { margin-top: 12px; padding: 28px 0 0; }
+  .kb-title { font-size: 22px; }
+  .kb-doc { padding-top: 4px; }
+  .kb-summary-draft { opacity: 1; }
+
+  .memory-head { flex-direction: column; align-items: stretch; gap: 8px; }
+  .memory-meter { flex: 1; width: auto; }
 
 }
 
@@ -739,3 +1210,22 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .skill-panel small { overflow-wrap: anywhere; }
 
 .skill-editor fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+/* 公式：显示 KaTeX 排版结果，选中后原地换成源码输入框。 */
+.md .katex-display { margin: 0.6em 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+.kb-math { cursor: pointer; border-radius: 3px; }
+.kb-math-block { display: block; margin: 0.6em 0; padding: 4px 0; overflow-x: auto; overflow-y: hidden; text-align: center; }
+.kb-math-block .katex-display { margin: 0; }
+.kb-math:hover:not(.kb-math-editing) { background: color-mix(in oklch, var(--color-fg) 4%, transparent); }
+.kb-editor .kb-math.ProseMirror-selectednode:not(.kb-math-editing) {
+  outline: 2px solid color-mix(in oklch, var(--color-accent) 45%, transparent); outline-offset: 1px;
+}
+.kb-math-empty { font-size: var(--text-xs); font-style: italic; color: var(--color-muted); }
+.kb-math-source {
+  font-family: var(--font-mono); font-size: var(--text-sm); line-height: var(--leading-ui); color: var(--color-fg);
+  padding: 1px 4px; border: none; border-radius: 3px; outline: none;
+  background: color-mix(in oklch, var(--color-fg) 5%, transparent);
+}
+.kb-math-block .kb-math-source { display: block; width: 100%; padding: 8px 10px; resize: none; overflow: hidden; text-align: left; }
+.kb-math-block.kb-math-editing .kb-math-output { margin-top: 6px; }
+.kb-math-output { user-select: none; }
+.kb-math-hint { display: block; margin-top: 4px; font-size: 11px; line-height: var(--leading-ui); color: var(--color-muted); text-align: left; }

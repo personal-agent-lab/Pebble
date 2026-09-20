@@ -3,10 +3,21 @@
 import sqlite3
 
 from server.errors import NotFoundError
+from server.sessions import runs
+
+# 触发源随任务一起读出，界面据此区分自动开始与用户亲自发起的会话。
+# 不另立一列：新邮件调用只由新邮件入口登记，有没有这种调用就是答案，旧库也无需迁移。
+TASK_SELECT = (
+    "SELECT t.*, CASE WHEN EXISTS("
+    "SELECT 1 FROM agent_runs r WHERE r.task_id = t.task_id AND r.kind = ?"
+    ") THEN 'mail' ELSE 'user' END AS source FROM tasks t"
+)
 
 
 def task(conn: sqlite3.Connection, task_id: str) -> dict:
-    row = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+    row = conn.execute(
+        f"{TASK_SELECT} WHERE t.task_id = ?", (runs.KIND_NEW_MAIL, task_id)
+    ).fetchone()
     if row is None:
         raise NotFoundError(task_id)
     return dict(row)
@@ -14,12 +25,25 @@ def task(conn: sqlite3.Connection, task_id: str) -> dict:
 
 def tasks(conn: sqlite3.Connection) -> list[dict]:
     return [
-        dict(row) for row in conn.execute("SELECT * FROM tasks ORDER BY created_at DESC, task_id")
+        dict(row)
+        for row in conn.execute(
+            f"{TASK_SELECT} ORDER BY t.created_at DESC, t.task_id", (runs.KIND_NEW_MAIL,)
+        )
     ]
 
 
-def insert_task(conn: sqlite3.Connection, task_id: str, goal: str, now: str) -> None:
-    conn.execute("INSERT INTO tasks VALUES (?, ?, NULL, ?)", (task_id, goal, now))
+def insert_task(
+    conn: sqlite3.Connection,
+    task_id: str,
+    goal: str,
+    now: str,
+    model: str = "auto",
+) -> None:
+    conn.execute(
+        "INSERT INTO tasks (task_id,goal,sdk_session_id,created_at,model) "
+        "VALUES (?, ?, NULL, ?, ?)",
+        (task_id, goal, now, model),
+    )
 
 
 def bind_session(conn: sqlite3.Connection, task_id: str, sdk_session_id: str) -> None:
@@ -69,6 +93,15 @@ def update_status(conn: sqlite3.Connection, operation_id: str, status: str, now:
     )
 
 
+def cancel_pending(conn: sqlite3.Connection, task_id: str, now: str) -> None:
+    """取消任务里全部待确认的操作：用户在对话里接着说话，之前待确认的内容随之收起。"""
+    conn.execute(
+        "UPDATE operations SET status = 'cancelled', updated_at = ? WHERE status = 'pending' "
+        "AND operation_id IN (SELECT operation_id FROM task_operations WHERE task_id = ?)",
+        (now, task_id),
+    )
+
+
 def has_active_run(conn: sqlite3.Connection, task_id: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM agent_runs WHERE task_id = ? AND status IN ('pending','running') LIMIT 1",
@@ -99,7 +132,20 @@ def delete_task(conn: sqlite3.Connection, task_id: str) -> None:
         "(SELECT operation_id FROM operations WHERE created_task_id = ?)",
         (task_id,),
     )
+    conn.execute(
+        "DELETE FROM history_fts WHERE rowid IN "
+        "(SELECT fts_rowid FROM history_items WHERE task_id = ?)",
+        (task_id,),
+    )
+    conn.execute("DELETE FROM history_items WHERE task_id = ?", (task_id,))
+    conn.execute(
+        "DELETE FROM timeline_item_attachments WHERE item_id IN "
+        "(SELECT item_id FROM task_timeline_items WHERE task_id = ?)",
+        (task_id,),
+    )
+    conn.execute("DELETE FROM uploaded_files WHERE task_id = ?", (task_id,))
     conn.execute("DELETE FROM task_timeline_items WHERE task_id = ?", (task_id,))
+    conn.execute("DELETE FROM memory_reviews WHERE task_id = ?", (task_id,))
     conn.execute(
         "DELETE FROM approval_executions WHERE operation_id IN "
         "(SELECT operation_id FROM operations WHERE created_task_id = ?)",
