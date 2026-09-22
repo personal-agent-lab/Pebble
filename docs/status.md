@@ -14,7 +14,7 @@
 | 个人资料库 Phase 1–4：保存、读取、更新、历史，分节检索与按引用读取，删除、移动、恢复与用户改动跟随，资料目录，管理界面，任务归档 | 已实现 | `kb-spec.md`、`contracts/personal-kb.md` |
 | 个人资料库 Phase 6：正文图片与图片说明 | 已实现 | `contracts/personal-kb.md` §10 |
 | 个人资料库 Phase 5：主题页与后台主题整理 | 未实现 | `kb-spec.md` §8、`contracts/personal-kb.md` §7 |
-| Skills：两条来源、草稿审核、受控加载、管理页 | 已实现；支持与附件一起选择并记录运行版本 | `contracts/skills.md` |
+| Skills：两条来源、草稿审核、受控加载、管理页 | 已实现（旧设计）；新规格 `skill-spec.md`、`contracts/skill.md` 尚未实现，差距与重构步骤见 `skill-tasks.md` | `skill-spec.md`、`contracts/skill.md` |
 | 认证与 HTTPS 远程访问：Tailscale Serve、账号名单、写请求来源校验、前端同源托管、工具端点独立监听 | 已实现；真机外网验收未完成 | `v1-design.md` §6 |
 
 SQLite schema 版本为 18：保留 main 的 1–16，Skills 表使用 17–18。
@@ -35,3 +35,4 @@ SQLite schema 版本为 18：保留 main 的 1–16，Skills 表使用 17–18�
 - 历史检索在第一次搜索时才把已有历史写进索引，历史很多时这次搜索会明显变慢；进行中的轮次搜不到。日期过滤按本机时区换算，服务与用户不在同一时区时自然日边界会有偏差。
 - 资料编辑页的“未保存离开”只拦截页面内的返回按钮与浏览器关闭或刷新；通过侧栏或底部 tab 跳走时不提示（当前路由不支持导航拦截）。
 - 归档由模型自主判断，可能漏归档或在同一任务里重复归档；真实模型验收覆盖了“确认发送后归档一次”的主路径。
+- Skills 实现是旧设计（id 随机生成、四态草稿审批、≥3 任务证据核验、前台 propose），与 `skill-spec.md`/`contracts/skill.md` 新约定（目录名即 id、origin/managed 分离、后台复盘、持久轨迹）不一致，待按 `skill-tasks.md` 五阶段重构；已定 2026-09-22：实例旧技能与草稿数据清空重建，`skill_tool_evidence` 表在轨迹存储落地时直接废弃。
