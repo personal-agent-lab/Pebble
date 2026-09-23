@@ -6,11 +6,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from server.errors import SkillUnknownError, SkillValidationError
 from server.skills.models import DESCRIPTION_LIMIT, ChangeAction, ChangeActor, SkillState
 from server.skills.runtime import current
 from server.skills.service import ChangeRequest, SkillService
 from server.tools.registry import SideEffect, activity, tool
+
+logger = logging.getLogger(__name__)
 
 
 @tool(
@@ -74,8 +78,12 @@ def skill_view(skill_id: str, file_path: str | None = None, *, skills: SkillServ
         content = skills.repository.read_attachment(skill_id, file_path).decode("utf-8")
     else:
         content = skill.body
-    if scope is not None and scope.task_id is not None:
-        skills.record_load(scope.task_id, scope.run_id, skill, "auto")
+    if scope is not None and scope.task_id is not None and scope.run_id is not None:
+        try:
+            skills.record_load(scope.task_id, scope.run_id, skill, "auto")
+        except Exception:
+            # 使用记录是内部簿记：写不进去也不能让读取本身失败。
+            logger.exception("技能 %s 的加载记录写入失败", skill_id)
     return {
         "skill_id": skill.skill_id,
         "name": skill.name,
