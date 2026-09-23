@@ -95,8 +95,15 @@ def test_list_filter_archive_and_managed(settings):
         restored = client.post("/api/skills/live-one/restore").json()
         assert restored["state"] == "active"
 
-        managed = client.post("/api/skills/live-one/managed", json={"value": True}).json()
-        assert managed["managed"] is True
+        # 管理页只能取消直写权：用户手写的技能恒为受保护（契约 §2）。
+        protected = client.post("/api/skills/live-one/managed", json={"value": True})
+        assert protected.status_code == 422
+        assert protected.json()["error"] == "invalid_skill"
+        assert client.get("/api/skills/live-one").json()["managed"] is False
+        assert client.post("/api/skills/live-one/managed", json={"value": False}).json() == {
+            "skill_id": "live-one",
+            "managed": False,
+        }
         # 管理策略不影响目录与内容版本。
         assert [entry["skill_id"] for entry in client.get("/api/skills").json()] == [
             "live-one",
@@ -235,6 +242,72 @@ def test_attachments_write_read_remove(settings):
         )
         assert invalid.status_code == 422
         assert invalid.json()["error"] == "invalid_skill"
+
+        # 删除不存在的附件按契约 §11 是 404。
+        missing = client.post(
+            "/api/skills/with-files/files/remove",
+            json={
+                "relative_path": "references/gone.md",
+                "expected_revision": removed.json()["skill"]["revision"],
+            },
+        )
+        assert missing.status_code == 404
+        assert missing.json()["error"] == "unknown_skill"
+
+        # 内容没变的重复写入不产生提交，也不该报 503。
+        repeat = client.post(
+            "/api/skills/with-files/files",
+            json={
+                "relative_path": "templates/report.md",
+                "content": "模板\n",
+                "expected_revision": removed.json()["skill"]["revision"],
+            },
+        )
+        assert repeat.status_code == 200
+        assert repeat.json()["status"] == "applied"
+
+
+def test_update_validates_frontmatter(settings):
+    """PUT 走 patch，字段规则与创建一致：名称非空、描述不超 160、正文非空（契约 §2）。"""
+
+    with client_for(settings) as client:
+        create(client)
+        revision = client.get("/api/skills/weekly-report").json()["revision"]
+        for payload in (
+            {"name": "  "},
+            {"description": "长" * 161},
+            {"body": "   "},
+        ):
+            failed = client.put(
+                "/api/skills/weekly-report",
+                json={"expected_revision": revision, **payload},
+            )
+            assert failed.status_code == 422, failed.text
+            assert failed.json()["error"] == "invalid_skill"
+        # 未通过校验的变更不落盘，也不留下待审记录。
+        assert client.get("/api/skills/weekly-report").json()["revision"] == revision
+        assert client.get("/api/skill-changes", params={"status": "proposed"}).json() == []
+
+
+def test_invalid_skill_id_is_rejected(settings):
+    """非法标识在读路径是 404，在写路径是 422，都不会变成 500。"""
+
+    with client_for(settings) as client:
+        assert client.get("/api/skills/..%2Fescape").status_code == 404
+        assert client.get("/api/skills/Bad%20Id").status_code == 404
+        for path in ("/api/skills/Bad%20Id/archive", "/api/skills/Bad%20Id/versions"):
+            assert client.post(path).status_code in (404, 405)
+        written = client.post(
+            "/api/skills/Bad%20Id/files",
+            json={
+                "relative_path": "references/a.md",
+                "content": "x",
+                "expected_revision": "0" * 64,
+            },
+        )
+        assert written.status_code == 422
+        assert written.json()["error"] == "invalid_skill"
+        assert client.get("/api/skill-changes").json() == []
 
 
 def test_task_skill_usage(settings):

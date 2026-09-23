@@ -90,7 +90,20 @@ def test_review_cannot_touch_user_skill_without_approval(service: SkillService) 
 
 
 def test_review_writes_managed_skill_directly(service: SkillService) -> None:
-    create(service, "reviewed-flow", managed=True)
+    # 复盘自建的技能默认 managed=true，复盘可以直接更新。
+    service.record_change(
+        ChangeRequest(
+            action=ChangeAction.CREATE,
+            payload={
+                "skill_id": "reviewed-flow",
+                "name": "复盘沉淀",
+                "description": "后台复盘沉淀的做法",
+                "body": "旧正文\n",
+            },
+            actor=ChangeActor.REVIEW,
+            reason="复盘沉淀",
+        )
+    )
     result = service.record_change(
         ChangeRequest(
             action=ChangeAction.PATCH,
@@ -103,6 +116,35 @@ def test_review_writes_managed_skill_directly(service: SkillService) -> None:
     )
     assert result["status"] == "applied"
     assert service.get("reviewed-flow").body == "新正文\n"
+
+
+def test_user_skill_is_never_managed(service: SkillService) -> None:
+    """`origin=user` 恒为 managed=false：创建时给不了，管理页也开不了（契约 §2/§5）。"""
+
+    create(service, managed=True)
+    assert service.get("weekly-report").managed is False
+
+    with pytest.raises(SkillValidationError) as failure:
+        service.set_managed("weekly-report", True)
+    assert failure.value.errors[0]["field"] == "managed"
+    assert service.get("weekly-report").managed is False
+
+    # 复盘因此只能提出建议。
+    proposed = service.record_change(
+        ChangeRequest(
+            action=ChangeAction.PATCH,
+            payload={"body": "复盘想直接写\n"},
+            actor=ChangeActor.REVIEW,
+            reason="复盘修正",
+            skill_id="weekly-report",
+            base_revision=service.get("weekly-report").revision,
+        )
+    )
+    assert proposed["status"] == "proposed"
+
+    # 非用户来源可以关掉直写权，之后复盘同样只能提建议。
+    service.set_managed("weekly-report", False)
+    assert service.get("weekly-report").managed is False
 
 
 def test_foreground_may_edit_user_skill_directly(service: SkillService) -> None:

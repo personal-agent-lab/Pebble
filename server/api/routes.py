@@ -160,7 +160,7 @@ def skill_options(selection: str | None, service: SkillService | None) -> dict:
         raise SkillValidationError(
             [{"field": "selection", "message": "技能选择格式不合法"}]
         ) from error
-    picked = [item.id for item in value.skills]
+    picked = [item.id for item in value.skills if item.id not in set(value.excluded_skill_ids)]
     if picked or value.excluded_skill_ids:
         if service is None:
             raise DependencyUnavailableError("技能功能未接入")

@@ -70,6 +70,16 @@ class SkillService:
             raise SkillUnknownError(skill_id)
         return skill
 
+    def loadable(self, skill_id: str) -> Skill:
+        """可进入上下文的技能：存在、启用，且磁盘内容相对版本库没有未提交改动。"""
+
+        skill = self.repository.load_consistent(skill_id)
+        if skill is None:
+            raise SkillUnknownError(skill_id)
+        if skill.state is not SkillState.ACTIVE:
+            raise SkillUnknownError(skill_id)
+        return skill
+
     def catalog(self, state: SkillState = SkillState.ACTIVE) -> list[dict]:
         """目录条目：指定状态（默认 active）的技能，按最近加载时间排序。"""
 
@@ -208,6 +218,10 @@ class SkillService:
         except (SkillValidationError, SkillUnknownError):
             self._update_status(change_id, ChangeStatus.REJECTED)
             raise
+        except ValueError as error:
+            # 兜底：载荷里的非法标识等不该变成 500，也不该留下 proposed 记录。
+            self._update_status(change_id, ChangeStatus.REJECTED)
+            raise SkillValidationError([{"field": "payload", "message": str(error)}]) from error
         with session(self.db_path) as conn, write(conn):
             conn.execute(
                 "UPDATE skill_changes SET status = ?, applied_at = ? WHERE id = ?",
@@ -241,7 +255,12 @@ class SkillService:
                 name=payload["name"],
                 description=payload["description"],
                 origin=origin,
-                managed=payload.get("managed", origin is not SkillOrigin.USER),
+                # 用户手写的技能一律受保护：后台复盘只能提出待确认建议（契约 §2/§5）。
+                managed=(
+                    False
+                    if origin is SkillOrigin.USER
+                    else bool(payload.get("managed", True))
+                ),
                 state=SkillState.ACTIVE,
                 created_at=now(),
                 updated_at=now(),
@@ -256,7 +275,11 @@ class SkillService:
 
         skill_id = request.skill_id or payload.get("skill_id")
         current = self.get(skill_id)
-        if expected_revision is not None and expected_revision != current.revision:
+        if expected_revision is None:
+            raise SkillValidationError(
+                [{"field": "expected_revision", "message": "修改既有技能必须传当前内容版本"}]
+            )
+        if expected_revision != current.revision:
             raise SkillConflictError(current.revision)
         if action is ChangeAction.PATCH:
             body = payload.get("body")
@@ -285,6 +308,9 @@ class SkillService:
                 body=body,
                 files=current.files,
             )
+            errors = _frontmatter_errors(updated)
+            if errors:
+                raise SkillValidationError(errors)
             self.repository.commit_skill(updated, _commit_message(request, change_id))
             return updated
 
@@ -302,9 +328,7 @@ class SkillService:
         if action is ChangeAction.REMOVE_FILE:
             relative = payload["relative_path"]
             if relative not in {item.relative_path for item in current.files}:
-                raise SkillValidationError(
-                    [{"field": "relative_path", "message": f"附件不存在：{relative}"}]
-                )
+                raise SkillUnknownError(f"附件不存在：{relative}")
             self.repository.commit_writes(
                 [(f"{skill_dir_path(skill_id)}/{relative}", None)],
                 _commit_message(request, change_id),
@@ -322,9 +346,18 @@ class SkillService:
 
     def set_managed(self, skill_id: str, value: bool) -> Skill:
         skill = self.get(skill_id)
+        if value and skill.origin is SkillOrigin.USER:
+            raise SkillValidationError(
+                [
+                    {
+                        "field": "managed",
+                        "message": "用户手写的技能始终需要确认后才能修改",
+                    }
+                ]
+            )
         updated = Skill(**{**_asdict(skill), "managed": value, "updated_at": now()})
         self.repository.commit_skill(updated, f"[Skills] managed {skill_id} -> {value}")
-        return updated
+        return self.get(skill_id)
 
     def restore_version(self, skill_id: str, revision: str) -> dict:
         """恢复历史版本：以目标内容整份替换正文，产生新提交不重置历史。"""
@@ -357,10 +390,7 @@ class SkillService:
             )
         loaded: list[Skill] = []
         for skill_id in unique:
-            skill = self.repository.load(skill_id)
-            if skill is None or skill.state is not SkillState.ACTIVE:
-                raise SkillUnknownError(skill_id)
-            loaded.append(skill)
+            loaded.append(self.loadable(skill_id))
         total = sum(len(skill.body) for skill in loaded)
         if total > MANUAL_BODY_BUDGET:
             errors.append(
@@ -445,16 +475,21 @@ class SkillService:
             skill_id = payload.get("skill_id", "")
             if not SKILL_ID_PATTERN.match(skill_id):
                 errors.append({"field": "skill_id", "message": f"技能标识不合法：{skill_id}"})
-            for field in ("name", "description"):
-                value = payload.get(field, "")
-                if not str(value).strip():
-                    errors.append({"field": field, "message": "不能为空"})
-            if len(str(payload.get("description", ""))) > DESCRIPTION_LIMIT:
-                errors.append(
-                    {"field": "description", "message": f"超过 {DESCRIPTION_LIMIT} 字符上限"}
+            errors.extend(
+                _frontmatter_errors(
+                    Skill(
+                        skill_id=str(skill_id),
+                        name=str(payload.get("name", "")),
+                        description=str(payload.get("description", "")),
+                        origin=CREATE_ORIGINS[request.actor],
+                        managed=False,
+                        state=SkillState.ACTIVE,
+                        created_at="",
+                        updated_at="",
+                        body=str(payload.get("body", "")),
+                    )
                 )
-            if not str(payload.get("body", "")).strip():
-                errors.append({"field": "body", "message": "正文不能为空"})
+            )
             for relative in payload.get("attachments") or {}:
                 try:
                     safe_attachment_path(relative)
@@ -468,7 +503,12 @@ class SkillService:
             target = request.skill_id or payload.get("skill_id")
             if target is None:
                 errors.append({"field": "skill_id", "message": "缺少目标技能"})
+            elif not SKILL_ID_PATTERN.match(str(target)):
+                errors.append({"field": "skill_id", "message": f"技能标识不合法：{target}"})
         elif action in (ChangeAction.WRITE_FILE, ChangeAction.REMOVE_FILE):
+            target = request.skill_id or payload.get("skill_id")
+            if target is not None and not SKILL_ID_PATTERN.match(str(target)):
+                errors.append({"field": "skill_id", "message": f"技能标识不合法：{target}"})
             relative = payload.get("relative_path", "")
             try:
                 safe_attachment_path(relative)
@@ -524,17 +564,33 @@ def skill_view(skill: Skill) -> dict:
     }
 
 
+def _frontmatter_errors(skill: Skill) -> list[dict[str, str]]:
+    """frontmatter 字段规则（契约 §2）：显示名与描述必填，描述不超上限，正文非空。"""
+
+    errors: list[dict[str, str]] = []
+    if not skill.name.strip():
+        errors.append({"field": "name", "message": "不能为空"})
+    if not skill.description.strip():
+        errors.append({"field": "description", "message": "不能为空"})
+    elif len(skill.description) > DESCRIPTION_LIMIT:
+        errors.append({"field": "description", "message": f"超过 {DESCRIPTION_LIMIT} 字符上限"})
+    if not skill.body.strip():
+        errors.append({"field": "body", "message": "正文不能为空"})
+    return errors
+
+
 def _commit_message(request: ChangeRequest, change_id: str) -> str:
     """提交说明的元数据走尾注，`versions()` 读回 change_id 与 actor。"""
 
     target = request.skill_id or request.payload.get("skill_id", "")
+    reason = " ".join(request.reason.split())
     return "\n".join(
         [
             f"[Skills] {request.action.value} {target}".rstrip(),
             "",
             f"change-id: {change_id}",
             f"actor: {request.actor.value}",
-            f"reason: {request.reason}",
+            f"reason: {reason}",
         ]
     )
 

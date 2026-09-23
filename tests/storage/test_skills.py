@@ -258,3 +258,82 @@ def test_parse_skill_md_rejects_broken_frontmatter() -> None:
     )
     assert frontmatter["name"] == "n"
     assert body == "正文"
+
+
+def test_handwritten_frontmatter_uses_protective_defaults(repo: SkillRepository) -> None:
+    """用户手写的文件只写名称与描述也成立：默认用户来源、需确认、启用（契约 §2）。"""
+
+    directory = repo.skills_root / "hand-written"
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text(
+        "---\nname: 手写技能\ndescription: 直接在磁盘上写的\n---\n\n正文\n", encoding="utf-8"
+    )
+    skill = repo.load("hand-written")
+    assert skill is not None
+    assert (skill.origin, skill.managed, skill.state) == (
+        SkillOrigin.USER,
+        False,
+        SkillState.ACTIVE,
+    )
+    # 带引号的假值不能读成真。
+    (directory / "SKILL.md").write_text(
+        "---\nname: 手写技能\ndescription: 直接在磁盘上写的\nmanaged: \"false\"\n---\n\n正文\n",
+        encoding="utf-8",
+    )
+    assert repo.load("hand-written").managed is False
+
+
+def test_invalid_skill_id_never_reaches_the_filesystem(repo: SkillRepository) -> None:
+    repo.commit_skill(make_skill(), "[Skills] create weekly-report")
+    from server.errors import SkillUnknownError
+
+    for bad in ("../weekly-report", "..", "Bad Id", "a/b", ""):
+        assert repo.load(bad) is None
+        assert repo.load_consistent(bad) is None
+        with pytest.raises(SkillUnknownError):
+            repo.read_attachment(bad, "references/a.md")
+
+
+def test_identical_write_is_a_successful_noop(repo: SkillRepository) -> None:
+    repo.commit_skill(make_skill(), "[Skills] create weekly-report", {"references/a.md": b"x"})
+    head = repo.versions("weekly-report")[0].commit
+    repo.commit_writes(
+        [("skills/weekly-report/references/a.md", b"x")],
+        "[Skills] write_file weekly-report",
+    )
+    assert repo.versions("weekly-report")[0].commit == head  # 没有新提交
+    assert not repo.is_dirty("weekly-report")
+
+
+def test_history_ignores_stray_files_like_the_working_tree(repo: SkillRepository) -> None:
+    """版本内容与工作区扫描同一规则：目录里的杂散文件不改写历史版本。"""
+
+    repo.commit_skill(make_skill(body="第一版\n"), "[Skills] create weekly-report")
+    committed = repo.versions("weekly-report")[0].revision
+    (repo.skills_root / "weekly-report" / "notes.md").write_text("杂散文件", encoding="utf-8")
+    repo.commit_writes(
+        [("skills/weekly-report/notes.md", "杂散文件".encode())], "[Skills] stray weekly-report"
+    )
+    head = repo.load("weekly-report")
+    assert head.revision == committed
+    assert repo.versions("weekly-report")[0].revision == committed
+
+
+def test_version_reason_stays_on_one_line(repo: SkillRepository) -> None:
+    from server.skills.models import ChangeAction, ChangeActor
+    from server.skills.service import ChangeRequest, _commit_message
+
+    skill = make_skill()
+    message = _commit_message(
+        ChangeRequest(
+            action=ChangeAction.CREATE,
+            payload={"skill_id": skill.skill_id},
+            actor=ChangeActor.USER,
+            reason="第一行\n第二行",
+        ),
+        "chg_1",
+    )
+    repo.commit_skill(skill, message)
+    version = repo.versions("weekly-report")[0]
+    assert version.reason == "第一行 第二行"
+    assert version.change_id == "chg_1"

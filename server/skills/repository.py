@@ -35,7 +35,9 @@ logger = logging.getLogger(__name__)
 SKILLS_DIR = "skills"
 SKILL_FILE = "SKILL.md"
 ATTACHMENT_PREFIXES = ("references/", "templates/")
-FRONTMATTER_FIELDS = ("name", "description", "origin", "managed", "state")
+# 只有显示名与描述是作者必填；来源、管理策略与状态缺省时按“用户手写、受保护、启用”处理。
+FRONTMATTER_REQUIRED = ("name", "description")
+FRONTMATTER_DEFAULTS = {"origin": "user", "managed": False, "state": "active"}
 
 # 提交说明的元数据走尾注，`versions()` 用同一正则读回。
 _TRAILER = re.compile(r"^(change-id|actor|reason): (.*)$", re.MULTILINE)
@@ -62,6 +64,16 @@ def skill_dir_path(skill_id: str) -> str:
     if not SKILL_ID_PATTERN.match(skill_id):
         raise ValueError(f"技能标识不合法：{skill_id}")
     return f"{SKILLS_DIR}/{skill_id}"
+
+
+def _as_bool(value: object) -> bool:
+    """手写 frontmatter 里 `managed: "false"` 这类带引号的写法不能当成真。"""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1", "on")
+    return bool(value)
 
 
 def render_skill_md(skill: Skill) -> bytes:
@@ -95,8 +107,10 @@ def parse_skill_md(raw: str) -> tuple[dict, str]:
         raise ValueError(f"frontmatter 无法解析：{error}") from error
     if not isinstance(frontmatter, dict):
         raise ValueError("frontmatter 不是键值对")
-    if not all(field in frontmatter for field in FRONTMATTER_FIELDS):
+    if not all(str(frontmatter.get(field, "")).strip() for field in FRONTMATTER_REQUIRED):
         raise ValueError("frontmatter 缺少必填字段")
+    for field, default in FRONTMATTER_DEFAULTS.items():
+        frontmatter.setdefault(field, default)
     body = "\n".join(lines[end + 1 :]).lstrip("\n")
     return frontmatter, body
 
@@ -114,7 +128,11 @@ class SkillRepository:
 
     def load(self, skill_id: str) -> Skill | None:
         try:
-            raw = (self.skills_root / skill_id / SKILL_FILE).read_text(encoding="utf-8")
+            directory = self._skill_dir(skill_id)
+        except SkillUnknownError:
+            return None
+        try:
+            raw = (directory / SKILL_FILE).read_text(encoding="utf-8")
         except (OSError, UnicodeError):
             return None
         try:
@@ -122,6 +140,29 @@ class SkillRepository:
         except ValueError as error:
             logger.warning("技能 %s 的 SKILL.md 不合法，退出目录：%s", skill_id, error)
             return None
+
+    def load_consistent(self, skill_id: str) -> Skill | None:
+        """只在工作区相对 Git 无未提交改动时返回技能；直接改磁盘的内容不静默加载。"""
+
+        skill = self.load(skill_id)
+        if skill is None:
+            return None
+        if self.is_dirty(skill_id):
+            logger.warning("技能 %s 有未提交的磁盘改动，本次不加载", skill_id)
+            return None
+        return skill
+
+    def is_dirty(self, skill_id: str) -> bool:
+        try:
+            scope = skill_dir_path(skill_id)
+        except ValueError:
+            return True
+        status = self._git_raw(
+            "status", "--porcelain", "--untracked-files=all", "--", scope
+        )
+        if status.returncode != 0:
+            raise SkillStoreUnavailableError("无法检查技能目录改动")
+        return bool(status.stdout.strip())
 
     def load_all(self) -> list[Skill]:
         """可加载的全部技能；正文不合法或工作区相对 Git 有未提交改动的退出目录并告警。"""
@@ -144,12 +185,12 @@ class SkillRepository:
 
     def read_attachment(self, skill_id: str, relative_path: str) -> bytes:
         try:
-            target = self.skills_root / skill_id / safe_attachment_path(relative_path)
+            skill_root = self._skill_dir(skill_id)
+            target = skill_root / safe_attachment_path(relative_path)
         except ValueError as error:
             raise SkillUnknownError(str(error)) from error
         resolved = target.resolve()
-        skill_root = (self.skills_root / skill_id).resolve()
-        if skill_root not in resolved.parents:
+        if skill_root.resolve() not in resolved.parents:
             raise SkillUnknownError(f"附件路径越界：{relative_path}")
         try:
             return resolved.read_bytes()
@@ -178,9 +219,14 @@ class SkillRepository:
                     else:
                         self._atomic_write(path, content)
                 self._git("add", "-A", "--", *relatives)
+                if not self._changed(relatives):
+                    # 内容与已提交状态相同：写入本身就是结果，没有可提交的差异。
+                    return
                 self._git("commit", "--quiet", "--only", "-m", message, "--", *relatives)
-            except BaseException:
+            except BaseException as error:
                 self._restore(backups)
+                if isinstance(error, OSError):
+                    raise SkillStoreUnavailableError("技能文件写入失败") from error
                 raise
 
     def commit_skill(
@@ -201,7 +247,10 @@ class SkillRepository:
         """从 Git log 派生版本列表；每条历史内容重算一次内容版本。"""
 
         self.initialize()
-        scope = skill_dir_path(skill_id)
+        try:
+            scope = skill_dir_path(skill_id)
+        except ValueError as error:
+            raise SkillUnknownError(str(error)) from error
         # 记录间用 NUL 分隔：提交说明本身含换行，不能按行切。
         result = self._git_bytes("log", "--format=%H%x01%aI%x01%B%x00", "--", scope)
         if result.returncode != 0:
@@ -240,22 +289,25 @@ class SkillRepository:
         listing = self._git_raw("ls-tree", "-r", "--name-only", commit, "--", scope)
         if listing.returncode != 0:
             return None
+        body_path = f"{scope}/{SKILL_FILE}"
         raw: str | None = None
         files: list[SkillFile] = []
         for line in listing.stdout.splitlines():
             if not line:
                 continue
+            relative = line[len(scope) + 1 :] if line.startswith(f"{scope}/") else ""
+            # 只有正文与 references/、templates/ 下的附件参与内容版本，与工作区扫描同一规则；
+            # 目录里的杂散文件既不影响当前版本，也不影响历史版本。
+            if line != body_path and not relative.startswith(ATTACHMENT_PREFIXES):
+                continue
             shown = self._git_bytes("show", f"{commit}:{line}")
             if shown.returncode != 0:
                 continue
-            if line.endswith(f"/{SKILL_FILE}"):
+            if line == body_path:
                 raw = shown.stdout.decode("utf-8")
             else:
                 files.append(
-                    SkillFile(
-                        relative_path=line[len(scope) + 1 :],
-                        content_hash=content_hash(shown.stdout),
-                    )
+                    SkillFile(relative_path=relative, content_hash=content_hash(shown.stdout))
                 )
         if raw is None:
             return None
@@ -267,6 +319,21 @@ class SkillRepository:
 
     # ------------------------------------------------------------------ 内部
 
+    def _skill_dir(self, skill_id: str) -> Path:
+        """技能目录；标识不符合目录名格式的一律按“不存在”处理，避免跳出 `skills/`。"""
+
+        if not SKILL_ID_PATTERN.match(skill_id):
+            raise SkillUnknownError(f"技能标识不合法：{skill_id}")
+        return self.skills_root / skill_id
+
+    def _changed(self, relatives: list[str]) -> bool:
+        """暂存后相对 HEAD 是否真有差异；相同的重复写入不该失败。"""
+
+        status = self._git_raw("status", "--porcelain", "--", *relatives)
+        if status.returncode != 0:
+            raise SkillStoreUnavailableError("无法检查技能目录改动")
+        return bool(status.stdout.strip())
+
     def initialize(self) -> None:
         if self._ready:
             return
@@ -275,7 +342,8 @@ class SkillRepository:
             if not (self.data_dir / ".git").exists():
                 self._git("init", "--quiet")
             root = self._git("rev-parse", "--show-toplevel").stdout.strip()
-            if Path(root).resolve() != self.data_dir:
+            # 两侧都取真实路径：数据目录经符号链接（如 macOS 的 /tmp）时也判定为同一仓库。
+            if Path(root).resolve() != self.data_dir.resolve():
                 raise SkillStoreUnavailableError("实例数据目录不是独立的 Git 仓库")
             self._git("config", "user.name", "Pebble")
             self._git("config", "user.email", "pebble@local")
@@ -300,7 +368,7 @@ class SkillRepository:
             name=str(frontmatter["name"]),
             description=str(frontmatter["description"]),
             origin=origin,
-            managed=bool(frontmatter["managed"]),
+            managed=_as_bool(frontmatter["managed"]),
             state=state,
             created_at=str(frontmatter.get("created_at", "")),
             updated_at=str(frontmatter.get("updated_at", "")),
@@ -309,7 +377,7 @@ class SkillRepository:
         )
 
     def _scan_files(self, skill_id: str) -> list[SkillFile]:
-        root = self.skills_root / skill_id
+        root = self._skill_dir(skill_id)
         files: list[SkillFile] = []
         if not root.is_dir():
             return files

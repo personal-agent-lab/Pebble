@@ -127,9 +127,65 @@ def test_skill_view_records_auto_load_and_reads_attachment(service: SkillService
     with turn_scope(task_id="task-9", run_id="run-9"):
         result = skill_view(skill_id="with-file", file_path="references/notes.md", skills=service)
         assert result["file"] == "# 附件"
-        assert [f["path"] for f in result["files"]] == ["references/notes.md"]
+        assert [f["relative_path"] for f in result["files"]] == ["references/notes.md"]
+        assert all(f["content_hash"] for f in result["files"])
     usage = service.task_skill_usage("task-9")
     assert [(row["skill_id"], row["source"]) for row in usage] == [("with-file", "auto")]
+
+
+def test_skill_list_enforces_exclusion_and_auto_match(service: SkillService) -> None:
+    add_skill(service, "excluded-one")
+    add_skill(service, "manual-one")
+
+    with turn_scope(task_id="t", run_id="r", excluded_skill_ids={"excluded-one"}):
+        listed = [entry["skill_id"] for entry in skill_list(skills=service)]
+    assert listed == ["manual-one"]
+
+    # 关闭自动匹配后目录只剩手动选择的那些。
+    with turn_scope(task_id="t", run_id="r", auto_match=False, skills=("manual-one",)):
+        assert [entry["skill_id"] for entry in skill_list(skills=service)] == ["manual-one"]
+    with turn_scope(task_id="t", run_id="r", auto_match=False):
+        assert skill_list(skills=service) == []
+
+
+def test_manual_materials_enforce_selection_limits(service: SkillService) -> None:
+    for index in range(12):
+        add_skill(service, f"picked-{index:02d}")
+    materials = manual_materials(
+        service,
+        [f"picked-{index:02d}" for index in range(12)],
+        task_id="task-1",
+        run_id="run-1",
+    )
+    assert len(materials) == 10  # 额度在装配层同样成立，不只在提交校验时
+
+    add_skill(service, "huge", body="长" * 30000)
+    add_skill(service, "huge-2", body="长" * 20000)
+    capped = manual_materials(
+        service, ["huge", "huge-2"], task_id="task-2", run_id="run-2"
+    )
+    assert [material.title for material in capped] == ["用户选择的技能：技能 huge"]
+
+
+def test_dirty_skill_is_not_loadable(service: SkillService) -> None:
+    """直接改磁盘的技能退出目录与装配，不静默加载（契约 §8）。"""
+
+    add_skill(service, "hand-touched")
+    add_skill(service, "clean-one")
+    path = service.repository.skills_root / "hand-touched" / "SKILL.md"
+    edited = path.read_text(encoding="utf-8").replace("正文内容", "手改的正文")
+    path.write_text(edited, encoding="utf-8")
+
+    assert [entry["skill_id"] for entry in skill_list(skills=service)] == ["clean-one"]
+    with pytest.raises(SkillUnknownError):
+        skill_view(skill_id="hand-touched", skills=service)
+    with pytest.raises(SkillUnknownError):
+        service.validate_selection(["hand-touched"])
+    assert manual_materials(
+        service, ["hand-touched"], task_id="t", run_id="r"
+    ) == []
+    # 管理页仍可读到它，便于就地修改后重新提交。
+    assert "手改的正文" in service.get("hand-touched").body
 
 
 def test_skill_view_rejects_non_active(service: SkillService) -> None:

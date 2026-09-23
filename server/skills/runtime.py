@@ -13,7 +13,12 @@ from dataclasses import dataclass
 
 from server.agent.context import Material
 from server.skills.models import DESCRIPTION_LIMIT, SkillState
-from server.skills.service import CATALOG_LIMIT, SkillService
+from server.skills.service import (
+    CATALOG_LIMIT,
+    MANUAL_BODY_BUDGET,
+    MANUAL_SKILL_LIMIT,
+    SkillService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,23 +111,31 @@ def catalog_material(service: SkillService, *, excluded_skill_ids=()) -> Materia
 def manual_materials(service: SkillService, skill_ids, *, task_id, run_id) -> list[Material]:
     """手动选择的技能正文：发送时绑定当前内容版本并记入加载记录（source=manual）。
 
-    选择在提交时已校验；装配时目标已被删除或停用的跳过并告警，不失败整轮。
+    提交时已校验；这里再按同一额度兜底（额度在服务层与装配层都要成立），装配时目标
+    已被删除、停用或磁盘被直接改动过的跳过并告警，不失败整轮。
     """
 
     materials: list[Material] = []
     seen: set[str] = set()
+    total = 0
     for skill_id in skill_ids:
         if skill_id in seen:
             continue
         seen.add(skill_id)
+        if len(seen) > MANUAL_SKILL_LIMIT:
+            logger.warning("手动选择的技能超过 %s 个，其余不装配", MANUAL_SKILL_LIMIT)
+            break
         try:
-            skill = service.get(skill_id)
+            skill = service.loadable(skill_id)
         except Exception:
             logger.warning("手动选择的技能 %s 不可用，本轮不装配", skill_id)
             continue
-        if skill.state is not SkillState.ACTIVE:
-            logger.warning("手动选择的技能 %s 不是启用状态，本轮不装配", skill_id)
+        if total + len(skill.body) > MANUAL_BODY_BUDGET:
+            logger.warning(
+                "手动选择的技能正文超过 %s 字符，%s 不装配", MANUAL_BODY_BUDGET, skill_id
+            )
             continue
+        total += len(skill.body)
         try:
             service.record_load(task_id, run_id, skill, "manual")
         except Exception:

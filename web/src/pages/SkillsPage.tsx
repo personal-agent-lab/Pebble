@@ -346,14 +346,19 @@ function DetailPane({ skillId, onChanged, onBack }: {
         <button type="button" className="btn-secondary" onClick={onBack}>返回目录</button>
         <h3 id={`skill-${skillId}`}>{detail.name}</h3>
         <span className="skill-origin">{ORIGIN_LABELS[detail.origin] ?? detail.origin}</span>
-        <label className="skill-managed">
-          <input type="checkbox" checked={detail.managed} disabled={busy}
-            onChange={(event) => void act(
-              () => setSkillManaged(skillId, event.target.checked),
-              event.target.checked ? "已允许复盘直接修改" : "已改为复盘需确认",
-            )} />
-          复盘可直接修改
-        </label>
+        {detail.origin === "user" ? (
+          // 用户手写的技能恒为受保护：复盘只能提出建议，管理页也不提供开关（契约 §2）。
+          <span className="skill-managed-note">用户手写：复盘只能建议</span>
+        ) : (
+          <label className="skill-managed">
+            <input type="checkbox" checked={detail.managed} disabled={busy}
+              onChange={(event) => void act(
+                () => setSkillManaged(skillId, event.target.checked),
+                event.target.checked ? "已允许复盘直接修改" : "已改为复盘需确认",
+              )} />
+            复盘可直接修改
+          </label>
+        )}
         <span className="skill-revision" title={detail.revision}>
           版本 {detail.revision.slice(0, 8)}
         </span>

@@ -1286,6 +1286,7 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .skill-pane-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .skill-pane-head h3 { flex: 1; min-width: 0; }
 .skill-managed { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--color-muted); }
+.skill-managed-note { font-size: var(--text-sm); color: var(--color-muted); }
 .skill-revision { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-muted); }
 .skill-field { display: flex; flex-direction: column; gap: 4px; }
 .skill-field > span { font-size: var(--text-xs); color: var(--color-muted); }

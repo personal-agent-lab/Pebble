@@ -29,6 +29,17 @@ def skill_list(state: str = "active", *, skills: SkillService) -> list[dict]:
         parsed = SkillState(state)
     except ValueError as error:
         raise SkillValidationError([{"field": "state", "message": f"未知状态：{state}"}]) from error
+    entries = skills.catalog(state=parsed)
+    scope = current()
+    if scope is not None:
+        # 排除项与关闭自动匹配都由目录工具先挡一层：模型看不到，也就不会去读。
+        entries = [
+            entry for entry in entries if entry["skill_id"] not in scope.excluded_skill_ids
+        ]
+        if not scope.auto_match:
+            entries = [
+                entry for entry in entries if entry["skill_id"] in scope.manual_skill_ids
+            ]
     return [
         {
             "skill_id": entry["skill_id"],
@@ -36,7 +47,7 @@ def skill_list(state: str = "active", *, skills: SkillService) -> list[dict]:
             "description": entry["description"][:DESCRIPTION_LIMIT],
             "revision": entry["revision"],
         }
-        for entry in skills.catalog(state=parsed)
+        for entry in entries
     ]
 
 
@@ -58,9 +69,7 @@ def skill_view(skill_id: str, file_path: str | None = None, *, skills: SkillServ
             raise SkillUnknownError(f"本轮已排除技能：{skill_id}")
         if not scope.auto_match and skill_id not in scope.manual_skill_ids:
             raise SkillUnknownError(f"本轮已关闭自动匹配且未选择该技能：{skill_id}")
-    skill = skills.get(skill_id)
-    if skill.state is not SkillState.ACTIVE:
-        raise SkillUnknownError(f"技能不可用：{skill_id}")
+    skill = skills.loadable(skill_id)
     if file_path is not None:
         content = skills.repository.read_attachment(skill_id, file_path).decode("utf-8")
     else:
@@ -73,7 +82,10 @@ def skill_view(skill_id: str, file_path: str | None = None, *, skills: SkillServ
         "description": skill.description,
         "revision": skill.revision,
         "body" if file_path is None else "file": content,
-        "files": [{"path": item.relative_path, "hash": item.content_hash} for item in skill.files],
+        "files": [
+            {"relative_path": item.relative_path, "content_hash": item.content_hash}
+            for item in skill.files
+        ],
     }
 
 
@@ -119,6 +131,10 @@ def skill_manage(
     except ValueError as error:
         message = f"未知动作：{action}"
         raise SkillValidationError([{"field": "action", "message": message}]) from error
+    if parsed_action is not ChangeAction.CREATE and not expected_revision:
+        raise SkillValidationError(
+            [{"field": "expected_revision", "message": "修改既有技能必须先读取当前内容版本"}]
+        )
     result = skills.record_change(
         ChangeRequest(
             action=parsed_action,
