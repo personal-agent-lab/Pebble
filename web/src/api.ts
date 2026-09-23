@@ -301,7 +301,11 @@ export function subscribeEvents(
   });
   for (const type of EVENT_TYPES) {
     source.addEventListener(type, (event) => {
-      onEvent(JSON.parse((event as MessageEvent<string>).data) as AgentEvent);
+      // EventSource 自己的连接 error 事件与网关的 "error" 消息同名，且没有 data；
+      // 只处理真正带数据帧的消息，别把连接故障变成页面异常。
+      const data = (event as MessageEvent<string>).data;
+      if (typeof data !== "string") return;
+      onEvent(JSON.parse(data) as AgentEvent);
     });
   }
   return () => source.close();
