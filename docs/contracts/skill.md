@@ -153,6 +153,9 @@ archive_skill(skill_id) / restore_skill(skill_id)
 | `PUT /api/skills/{id}` | 可改字段、`expected_revision` | 保存；409 见 §11 |
 | `POST /api/skills/{id}/archive`、`/restore`、`/managed` | `/managed` 传 `value` | 状态与管理策略切换 |
 | `GET /api/skills/{id}/versions`、`/versions/{revision}` | — | 历史列表 / 指定版本正文 |
+| `GET /api/skills/{id}/files/{path}` | 附件相对路径 | 附件文本内容；不存在或越界 404 |
+| `POST /api/skills/{id}/files`、`/files/remove` | `relative_path`、`content`（写入时）、`expected_revision` | 附件读写，走 §5 的 `write_file`/`remove_file` 变更 |
+| `POST /api/skills/{id}/restore-version` | `revision` | 按 §8 恢复历史版本，产生新的 patch 变更 |
 | `GET /api/skill-changes` | 可选 `status`、`skill_id` | 变更列表：§5 全字段 |
 | `POST /api/skill-changes/{id}/approve` | `expected_revision` | 应用 proposed 变更 |
 | `POST /api/skill-changes/{id}/reject` | — | 驳回 |

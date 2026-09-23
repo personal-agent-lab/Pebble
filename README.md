@@ -21,7 +21,8 @@ HTTPS 远程访问；主题页尚未实现；Skills 支持管理、审核与受�
 - `docs/contracts/mail.md`：Gmail 工具、同步触发、确认发送与核实的字段与语义。
 - `docs/contracts/calendar.md`：iCloud Calendar 工具、直连创建与冲突处理的字段与语义。
 - `docs/contracts/memory.md`：长期记忆与历史检索的文件格式、工具与接口。
-- `docs/contracts/skills.md`：Skills 的文件格式、工具与加载边界。
+- `docs/skill-spec.md`：技能功能规格：形态、加载、创建来源、后台复盘与维护。
+- `docs/contracts/skill.md`：技能的文件格式、数据模型、工具、加载与变更接口。
 - `docs/contracts/personal-kb.md`：个人知识库的工具、存储与引用语义。
 
 设计文档第 2 节的组件表与代码结构是目标结构。
@@ -155,6 +156,7 @@ curl http://127.0.0.1:8000/api/models
 | `pebble.db` | 任务、时间线、草稿、确认与执行状态（SQLite） |
 | `memory/USER.md`、`memory/MEMORY.md` | 长期记忆，可直接编辑，下一轮生效；上限 1375 / 2200 字符 |
 | `kb/` | 个人资料（Markdown），直接编辑、新增、移动、删除都会在下一次资料库操作前自动纳入版本 |
+| `skills/<skill_id>/` | 技能：`SKILL.md` 与 `references/`、`templates/` 附件；直接编辑后该技能会退出加载，管理页重新保存即恢复 |
 | `kb-index.sqlite3` | 资料检索索引，派生数据，可随时重建 |
 | `agent/` | SDK 会话记录、模型目录缓存与每个任务的工作目录（含上传附件） |
 | `gmail_sync.json` | 新邮件检测的游标 |

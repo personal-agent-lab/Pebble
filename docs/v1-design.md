@@ -1,6 +1,6 @@
 # Pebble v1 设计
 
-本文定义组件划分、执行约束的实现方式、交付阶段与验证要求；做什么与验收标准见 `v1-spec.md`，冲突时以规格为准。各域字段见 `docs/contracts/`（`mail.md`、`calendar.md`、`personal-kb.md`、`memory.md`、`skills.md`），记忆与资料的产品行为见 `memory-spec.md`、`kb-spec.md`，实现状态见 `status.md`。
+本文定义组件划分、执行约束的实现方式、交付阶段与验证要求；做什么与验收标准见 `v1-spec.md`，冲突时以规格为准。各域字段见 `docs/contracts/`（`mail.md`、`calendar.md`、`personal-kb.md`、`memory.md`、`skill.md`），记忆与资料的产品行为见 `memory-spec.md`、`kb-spec.md`，技能的产品行为见 `skill-spec.md`，实现状态见 `status.md`。
 
 第 1–6 节是设计，改动需说明理由；第 7 节是交付阶段；第 8–9 节是工作约定；第 10 节是实现要点。
 
@@ -41,9 +41,9 @@ flowchart TD
 | Web Chat | PC 与手机共用的响应式界面：Composer、有序时间线、草稿卡、资料与记忆页面 | `web/` |
 | Gateway | HTTP/SSE 与认证；接收用户与触发源输入，定位会话，启动 Agent | `server/api/`、`server/gateway/` |
 | Context | 每轮装配基础提示与常驻材料，控制容量；不预先检索 | `server/agent/context.py`、`client.py` |
-| Agent Loop | 经 SDK 调用模型与工具，加载已生效 Skills | `server/agent/` |
+| Agent Loop | 经 SDK 调用模型与工具，按目录常驻与正文按需加载 Skills | `server/agent/` |
 | Memory | 长期记忆文件，每轮判断与后台回顾写入 | `server/memory/` |
-| Skills | 两条来源、草稿审核、生效版本与 Git 历史 | `server/skills/` |
+| Skills | 三种来源、按 managed 分流的变更与审批、目录加载、文件与 Git 版本历史 | `server/skills/` |
 | Tools | 集中注册与调用；各实现负责自己的认证、协议与校验 | `server/tools/` |
 | Session Store | 任务、会话关联、固定模型、运行状态、时间线、附件、待确认内容与版本、确认与执行结果 | `server/sessions/`、`attachments.py`、`server/approval/` |
 | Trigger Source | 触发源插孔与 Gmail 增量检测 | `server/gateway/runtime.py`、`server/tools/gmail/sync.py` |
@@ -62,7 +62,7 @@ Pebble/
 │   ├── sessions/       # 任务、运行、时间线与历史检索
 │   ├── approval/       # Confirmation
 │   ├── memory/         # 记忆读写、静默的每轮判断、后台回顾与提示
-│   └── skills/         # 阶段 5
+│   └── skills/         # 技能模型与文件版本、变更服务、Agent 工具与加载装配
 ├── tests/              # api/、agent/、gateway/、storage/、tools/、support/；acceptance/ 为真实模型验收
 └── docs/
 ```
@@ -79,7 +79,7 @@ Pebble/
 所有域都通过同一注册入口，调度中没有专属某个服务的分支。每个工具声明名称、说明、参数与副作用；副作用由程序声明，模型不能更改：
 
 - 只读：校验参数后直接调用。
-- 本地写：遵守本域规则，例如只能产出 Skill 草稿、不能批准；只写资料文件。
+- 本地写：遵守本域规则，例如 Skill 变更不能批准自己提出的建议、不能归档；只写资料文件。
 - 直接外部写：在用户亲自发起的轮次由工具自己保存内容、取得执行权、调用外部服务并保存结果。日程创建属于此类。
 - 永不暴露的外部写：只注册准备与读取草稿的方法，执行函数由 Confirmation 在用户确认后调用。邮件发送属于此类。
 
@@ -95,8 +95,8 @@ Pebble/
 | --- | --- | --- | --- | --- |
 | `READONLY` | 查询、检索、读取 | ✓ | ✓ | ✓ |
 | `LOCAL_WRITE_ALL_TURNS` | 资料新建与修改 | ✓ | ✓ | ✓ |
-| `LOCAL_WRITE` | 邮件草稿、资料归档、Skill 草稿 | — | ✓ | ✓ |
-| `LOCAL_WRITE_USER_TURN` | 资料删除、移动、恢复 | — | ✓ | — |
+| `LOCAL_WRITE` | 邮件草稿、资料归档 | — | ✓ | ✓ |
+| `LOCAL_WRITE_USER_TURN` | 资料删除、移动、恢复；Skill 变更（`skill_manage`） | — | ✓ | — |
 | `DIRECT_EXTERNAL_WRITE` | 日程创建 | — | ✓ | — |
 | `EXTERNAL_WRITE` | 邮件发送 | — | — | — |
 
@@ -154,10 +154,10 @@ SDK 内置工具同样只在用户对话轮开放：联网查询（`WebSearch`�
 
 ## 5. Memory、Skills 与个人知识库
 
-三者都是实例数据目录里用户可直接读改的文件。格式与字段见 `contracts/memory.md`、`contracts/skills.md` 与 `contracts/personal-kb.md`。
+三者都是实例数据目录里用户可直接读改的文件。格式与字段见 `contracts/memory.md`、`contracts/skill.md` 与 `contracts/personal-kb.md`。
 
 - **Memory**：两个文件，每轮作为“关于你”“事实与约定”两块材料加载；不做版本管理（若数据目录仓库仍跟踪 `memory/`，启动时单独提交移出）。规则不能覆盖外部写授权，该约束由工具可见范围与 Confirmation 保证。
-- **Skills**：用户自建即生效；Agent 从使用记录总结的草稿存放在 SDK 发现目录之外，在对话中提示审阅。批准绑定内容版本，内容再变化即停止加载、回到草稿。加载器只提供已批准且版本一致的内容，经本轮附加上下文与受限 skill_read 加载，恢复会话时重新校验版本。批准 Skill 不改变外部写的授权规则。
+- **Skills**：一个技能一个目录（`skills/<skill_id>/SKILL.md` 加 `references/`、`templates/` 附件），目录名即标识，正文与附件只在需要时读取。每轮只装配容量受限的目录；模型判断相关时用 `skill_view` 取正文，用户也可在输入框手动选择或排除。写入按来源分流：管理页手写与用户当轮要求直接生效，后台复盘对用户手写的技能只能提出待确认建议（`managed=false`）；每次应用都绑定当前内容版本，过期即拒绝并返回当前版本。修改产生一次 Git 提交，可查历史与恢复；归档、恢复与管理策略切换也提交但不产生新内容版本。技能不改变外部写的授权规则。
 - **个人知识库**：Markdown 文件为准，派生的 FTS5 分节索引不进 Git，写入后增量替换，与 `kb/` 的 Git tree 不一致时整体重建；每次资料库操作前先把用户在文件系统中的改动提交为版本（移动按 `id` 识别并单独提交，历史跟随路径）。内部引用带路径、行号与 commit，只用于读原文；回答不展示来源，不记录出处。外部操作有结果后，Agent 可用 `kb_archive` 归档到 `kb/archive/`。资料管理界面经 `/api/kb/*` 直接调用 `KbStore`，与工具共用校验、版本与索引规则。
 
 借鉴 OpenHuman（取舍见 `kb-spec.md` 第 10 节）：常驻与按需分开（记忆全文与上限 1500 字符的资料目录常驻）；资料累积后维护 `kb/topics/` 下的主题页，代替分层摘要树；不采用以数据库为准的存储、外部数据全量同步、数据块出处与会话前预检索。
@@ -187,7 +187,7 @@ HTTP 提交操作、SSE 推送进度；Agent 用 `qodercn-agent-sdk` 的 `QoderS
 
 ### 凭证与数据
 
-凭证只在服务端，不进入聊天上下文、前端或 Git；外部内容中的指令只是材料。实例数据目录保存 SQLite、SDK 会话与任务工作目录、Gmail 游标与凭证、`kb/`、索引、`memory/`、`skills/` 与 `skill_drafts/`。日志关联会话与操作，不记录凭证。
+凭证只在服务端，不进入聊天上下文、前端或 Git；外部内容中的指令只是材料。实例数据目录保存 SQLite、SDK 会话与任务工作目录、Gmail 游标与凭证、`kb/`、索引、`memory/` 与 `skills/`。日志关联会话与操作，不记录凭证。
 
 ## 7. 交付阶段
 
@@ -199,7 +199,7 @@ HTTP 提交操作、SSE 推送进度；Agent 用 `qodercn-agent-sdk` 的 `QoderS
 | 2. 对话与邮件 | Web → Gateway → Agent → Gmail → 编辑 → 确认发送 → 结果 | 纯对话不触发工具；两端可用；刷新保留草稿与顺序；旧确认、重复确认与重复准备不重复发送 |
 | 3. 跨工具任务 | Memory、Calendar、Personal KB | 两个场景能组合工具、追问、按第 4 节授权、准确报告部分结果并归档 |
 | 4. 触发源与后台运行 | Gmail 增量检测 | 关闭 Web 仍处理新邮件；不重复处理；等待用户不阻塞其他任务 |
-| 5. 能力成长 | Memory 编辑、Skill 两条来源与审核、Git 历史 | 用户自建 Skill 即生效；至少一个总结草稿经审核生效；未审核草稿不执行；纠正在新会话生效 |
+| 5. 能力成长 | Memory 编辑、Skill 三种来源与审批、Git 历史 | 用户自建 Skill 即生效；明确学习在对话里落成技能并在新会话生效；后台复盘的修改建议经确认才生效；修改可回滚 |
 | 6. 远程控制与认证 | HTTPS、单用户认证、来源校验、部署说明 | 手机在外网完成两个场景；未认证请求被拒 |
 | 7. 部署验收 | 常驻服务、配置样例、部署说明、验收记录 | 用真实 Gmail 与 iCloud 完成全部场景，按第 9 节区分结论 |
 
