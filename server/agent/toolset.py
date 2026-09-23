@@ -23,6 +23,7 @@ from server.approval.service import ConfirmationService
 from server.memory.service import MemoryStore
 from server.sessions.history import HistoryStore
 from server.sessions.service import SessionStore
+from server.skills.service import SkillService
 from server.tools.calendar.service import CalendarEventStore
 from server.tools.calendar.tools import CalendarReader
 from server.tools.gmail.client import BaseGmailClient
@@ -73,6 +74,7 @@ class ToolDeps:
     calendar: CalendarReader | None = None
     calendar_events: CalendarEventStore | None = None
     confirmations: ConfirmationService | None = None
+    skills: SkillService | None = None
 
 
 def build_tools(

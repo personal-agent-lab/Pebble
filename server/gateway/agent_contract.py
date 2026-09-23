@@ -42,6 +42,10 @@ class Turn:
     target_operation_id: str | None = None
     run_id: str | None = None
     db_path: object = None
+    # 技能选择：手动项只带标识，内容版本由装配时绑定（contracts/skill.md §6）。
+    skills: tuple[str, ...] = ()
+    excluded_skill_ids: tuple[str, ...] = ()
+    auto_match: bool = True
 
 
 class AgentEvent(TypedDict, total=False):

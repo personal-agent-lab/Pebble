@@ -1,0 +1,196 @@
+"""技能装配与工具：目录材料、手动装配、范围强制与工具可见性。"""
+
+import pytest
+
+from server.agent.toolset import ALLOWED_EFFECTS, TurnKind
+from server.db import init_db
+from server.errors import SkillUnknownError
+from server.skills.models import ChangeAction, ChangeActor, SkillState
+from server.skills.runtime import (
+    catalog_material,
+    current,
+    manual_materials,
+    turn_scope,
+)
+from server.skills.service import CATALOG_LIMIT, ChangeRequest, SkillService
+from server.skills.tools import skill_list, skill_manage, skill_view
+from server.tools.registry import SideEffect, default_registry
+
+
+@pytest.fixture
+def service(settings) -> SkillService:
+    init_db()
+    return SkillService(settings.data_dir, settings.db_path)
+
+
+def add_skill(service: SkillService, skill_id: str, **payload) -> None:
+    body = {
+        "skill_id": skill_id,
+        "name": payload.pop("name", f"技能 {skill_id}"),
+        "description": payload.pop("description", "一句描述"),
+        "body": payload.pop("body", "正文内容\n"),
+    }
+    body.update(payload)
+    service.record_change(
+        ChangeRequest(
+            action=ChangeAction.CREATE, payload=body, actor=ChangeActor.USER, reason="测试创建"
+        )
+    )
+
+
+# ---------------------------------------------------------------- 目录材料
+
+
+def test_catalog_material_shape_and_limits(service: SkillService) -> None:
+    assert catalog_material(service) is None  # 没有技能不注入目录
+    for index in range(CATALOG_LIMIT + 5):
+        add_skill(service, f"skill-{index:02d}")
+    material = catalog_material(service)
+    assert material is not None and material.title == "技能目录"
+    entries = material.content["skills"]
+    assert len(entries) == CATALOG_LIMIT
+    assert all({"skill_id", "name", "description"} == set(entry) for entry in entries)
+    assert "省略" in material.content
+    assert material.content["省略"] == "还有 5 个较久未使用的技能未列出"
+
+    # 描述在创建时已限 160 字符，目录按上限原样带出。
+    add_skill(service, "long-desc", description="长" * 160)
+    material = catalog_material(service, excluded_skill_ids={"long-desc"})
+    # 排除项不进目录。
+    assert all(entry["skill_id"] != "long-desc" for entry in material.content["skills"])
+
+
+# ---------------------------------------------------------------- 手动装配
+
+
+def test_manual_materials_bind_revision_and_record_load(service: SkillService) -> None:
+    add_skill(service, "picked", body="被选中的正文\n")
+    materials = manual_materials(
+        service, ["picked", "picked", "missing"], task_id="task-1", run_id="run-1"
+    )
+    assert len(materials) == 1
+    assert materials[0].title == "用户选择的技能：技能 picked"
+    assert materials[0].content == "被选中的正文\n"
+    usage = service.task_skill_usage("task-1")
+    assert [(row["skill_id"], row["source"], row["revision"]) for row in usage] == [
+        ("picked", "manual", service.get("picked").revision)
+    ]
+
+
+def test_manual_materials_skip_inactive(service: SkillService) -> None:
+    add_skill(service, "archived-one")
+    service.archive("archived-one")
+    assert manual_materials(service, ["archived-one"], task_id="t", run_id="r") == []
+
+
+# ---------------------------------------------------------------- skill_view 范围强制
+
+
+def test_skill_view_enforces_exclusion_and_auto_match(service: SkillService) -> None:
+    add_skill(service, "excluded-one")
+    add_skill(service, "manual-one")
+    add_skill(service, "free-one")
+
+    with (
+        turn_scope(task_id="t", run_id="r", excluded_skill_ids={"excluded-one"}),
+        pytest.raises(SkillUnknownError),
+    ):
+        skill_view(skill_id="excluded-one", skills=service)
+
+    with turn_scope(task_id="t", run_id="r", auto_match=False, skills=("manual-one",)):
+        with pytest.raises(SkillUnknownError):
+            skill_view(skill_id="free-one", skills=service)
+        # 手动选择的仍可读取。
+        result = skill_view(skill_id="manual-one", skills=service)
+        assert result["body"] == "正文内容\n"
+
+    # 无范围（例如一次性后台会话）：照常读取，不记加载。
+    result = skill_view(skill_id="free-one", skills=service)
+    assert result["revision"] == service.get("free-one").revision
+    assert service.task_skill_usage("t") == [] or all(
+        row["skill_id"] != "free-one" for row in service.task_skill_usage("t")
+    )
+
+
+def test_skill_view_records_auto_load_and_reads_attachment(service: SkillService) -> None:
+    add_skill(service, "with-file")
+    service.record_change(
+        ChangeRequest(
+            action=ChangeAction.WRITE_FILE,
+            payload={"relative_path": "references/notes.md", "content": "# 附件"},
+            actor=ChangeActor.USER,
+            reason="补附件",
+            skill_id="with-file",
+            base_revision=service.get("with-file").revision,
+        )
+    )
+    with turn_scope(task_id="task-9", run_id="run-9"):
+        result = skill_view(skill_id="with-file", file_path="references/notes.md", skills=service)
+        assert result["file"] == "# 附件"
+        assert [f["path"] for f in result["files"]] == ["references/notes.md"]
+    usage = service.task_skill_usage("task-9")
+    assert [(row["skill_id"], row["source"]) for row in usage] == [("with-file", "auto")]
+
+
+def test_skill_view_rejects_non_active(service: SkillService) -> None:
+    add_skill(service, "staled")
+    service._set_state("staled", SkillState.STALE)
+    with pytest.raises(SkillUnknownError):
+        skill_view(skill_id="staled", skills=service)
+
+
+def test_skill_list_filters_state(service: SkillService) -> None:
+    add_skill(service, "live")
+    add_skill(service, "staled")
+    service._set_state("staled", SkillState.STALE)
+    assert [entry["skill_id"] for entry in skill_list(skills=service)] == ["live"]
+    assert {entry["skill_id"] for entry in skill_list(state="stale", skills=service)} == {"staled"}
+
+
+# ---------------------------------------------------------------- skill_manage 与可见性
+
+
+def test_skill_manage_records_foreground_change(service: SkillService) -> None:
+    result = skill_manage(
+        action="create",
+        payload={
+            "skill_id": "explicit-skill",
+            "name": "投屏排查",
+            "description": "排查投屏失败的固定顺序",
+            "body": "先查网络。",
+        },
+        reason="用户要求记录刚才的排查",
+        skills=service,
+    )
+    assert result["status"] == "applied"
+    skill = service.get("explicit-skill")
+    assert skill.managed is True
+    assert skill.origin.value == "explicit"
+
+
+def test_skill_tool_visibility_per_turn_kind() -> None:
+    definitions = {definition.name: definition for definition in default_registry.list_tools()}
+    assert {"skill_list", "skill_view", "skill_manage"} <= set(definitions)
+    assert definitions["skill_manage"].side_effect is SideEffect.LOCAL_WRITE_USER_TURN
+    assert definitions["skill_view"].side_effect is SideEffect.READONLY
+
+    for kind in TurnKind:
+        visible = {
+            definition.name
+            for definition in definitions.values()
+            if definition.side_effect in ALLOWED_EFFECTS[kind]
+        }
+        assert {"skill_list", "skill_view"} <= visible
+        if kind is TurnKind.MESSAGE:
+            assert "skill_manage" in visible
+        else:
+            assert "skill_manage" not in visible
+
+
+def test_turn_scope_sets_and_resets() -> None:
+    assert current() is None
+    with turn_scope(task_id="t", run_id="r", skills=("a",), auto_match=False) as scope:
+        assert current() is scope
+        assert scope.manual_skill_ids == ("a",)
+        assert scope.auto_match is False
+    assert current() is None

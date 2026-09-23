@@ -143,6 +143,7 @@ class QoderGateway:
         self.tool_server = tool_server
         self.memory_store = deps.memory_store or MemoryStore(self.settings.data_dir)
         self.kb_store = deps.kb_store
+        self.skills_store = deps.skills
         self.tasks_store = deps.tasks
         agent_dir = self.settings.data_dir / "agent"
         self.workspace = agent_dir / "workspace"
@@ -264,6 +265,19 @@ class QoderGateway:
     # ---------- 调用执行 ----------
 
     async def _stream(self, turn: Turn) -> AsyncIterator[AgentEvent]:
+        from server.skills.runtime import turn_scope
+
+        with turn_scope(
+            task_id=turn.task_id,
+            run_id=turn.run_id,
+            skills=turn.skills,
+            excluded_skill_ids=turn.excluded_skill_ids,
+            auto_match=turn.auto_match,
+        ):
+            async for event in self._scoped_stream(turn):
+                yield event
+
+    async def _scoped_stream(self, turn: Turn) -> AsyncIterator[AgentEvent]:
         queued: asyncio.Queue[AgentEvent] = asyncio.Queue()
         visible = exposed_tools(self.tools, allowed=ALLOWED_EFFECTS[turn.kind])
         announced: str | None = None
@@ -423,6 +437,23 @@ class QoderGateway:
         self, turn: Turn, *, visible: list[ToolDefinition], path: str
     ) -> QoderAgentOptions:
         materials = list(turn.materials)
+        if self.skills_store is not None:
+            from server.skills import runtime as skills_runtime
+
+            materials.extend(
+                skills_runtime.manual_materials(
+                    self.skills_store,
+                    turn.skills,
+                    task_id=turn.task_id,
+                    run_id=turn.run_id,
+                )
+            )
+            if turn.auto_match:
+                catalog = skills_runtime.catalog_material(
+                    self.skills_store, excluded_skill_ids=turn.excluded_skill_ids
+                )
+                if catalog is not None:
+                    materials.append(catalog)
         snapshot = self.memory_store.snapshot()
         memory_materials = tuple(
             context.Material(title, snapshot[target]["content"])

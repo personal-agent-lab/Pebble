@@ -162,6 +162,10 @@ class GatewayRuntime:
         message: str,
         attachments: list[PreparedAttachment],
         task_id: str | None = None,
+        *,
+        skills: list[str] | None = None,
+        excluded_skill_ids: list[str] | None = None,
+        auto_match: bool = True,
     ) -> dict:
         """创建用户任务、保存附件并登记首轮调用；失败不留下半个任务。
 
@@ -179,7 +183,17 @@ class GatewayRuntime:
             with session(self.path) as conn, write(conn):
                 now = timestamp()
                 operations.insert_task(conn, task_id, goal, now, model=model)
-                row = self._insert_message(conn, task_id, message, attachments, None, now)
+                row = self._insert_message(
+                    conn,
+                    task_id,
+                    message,
+                    attachments,
+                    None,
+                    now,
+                    skills=skills,
+                    excluded_skill_ids=excluded_skill_ids,
+                    auto_match=auto_match,
+                )
                 task = operations.task(conn, task_id)
         except BaseException:
             self._attachments.delete_task_files(task_id)
@@ -224,6 +238,9 @@ class GatewayRuntime:
         *,
         target: dict | None = None,
         attachments: list[PreparedAttachment] | None = None,
+        skills: list[str] | None = None,
+        excluded_skill_ids: list[str] | None = None,
+        auto_match: bool = True,
     ) -> dict:
         """登记用户消息并返回调用记录；会话标识从任务记录读取。"""
         self.require_gateway()
@@ -256,6 +273,9 @@ class GatewayRuntime:
                     prepared,
                     target,
                     now,
+                    skills=skills,
+                    excluded_skill_ids=excluded_skill_ids,
+                    auto_match=auto_match,
                 )
         except BaseException:
             self._attachments.discard(task_id, prepared)
@@ -280,6 +300,10 @@ class GatewayRuntime:
         attachments: list[PreparedAttachment],
         target: dict | None,
         now: str,
+        *,
+        skills: list[str] | None = None,
+        excluded_skill_ids: list[str] | None = None,
+        auto_match: bool = True,
     ) -> dict:
         run_id = str(uuid4())
         repo.insert(
@@ -291,6 +315,9 @@ class GatewayRuntime:
                 "message": message,
                 "target": target,
                 "attachment_ids": [item.file_id for item in attachments],
+                "skills": skills or [],
+                "excluded_skill_ids": excluded_skill_ids or [],
+                "auto_match": auto_match,
             },
             None,
             now,
@@ -552,6 +579,9 @@ class GatewayRuntime:
                 ),
                 run_id=row["run_id"],
                 db_path=self.path,
+                skills=tuple(payload.get("skills", [])),
+                excluded_skill_ids=tuple(payload.get("excluded_skill_ids", [])),
+                auto_match=payload.get("auto_match", True),
             )
         )
 

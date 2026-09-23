@@ -27,6 +27,7 @@ from server.memory.review import MemoryReviewScheduler
 from server.memory.service import MemoryStore
 from server.sessions.history import HistoryStore
 from server.sessions.service import SessionStore
+from server.skills.service import SkillService
 from server.tools.calendar.service import CalendarEventStore
 from server.tools.gmail.service import MailDraftStore
 from server.tools.personal_kb.service import KbStore
@@ -48,6 +49,7 @@ def create_app(
     memory_store: MemoryStore | None = None,
     kb_store: KbStore | None = None,
     history: HistoryStore | None = None,
+    skills: SkillService | None = None,
     create_event=None,
     verify_event=None,
     model_catalog: ModelCatalog | None = None,
@@ -123,6 +125,7 @@ def create_app(
     app.state.agent = agent
     app.state.mail_source = mail_source
     app.state.kb_store = kb_store
+    app.state.skills = skills
     app.state.memory_store = agent.memory_store
     app.state.history = history if history is not None else HistoryStore()
     app.state.model_catalog = model_catalog
@@ -176,6 +179,7 @@ def create_production_app() -> FastAPI:
     calendar_events = CalendarEventStore()
     memory_store = MemoryStore(settings.data_dir)
     kb_store = KbStore(settings.data_dir)
+    skills = SkillService(settings.data_dir)
     history = HistoryStore()
     # 三处用途各自构造客户端：检测在自己的顺序轮询里，工具随模型并发调用，发送与核实同为
     # Confirmation 串行调用故共用一个；不共享其余 HTTP 连接。
@@ -207,6 +211,7 @@ def create_production_app() -> FastAPI:
                 calendar=calendar_client,
                 calendar_events=calendar_events if calendar_client else None,
                 confirmations=confirmations,
+                skills=skills,
             ),
             tool_server,
             settings=settings,
@@ -220,6 +225,7 @@ def create_production_app() -> FastAPI:
         memory_store=memory_store,
         kb_store=kb_store,
         history=history,
+        skills=skills,
         model_catalog=ModelCatalog(settings),
         attachments=attachments,
         tool_port=settings.tool_port,

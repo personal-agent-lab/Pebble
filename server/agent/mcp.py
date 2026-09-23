@@ -126,6 +126,9 @@ def build_server(
     target_operation_id: str | None = None,
 ) -> Server:
     """把本轮允许的工具装到一个 MCP server 上：清单与调用都只认这一份。"""
+    from server.skills.runtime import current, reset_scope, set_scope
+
+    scope = current()
     server = Server(TOOL_SERVER_NAME, version="1.0.0")
     known = {tool.name: tool for tool in tools}
 
@@ -141,13 +144,17 @@ def build_server(
         definition = known.get(name)
         if definition is None:
             return error_result({"error": "unknown_tool", "message": UNKNOWN_TOOL_MESSAGE})
-        return await invoke(
-            definition,
-            arguments,
-            task_id=task_id,
-            target_operation_id=target_operation_id,
-            queued=queued,
-        )
+        token = set_scope(scope)
+        try:
+            return await invoke(
+                definition,
+                arguments,
+                task_id=task_id,
+                target_operation_id=target_operation_id,
+                queued=queued,
+            )
+        finally:
+            reset_scope(token)
 
     return server
 
