@@ -1,8 +1,9 @@
 import { ArrowUp, FileText, Plus, X } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 
-import type { ApiError, ModelEntry } from "../api";
+import type { ApiError, ModelEntry, SkillSelection, SkillSummary } from "../api";
 import ModelPicker from "./ModelPicker";
+import SkillPicker from "./SkillPicker";
 
 const MAX_FILES = 10;
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
@@ -17,9 +18,11 @@ type Props = {
   /** 目录尚未读到时不显示固定型号，免得先闪出型号标识。 */
   modelsPending?: boolean;
   onModelChange?: (model: string) => void;
+  /** 可选的技能目录；提供时输入框出现技能选择，选择随每条消息提交并重置。 */
+  skills?: SkillSummary[];
   /** 模型目录读不到最新版本时的提示；沿用旧目录，不阻止发送。 */
   catalogNotice?: { message: string; retrying: boolean; onRetry: () => void } | null;
-  onSubmit: (message: string, files: File[]) => Promise<ApiError | null>;
+  onSubmit: (message: string, files: File[], selection: SkillSelection) => Promise<ApiError | null>;
   /** 未发出的消息退回时预填的文字与附件。 */
   initialMessage?: string;
   initialFiles?: File[];
@@ -30,11 +33,14 @@ const formatSize = (size: number) => size >= 1024 * 1024
   : `${Math.max(1, Math.round(size / 1024))} KB`;
 
 export default function Composer({
-  placeholder, sending, model, models = [], modelLocked = false, modelsPending = false, catalogNotice = null, onModelChange, onSubmit,
-  initialMessage = "", initialFiles = [],
+  placeholder, sending, model, models = [], modelLocked = false, modelsPending = false, catalogNotice = null, onModelChange,
+  skills, onSubmit, initialMessage = "", initialFiles = [],
 }: Props) {
   const [message, setMessage] = useState(initialMessage);
   const [files, setFiles] = useState<File[]>(initialFiles);
+  const [selection, setSelection] = useState<SkillSelection>({
+    skills: [], excluded_skill_ids: [], auto_match: true,
+  });
   const [error, setError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -86,7 +92,7 @@ export default function Composer({
   const submit = async () => {
     const text = message.trim();
     if ((!text && files.length === 0) || sending || !model) return;
-    const failure = await onSubmit(text, files);
+    const failure = await onSubmit(text, files, selection);
     if (failure !== null) {
       setError(failure.message);
       return;
@@ -95,6 +101,7 @@ export default function Composer({
     previews.current.clear();
     setMessage("");
     setFiles([]);
+    setSelection({ skills: [], excluded_skill_ids: [], auto_match: true });
     setError(null);
     if (textarea.current !== null) textarea.current.style.height = "auto";
   };
@@ -132,6 +139,10 @@ export default function Composer({
         }} />
       <button type="button" className="composer-add" onClick={() => input.current?.click()}
         disabled={sending} aria-label="添加图片或文件"><Plus size={18} weight="bold" /></button>
+
+      {skills !== undefined && (
+        <SkillPicker skills={skills} selection={selection} onChange={setSelection} disabled={sending} />
+      )}
 
       <div className="composer-spacer" />
       {catalogNotice !== null && !modelLocked && <span className="composer-catalog-notice">

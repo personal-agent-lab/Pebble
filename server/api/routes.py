@@ -1,4 +1,4 @@
-"""HTTP 路由与请求结构：健康检查、任务、对话、SSE、确认、记忆与资料管理。"""
+"""HTTP 路由与请求结构：健康检查、任务、对话、SSE、确认、记忆、资料与技能管理。"""
 
 import asyncio
 import json
@@ -15,11 +15,18 @@ from server.approval.service import ConfirmationService
 from server.attachments import AttachmentStore, prepare_uploads
 from server.config import get_settings
 from server.db import schema_version, session
-from server.errors import AttachmentValidationError, DependencyUnavailableError, KbValidationError
+from server.errors import (
+    AttachmentValidationError,
+    DependencyUnavailableError,
+    KbValidationError,
+    SkillValidationError,
+)
 from server.gateway.runtime import GatewayRuntime
 from server.memory.service import MemoryStore
 from server.sessions.history import HistoryStore
 from server.sessions.service import SessionStore
+from server.skills.models import ChangeAction, ChangeActor, SkillState
+from server.skills.service import ChangeRequest, SkillService
 from server.tools.gmail.service import MailDraftStore
 from server.tools.personal_kb.assets import ASSETS_DIR, MAX_ASSET_SIZE, describe, sniff
 from server.tools.personal_kb.service import KbStore
@@ -82,6 +89,16 @@ def get_models(request: Request) -> ModelCatalog:
     return request.app.state.model_catalog
 
 
+def get_skills(request: Request) -> SkillService:
+    skills = getattr(request.app.state, "skills", None)
+    if skills is None:
+        raise DependencyUnavailableError("技能功能未接入")
+    return skills
+
+
+Skills = Annotated[SkillService, Depends(get_skills)]
+
+
 def get_attachments(request: Request) -> AttachmentStore:
     return request.app.state.attachments
 
@@ -122,8 +139,46 @@ async def list_models(models: Models) -> dict:
     return await models.response()
 
 
+class SkillPick(BaseModel):
+    """手动选择的一项：只带标识，内容版本在装配时由服务端绑定（`contracts/skill.md` §6）。"""
+
+    id: str
+
+
+class SkillSelection(BaseModel):
+    """随消息提交的技能选择，形状见 `contracts/skill.md` §6。"""
+
+    skills: list[SkillPick] = Field(default_factory=list)
+    excluded_skill_ids: list[str] = Field(default_factory=list)
+    auto_match: bool = True
+
+
+def skill_options(selection: str | None, service: SkillService | None) -> dict:
+    try:
+        value = SkillSelection.model_validate_json(selection) if selection else SkillSelection()
+    except ValueError as error:
+        raise SkillValidationError(
+            [{"field": "selection", "message": "技能选择格式不合法"}]
+        ) from error
+    picked = [item.id for item in value.skills]
+    if picked or value.excluded_skill_ids:
+        if service is None:
+            raise DependencyUnavailableError("技能功能未接入")
+        service.validate_selection(picked)
+    return {
+        "skills": picked,
+        "excluded_skill_ids": list(value.excluded_skill_ids),
+        "auto_match": value.auto_match,
+    }
+
+
+def _skill_service(request: Request) -> SkillService | None:
+    return getattr(request.app.state, "skills", None)
+
+
 @router.post("/tasks", status_code=201, tags=["tasks"])
 async def create_task(
+    request: Request,
     agent: Agent,
     models: Models,
     response: Response,
@@ -131,6 +186,7 @@ async def create_task(
     message: Annotated[str, Form()] = "",
     files: Annotated[list[UploadFile] | None, File()] = None,
     task_id: Annotated[UUID | None, Form()] = None,
+    selection: Annotated[str | None, Form()] = None,
 ) -> dict:
     """新建任务；客户端可自带 `task_id` 先行展示，重复提交同一标识返回已创建的任务（200）。"""
     client_id = str(task_id) if task_id is not None else None
@@ -142,7 +198,8 @@ async def create_task(
         raise AttachmentValidationError(
             [{"field": "message", "message": "请输入文字或至少添加一个附件"}]
         )
-    return agent.start_task(await models.validate(model), message, prepared, client_id)
+    options = skill_options(selection, _skill_service(request))
+    return agent.start_task(await models.validate(model), message, prepared, client_id, **options)
 
 
 @router.get("/tasks/{task_id}", tags=["tasks"])
@@ -177,11 +234,13 @@ class MessageTarget(BaseModel):
 
 @router.post("/tasks/{task_id}/messages", status_code=202, tags=["chat"])
 async def submit_message(
+    request: Request,
     task_id: str,
     agent: Agent,
     message: Annotated[str, Form()] = "",
     target: Annotated[str | None, Form()] = None,
     files: Annotated[list[UploadFile] | None, File()] = None,
+    selection: Annotated[str | None, Form()] = None,
 ) -> dict:
     prepared = await prepare_uploads(files or [])
     if not message.strip() and not prepared:
@@ -196,11 +255,13 @@ async def submit_message(
             raise AttachmentValidationError(
                 [{"field": "target", "message": "消息目标不合法"}]
             ) from error
+    options = skill_options(selection, _skill_service(request))
     return agent.submit_message(
         task_id,
         message,
         target=parsed_target,
         attachments=prepared,
+        **options,
     )
 
 
@@ -327,6 +388,219 @@ def verify(operation_id: str, confirmations: Confirmations, agent: Agent) -> dic
     view = confirmations.verify_pending(operation_id)
     agent.kick()
     return view
+
+
+# ---------- 技能管理 ----------
+
+
+class SkillCreate(BaseModel):
+    skill_id: str
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    body: str = Field(min_length=1)
+    attachments: dict[str, str] | None = None
+
+
+class SkillUpdate(BaseModel):
+    expected_revision: str
+    name: str | None = None
+    description: str | None = None
+    body: str | None = None
+
+
+class ManagedInput(BaseModel):
+    value: bool
+
+
+class ApproveInput(BaseModel):
+    expected_revision: str
+
+
+class RevisionInput(BaseModel):
+    revision: str
+
+
+class SkillFileWrite(BaseModel):
+    relative_path: str
+    content: str
+    expected_revision: str
+
+
+class SkillFileRemove(BaseModel):
+    relative_path: str
+    expected_revision: str
+
+
+@router.get("/skills", tags=["skills"])
+def list_skills(state: str = "active", q: str | None = None, skills: Skills = None) -> list[dict]:
+    try:
+        parsed = SkillState(state)
+    except ValueError as error:
+        raise SkillValidationError([{"field": "state", "message": f"未知状态：{state}"}]) from error
+    entries = skills.catalog(state=parsed)
+    if q:
+        needle = q.lower()
+        entries = [
+            entry
+            for entry in entries
+            if needle in f"{entry['skill_id']} {entry['name']} {entry['description']}".lower()
+        ]
+    return entries
+
+
+@router.post("/skills", status_code=201, tags=["skills"])
+def create_skill(body: SkillCreate, skills: Skills) -> dict:
+    result = skills.record_change(
+        ChangeRequest(
+            action=ChangeAction.CREATE,
+            payload=body.model_dump(),
+            actor=ChangeActor.USER,
+            reason="管理页创建",
+        )
+    )
+    return result
+
+
+@router.get("/skills/{skill_id}", tags=["skills"])
+def get_skill(skill_id: str, skills: Skills) -> dict:
+    skill = skills.get(skill_id)
+    return {
+        "skill_id": skill.skill_id,
+        "name": skill.name,
+        "description": skill.description,
+        "origin": skill.origin.value,
+        "managed": skill.managed,
+        "state": skill.state.value,
+        "created_at": skill.created_at,
+        "updated_at": skill.updated_at,
+        "body": skill.body,
+        "files": [{"path": item.relative_path, "hash": item.content_hash} for item in skill.files],
+        "revision": skill.revision,
+        "usage": skills.skill_usage(skill_id),
+    }
+
+
+@router.put("/skills/{skill_id}", tags=["skills"])
+def update_skill(skill_id: str, body: SkillUpdate, skills: Skills) -> dict:
+    payload = {key: value for key, value in body.model_dump().items() if value is not None}
+    payload.pop("expected_revision", None)
+    return skills.record_change(
+        ChangeRequest(
+            action=ChangeAction.PATCH,
+            payload=payload,
+            actor=ChangeActor.USER,
+            reason="管理页修改",
+            skill_id=skill_id,
+            base_revision=body.expected_revision,
+        )
+    )
+
+
+@router.get("/skills/{skill_id}/files/{file_path:path}", tags=["skills"])
+def read_skill_file(skill_id: str, file_path: str, skills: Skills) -> dict:
+    skills.get(skill_id)
+    content = skills.repository.read_attachment(skill_id, file_path).decode("utf-8")
+    return {"skill_id": skill_id, "path": file_path, "content": content}
+
+
+@router.post("/skills/{skill_id}/files", tags=["skills"])
+def write_skill_file(skill_id: str, body: SkillFileWrite, skills: Skills) -> dict:
+    return skills.record_change(
+        ChangeRequest(
+            action=ChangeAction.WRITE_FILE,
+            payload={"relative_path": body.relative_path, "content": body.content},
+            actor=ChangeActor.USER,
+            reason="管理页更新附件",
+            skill_id=skill_id,
+            base_revision=body.expected_revision,
+        )
+    )
+
+
+@router.post("/skills/{skill_id}/files/remove", tags=["skills"])
+def remove_skill_file(skill_id: str, body: SkillFileRemove, skills: Skills) -> dict:
+    return skills.record_change(
+        ChangeRequest(
+            action=ChangeAction.REMOVE_FILE,
+            payload={"relative_path": body.relative_path},
+            actor=ChangeActor.USER,
+            reason="管理页删除附件",
+            skill_id=skill_id,
+            base_revision=body.expected_revision,
+        )
+    )
+
+
+@router.post("/skills/{skill_id}/archive", status_code=204, tags=["skills"])
+def archive_skill(skill_id: str, skills: Skills) -> None:
+    skills.archive(skill_id)
+
+
+@router.post("/skills/{skill_id}/restore", tags=["skills"])
+def restore_skill(skill_id: str, skills: Skills) -> dict:
+    skill = skills.restore(skill_id)
+    return {"skill_id": skill.skill_id, "state": skill.state.value}
+
+
+@router.post("/skills/{skill_id}/managed", tags=["skills"])
+def set_managed(skill_id: str, body: ManagedInput, skills: Skills) -> dict:
+    skill = skills.set_managed(skill_id, body.value)
+    return {"skill_id": skill.skill_id, "managed": skill.managed}
+
+
+@router.get("/skills/{skill_id}/versions", tags=["skills"])
+def skill_versions(skill_id: str, skills: Skills) -> list[dict]:
+    return [
+        {
+            "revision": version.revision,
+            "created_at": version.created_at,
+            "change_id": version.change_id,
+            "actor": version.actor,
+            "reason": version.reason,
+        }
+        for version in skills.repository.versions(skill_id)
+    ]
+
+
+@router.get("/skills/{skill_id}/versions/{revision}", tags=["skills"])
+def skill_version_detail(skill_id: str, revision: str, skills: Skills) -> dict:
+    skill = skills.version_detail(skill_id, revision)
+    return {
+        "skill_id": skill.skill_id,
+        "name": skill.name,
+        "description": skill.description,
+        "body": skill.body,
+        "revision": skill.revision,
+        "files": [{"path": item.relative_path, "hash": item.content_hash} for item in skill.files],
+    }
+
+
+@router.post("/skills/{skill_id}/restore-version", tags=["skills"])
+def restore_skill_version(skill_id: str, body: RevisionInput, skills: Skills) -> dict:
+    return skills.restore_version(skill_id, body.revision)
+
+
+@router.get("/skill-changes", tags=["skills"])
+def list_skill_changes(
+    status: str | None = None, skill_id: str | None = None, skills: Skills = None
+) -> list[dict]:
+    return skills.changes(status=status, skill_id=skill_id)
+
+
+@router.post("/skill-changes/{change_id}/approve", tags=["skills"])
+def approve_skill_change(change_id: str, body: ApproveInput, skills: Skills) -> dict:
+    return skills.approve(change_id, body.expected_revision)
+
+
+@router.post("/skill-changes/{change_id}/reject", status_code=204, tags=["skills"])
+def reject_skill_change(change_id: str, skills: Skills) -> None:
+    skills.reject(change_id)
+
+
+@router.get("/tasks/{task_id}/skill-usage", tags=["skills"])
+def skill_usage(task_id: str, tasks: Tasks, skills: Skills) -> list[dict]:
+    tasks.get_task(task_id)
+    return skills.task_skill_usage(task_id)
 
 
 # ---------- 历史对话检索 ----------

@@ -7,7 +7,8 @@ import Composer from "../components/Composer";
 import Notice from "../components/Notice";
 import StatusBadge from "../components/StatusBadge";
 import TimelineFeed from "../components/TimelineFeed";
-import { useTaskDetail } from "../hooks";
+import { useTaskDetail, useSkillCatalog, useTaskSkillUsage } from "../hooks";
+import SkillUsage from "../components/SkillUsage";
 import {
   forgetTask, retryable, retryTask, reviseLostTask, usePendingTask, viewTask, type PendingTask,
 } from "../pendingTasks";
@@ -118,6 +119,8 @@ function TaskDetailView({ taskId, placeholder, models }: {
   const focusItemId = hash.startsWith("#item-") ? decodeURIComponent(hash.slice("#item-".length)) : null;
   const detail = useTaskDetail(taskId);
   const tasks = useTasks();
+  const skills = useSkillCatalog();
+  const skillUsage = useTaskSkillUsage(taskId, detail.items.length);
   const placeholderItems = usePlaceholderItems(detail.task === null ? placeholder : null);
 
   // 刚创建成功：让侧栏立即出现这个任务，不等下一轮列表轮询。
@@ -170,10 +173,13 @@ function TaskDetailView({ taskId, placeholder, models }: {
     </div></div>
 
     <div className="msg-composer"><div className="composer-wrap">
+      {skillUsage !== null && <SkillUsage usage={skillUsage} />}
       <Composer placeholder="随心输入" sending={detail.sending} model={detail.task?.model ?? placeholder?.model ?? ""}
-        models={models ?? []} modelsPending={models === null} modelLocked onSubmit={async (text, files) => {
+        models={models ?? []} modelsPending={models === null} modelLocked
+        skills={skills ?? undefined}
+        onSubmit={async (text, files, selection) => {
           // 对话框里的消息让待确认的草稿失效：侧栏圆点跟着立即更新，不等下一次轮询。
-          const error = await detail.send(text, null, files);
+          const error = await detail.send(text, null, files, selection);
           if (error === null) { void tasks.reload(); }
           return error;
         }} />

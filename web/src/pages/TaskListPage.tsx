@@ -3,11 +3,13 @@ import { Link, useNavigate } from "react-router-dom";
 
 import {
   ApiError, cachedCatalog, cachedModels, listModels, type ModelCatalog, type ModelEntry,
+  type SkillSelection,
 } from "../api";
 import AppShell, { TaskLinks } from "../components/AppShell";
 import Composer from "../components/Composer";
 import Notice from "../components/Notice";
 import { startTask, subscribe, takeDraft, type UnsentDraft } from "../pendingTasks";
+import { useSkillCatalog } from "../hooks";
 import { useTasks } from "../tasks";
 
 const STALE_RETRY_MS = 5000;
@@ -23,6 +25,7 @@ const initialModel = (catalog: ModelCatalog | null) =>
 export default function TaskListPage() {
   const navigate = useNavigate();
   const { error, reload } = useTasks();
+  const skills = useSkillCatalog();
   const [models, setModels] = useState<ModelEntry[]>(() => cachedModels() ?? []);
   const [model, setModel] = useState(() => initialModel(cachedCatalog()));
   const [catalogStale, setCatalogStale] = useState(false);
@@ -79,8 +82,8 @@ export default function TaskListPage() {
   }, [loadModels]);
 
   // 不等服务端：先进入任务页显示这条消息，创建结果与失败处理都在任务页。
-  const start = async (message: string, files: File[]) => {
-    navigate(`/tasks/${startTask(message, model, files)}`);
+  const start = async (message: string, files: File[], selection: SkillSelection) => {
+    navigate(`/tasks/${startTask(message, model, files, selection)}`);
     return null;
   };
 
@@ -94,6 +97,7 @@ export default function TaskListPage() {
             model={model} models={models}
             initialMessage={draft?.message} initialFiles={draft?.files}
             onModelChange={setModel} onSubmit={start}
+            skills={skills ?? undefined}
             catalogNotice={catalogStale ? {
               message: "模型目录可能不是最新",
               retrying: catalogLoading,

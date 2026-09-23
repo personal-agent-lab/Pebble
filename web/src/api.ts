@@ -141,6 +141,7 @@ export class ApiError extends Error {
     readonly currentVersion?: number | string,
     readonly operationStatus?: string,
     readonly fieldErrors?: FieldError[],
+    readonly currentRevision?: string,
   ) {
     super(message);
   }
@@ -152,6 +153,7 @@ type ErrorBody = {
   error?: string;
   message?: string;
   current_version?: number | string;
+  current_revision?: string;
   status?: string;
   errors?: FieldError[];
   detail?: unknown;
@@ -180,7 +182,8 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const message = gatewayFailure
       ? `无法连接 Pebble 服务（HTTP ${response.status}）`
       : (body.message ?? (body.detail ? JSON.stringify(body.detail) : response.statusText));
-    throw new ApiError(code, message, response.status, body.current_version, body.status, body.errors);
+    throw new ApiError(code, message, response.status, body.current_version, body.status, body.errors,
+      body.current_revision);
   }
   return payload as T;
 }
@@ -214,17 +217,29 @@ export const listModels = async () => {
 export const cachedCatalog = () => modelCatalog ?? storedCatalog();
 export const cachedModels = () => cachedCatalog()?.models ?? null;
 
-function messageForm(message: string, files: File[], target: MessageTarget | null = null): FormData {
+function messageForm(
+  message: string,
+  files: File[],
+  target: MessageTarget | null = null,
+  selection: SkillSelection | null = null,
+): FormData {
   const body = new FormData();
   body.set("message", message);
   if (target !== null) body.set("target", JSON.stringify(target));
   for (const file of files) body.append("files", file);
+  if (selection !== null) body.set("selection", JSON.stringify(selection));
   return body;
 }
 
 /** `taskId` 由前端生成时兼作幂等键：重复提交同一标识返回已创建的任务。 */
-export const createTask = (message: string, model: string, files: File[], taskId?: string) => {
-  const body = messageForm(message, files, null);
+export const createTask = (
+  message: string,
+  model: string,
+  files: File[],
+  taskId?: string,
+  selection: SkillSelection | null = null,
+) => {
+  const body = messageForm(message, files, null, selection);
   body.set("model", model);
   if (taskId !== undefined) body.set("task_id", taskId);
   return request<{ task: Task; run: Run }>("/tasks", { method: "POST", body });
@@ -241,9 +256,10 @@ export const sendMessage = (
   message: string,
   target: MessageTarget | null = null,
   files: File[] = [],
+  selection: SkillSelection | null = null,
 ) => request<Run>(`/tasks/${taskId}/messages`, {
   method: "POST",
-  body: messageForm(message, files, target),
+  body: messageForm(message, files, target, selection),
 });
 
 export const retryLastMessage = (taskId: string) =>
@@ -428,4 +444,131 @@ export const saveMemory = (target: MemoryTarget, content: string, expectedVersio
   request<MemoryWriteResult>(`/memory/${target}`, {
     method: "PUT",
     body: JSON.stringify({ content, expected_version: expectedVersion }),
+  });
+
+/* ---------- 技能 ---------- */
+
+export type SkillOrigin = "user" | "explicit" | "review";
+export type SkillState = "active" | "stale" | "archived";
+
+/** 目录条目；`revision` 是内容的哈希版本，保存时带回用于冲突检查。 */
+export type SkillSummary = {
+  skill_id: string;
+  name: string;
+  description: string;
+  origin: SkillOrigin;
+  managed: boolean;
+  state: SkillState;
+  revision: string;
+  updated_at: string;
+  last_loaded_at: string | null;
+};
+
+export type SkillFileEntry = { path: string; hash: string };
+export type SkillUsageRecord = {
+  run_id: string;
+  skill_id: string;
+  task_id?: string;
+  revision: string;
+  source: "auto" | "manual";
+  loaded_at: string;
+};
+
+export type SkillDetail = SkillSummary & {
+  created_at: string;
+  body: string;
+  files: SkillFileEntry[];
+  usage: SkillUsageRecord[];
+};
+
+export type SkillVersion = {
+  revision: string;
+  created_at: string;
+  change_id: string | null;
+  actor: string | null;
+  reason: string | null;
+};
+
+export type SkillChangeView = {
+  id: string;
+  review_job_id: string | null;
+  skill_id: string | null;
+  action: "create" | "patch" | "write_file" | "remove_file";
+  payload: Record<string, unknown>;
+  base_revision: string | null;
+  reason: string;
+  evidence_item_ids: string[];
+  actor: "user" | "foreground" | "review";
+  status: "proposed" | "applied" | "rejected" | "conflict";
+  created_at: string;
+  applied_at: string | null;
+};
+
+/** 手动选择的一项：只带标识，内容版本在装配时由服务端绑定。 */
+export type SkillPick = { id: string };
+
+/** 随消息提交的技能选择，形状见 `docs/contracts/skill.md` §6。 */
+export type SkillSelection = {
+  skills: SkillPick[];
+  excluded_skill_ids: string[];
+  auto_match: boolean;
+};
+
+export const DEFAULT_SKILL_SELECTION: SkillSelection = {
+  skills: [], excluded_skill_ids: [], auto_match: true,
+};
+
+export const listSkills = (state: SkillState = "active", q?: string) =>
+  request<SkillSummary[]>(`/skills?${query({ state, q })}`);
+export const getSkill = (skillId: string) => request<SkillDetail>(`/skills/${skillId}`);
+export const createSkill = (fields: {
+  skill_id: string; name: string; description: string; body: string;
+  attachments?: Record<string, string>;
+}) => request<{ status: string; skill: SkillDetail }>("/skills", {
+  method: "POST", body: JSON.stringify(fields),
+});
+export const updateSkill = (
+  skillId: string,
+  expectedRevision: string,
+  fields: { name?: string; description?: string; body?: string },
+) => request<{ status: string; skill: SkillDetail }>(`/skills/${skillId}`, {
+  method: "PUT", body: JSON.stringify({ expected_revision: expectedRevision, ...fields }),
+});
+export const archiveSkill = (skillId: string) =>
+  request<void>(`/skills/${skillId}/archive`, { method: "POST" });
+export const restoreSkill = (skillId: string) =>
+  request<{ skill_id: string; state: SkillState }>(`/skills/${skillId}/restore`, { method: "POST" });
+export const setSkillManaged = (skillId: string, value: boolean) =>
+  request<{ skill_id: string; managed: boolean }>(`/skills/${skillId}/managed`, {
+    method: "POST", body: JSON.stringify({ value }),
+  });
+export const listSkillVersions = (skillId: string) =>
+  request<SkillVersion[]>(`/skills/${skillId}/versions`);
+export const getSkillVersion = (skillId: string, revision: string) =>
+  request<{ body: string; files: SkillFileEntry[] }>(`/skills/${skillId}/versions/${revision}`);
+export const restoreSkillVersion = (skillId: string, revision: string) =>
+  request<{ status: string }>(`/skills/${skillId}/restore-version`, {
+    method: "POST", body: JSON.stringify({ revision }),
+  });
+export const listSkillChanges = (status?: string) =>
+  request<SkillChangeView[]>(`/skill-changes?${query({ status })}`);
+export const approveSkillChange = (changeId: string, expectedRevision: string) =>
+  request<{ status: string }>(`/skill-changes/${changeId}/approve`, {
+    method: "POST", body: JSON.stringify({ expected_revision: expectedRevision }),
+  });
+export const rejectSkillChange = (changeId: string) =>
+  request<void>(`/skill-changes/${changeId}/reject`, { method: "POST" });
+export const getTaskSkillUsage = (taskId: string) =>
+  request<SkillUsageRecord[]>(`/tasks/${taskId}/skill-usage`);
+export const readSkillFile = (skillId: string, path: string) =>
+  request<{ path: string; content: string }>(
+    `/skills/${skillId}/files/${path.split("/").map(encodeURIComponent).join("/")}`);
+export const writeSkillFile = (
+  skillId: string, path: string, content: string, expectedRevision: string,
+) => request<{ status: string; skill: SkillDetail }>(`/skills/${skillId}/files`, {
+  method: "POST", body: JSON.stringify({ relative_path: path, content, expected_revision: expectedRevision }),
+});
+export const removeSkillFile = (skillId: string, path: string, expectedRevision: string) =>
+  request<{ status: string; skill: SkillDetail }>(`/skills/${skillId}/files/remove`, {
+    method: "POST", body: JSON.stringify({ relative_path: path, expected_revision: expectedRevision }),
   });

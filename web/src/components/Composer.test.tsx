@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { ApiError, type ModelEntry } from "../api";
+import { ApiError, DEFAULT_SKILL_SELECTION, type ModelEntry } from "../api";
 import Composer from "./Composer";
 
 const models: ModelEntry[] = [
@@ -39,7 +39,7 @@ test("新任务可选模型并支持附件单独发送", async () => {
   await userEvent.upload(container.querySelector("input[type=file]") as HTMLInputElement, file);
   expect(screen.getByText("notes.md")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
-  expect(onSubmit).toHaveBeenCalledWith("", [file]);
+  expect(onSubmit).toHaveBeenCalledWith("", [file], DEFAULT_SKILL_SELECTION);
   expect(screen.queryByText("notes.md")).toBeNull();
 });
 
@@ -85,5 +85,5 @@ test("模型目录不是最新时提示并可重试，不阻止发送", async ()
   expect(onRetry).toHaveBeenCalled();
   await userEvent.type(screen.getByRole("textbox", { name: "消息" }), "hello");
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
-  expect(onSubmit).toHaveBeenCalledWith("hello", []);
+  expect(onSubmit).toHaveBeenCalledWith("hello", [], DEFAULT_SKILL_SELECTION);
 });

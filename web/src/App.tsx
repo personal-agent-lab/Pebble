@@ -11,6 +11,7 @@ import { TaskListProvider } from "./tasks";
 // 资料与记忆共用的编辑器体积较大，只在打开对应页面时再加载，任务页不为它付下载成本。
 const KbDocumentPage = lazy(() => import("./pages/KbDocumentPage"));
 const MemoryPage = lazy(() => import("./pages/MemoryPage"));
+const SkillsPage = lazy(() => import("./pages/SkillsPage"));
 const loading = <div className="loading">读取中…</div>;
 
 /** PC 与手机共用同一套页面组件与路由，按屏幕尺寸调整布局。 */
@@ -25,6 +26,7 @@ export default function App() {
           <Route path="/search" element={<SearchPage />} />
           <Route path="/kb" element={<KbPage />} />
           <Route path="/memory" element={<Suspense fallback={loading}><MemoryPage /></Suspense>} />
+          <Route path="/skills" element={<Suspense fallback={loading}><SkillsPage /></Suspense>} />
           <Route path="/kb/doc" element={<Suspense fallback={loading}><KbDocumentPage /></Suspense>} />
           <Route path="/kb/new" element={<Suspense fallback={loading}><KbDocumentPage creating /></Suspense>} />
           <Route path="*" element={<Navigate to="/tasks" replace />} />

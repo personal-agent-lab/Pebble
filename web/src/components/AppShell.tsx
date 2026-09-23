@@ -69,6 +69,13 @@ const MEMORY_ICON = (
   </svg>
 );
 
+/** 技能入口：此前沉淀的“这类任务该怎么做”的操作说明。 */
+const SKILLS_ICON = (
+  <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M13 2 4.5 13.5H11l-1 8.5L18.5 10.5H12z" />
+  </svg>
+);
+
 /** 收起时显示的任务条数：够认出最近在做什么，又不会把下面的入口顶出视野。 */
 const COLLAPSED_COUNT = 5;
 
@@ -131,6 +138,16 @@ function MemoryLink() {
     <NavLink to="/memory" className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
       {MEMORY_ICON}
       记忆
+    </NavLink>
+  );
+}
+
+/** 技能入口：管理页，目录浏览、创建编辑与待审变更。 */
+function SkillsLink() {
+  return (
+    <NavLink to="/skills" className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
+      {SKILLS_ICON}
+      技能
     </NavLink>
   );
 }
@@ -390,6 +407,7 @@ export default function AppShell({ serviceError, children }: Props) {
         <nav className="sidebar-nav">
           <KbLink />
           <MemoryLink />
+          <SkillsLink />
           <SidebarTasks />
         </nav>
         {offline && (
@@ -407,6 +425,7 @@ export default function AppShell({ serviceError, children }: Props) {
         <TasksLink />
         <KbLink />
         <MemoryLink />
+        <SkillsLink />
       </nav>
     </div>
   );

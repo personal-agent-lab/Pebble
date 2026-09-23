@@ -218,7 +218,7 @@ class SkillService:
                 **_change_view(row),
                 "status": ChangeStatus.APPLIED.value,
                 "applied_at": now(),
-                "skill": skill,
+                "skill": skill_view(skill),
             }
         return {**_change_view(row), "status": ChangeStatus.APPLIED.value, "applied_at": now()}
 
@@ -252,7 +252,7 @@ class SkillService:
                 for path, content in (payload.get("attachments") or {}).items()
             }
             self.repository.commit_skill(skill, _commit_message(request, change_id), attachments)
-            return skill
+            return self.get(skill_id)
 
         skill_id = request.skill_id or payload.get("skill_id")
         current = self.get(skill_id)
@@ -393,6 +393,19 @@ class SkillService:
                 )
             ]
 
+    def skill_usage(self, skill_id: str, limit: int = 20) -> list[dict]:
+        """一个技能最近的加载记录，供详情页展示使用情况。"""
+
+        with session(self.db_path) as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT run_id, task_id, revision, source, loaded_at FROM skill_loads "
+                    "WHERE skill_id = ? ORDER BY loaded_at DESC LIMIT ?",
+                    (skill_id, limit),
+                )
+            ]
+
     # ------------------------------------------------------------------ 内部
 
     def _set_state(self, skill_id: str, state: SkillState) -> Skill:
@@ -492,6 +505,22 @@ def _asdict(skill: Skill) -> dict:
         "updated_at": skill.updated_at,
         "body": skill.body,
         "files": skill.files,
+    }
+
+
+def skill_view(skill: Skill) -> dict:
+    """技能的 JSON 视图；revision 是 property，需显式带出。"""
+
+    return {
+        "skill_id": skill.skill_id,
+        "name": skill.name,
+        "description": skill.description,
+        "origin": skill.origin.value,
+        "managed": skill.managed,
+        "state": skill.state.value,
+        "body": skill.body,
+        "revision": skill.revision,
+        "files": [{"path": item.relative_path, "hash": item.content_hash} for item in skill.files],
     }
 
 

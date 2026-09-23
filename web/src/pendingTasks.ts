@@ -8,13 +8,14 @@
 
 import { useSyncExternalStore } from "react";
 
-import { ApiError, createTask } from "./api";
+import { ApiError, createTask, type SkillSelection } from "./api";
 
 export type PendingTask = {
   taskId: string;
   message: string;
   model: string;
   files: File[];
+  selection: SkillSelection;
   status: "sending" | "failed" | "created";
   error: ApiError | null;
 };
@@ -66,7 +67,7 @@ async function submit(taskId: string): Promise<void> {
   if (entry === undefined) return;
   update(taskId, { ...entry, status: "sending", error: null });
   try {
-    await createTask(entry.message, entry.model, entry.files, taskId);
+    await createTask(entry.message, entry.model, entry.files, taskId, entry.selection);
     writeStored(taskId, null);
     const current = pending.get(taskId);
     if (current !== undefined) update(taskId, { ...current, status: "created" });
@@ -80,9 +81,14 @@ async function submit(taskId: string): Promise<void> {
 }
 
 /** 登记并开始创建任务，立即返回任务标识供页面跳转。 */
-export function startTask(message: string, model: string, files: File[]): string {
+export function startTask(
+  message: string,
+  model: string,
+  files: File[],
+  selection: SkillSelection,
+): string {
   const taskId = crypto.randomUUID();
-  update(taskId, { taskId, message, model, files, status: "sending", error: null });
+  update(taskId, { taskId, message, model, files, selection, status: "sending", error: null });
   writeStored(taskId, { message, files: files.length });
   void submit(taskId);
   return taskId;

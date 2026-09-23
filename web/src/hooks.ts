@@ -7,12 +7,17 @@ import {
   type MessageTarget,
   type OperationSummary,
   type Run,
+  type SkillSelection,
+  type SkillSummary,
+  type SkillUsageRecord,
   type Task,
   type TaskDetail,
   type TimelineItem,
   getTask,
+  getTaskSkillUsage,
   getTimeline,
   listOperations,
+  listSkills,
   listTasks,
   sendMessage,
   retryLastMessage,
@@ -49,6 +54,24 @@ function usePolling(run: () => void, intervalMs: number, enabled: boolean): void
 }
 
 export type TaskEntry = { task: Task; latestRun: Run | null; operations: OperationSummary[] };
+
+/** 启用中的技能目录：输入框的技能选择用；读不到时不显示选择器，不影响发消息。 */
+export function useSkillCatalog(): SkillSummary[] | null {
+  const [skills, setSkills] = useState<SkillSummary[] | null>(null);
+  useEffect(() => {
+    void listSkills().then(setSkills).catch(() => setSkills([]));
+  }, []);
+  return skills;
+}
+
+/** 一个任务已发生的技能加载记录；随时间线重读。 */
+export function useTaskSkillUsage(taskId: string, reloadKey: unknown) {
+  const [usage, setUsage] = useState<SkillUsageRecord[] | null>(null);
+  useEffect(() => {
+    void getTaskSkillUsage(taskId).then(setUsage).catch(() => setUsage(null));
+  }, [taskId, reloadKey]);
+  return usage;
+}
 export function useTaskList() {
   const [entries, setEntries] = useState<TaskEntry[] | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
@@ -133,10 +156,11 @@ export function useTaskDetail(taskId: string) {
     message: string,
     target: MessageTarget | null = null,
     files: File[] = [],
+    selection: SkillSelection | null = null,
   ) => {
     setSending(true);
     try {
-      await sendMessage(taskId, message, target, files);
+      await sendMessage(taskId, message, target, files, selection);
       await reload();
       return null;
     } catch (failure) { return toApiError(failure); }

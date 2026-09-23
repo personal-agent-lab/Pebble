@@ -103,6 +103,9 @@ class FakeAgentGateway:
                     "model": turn.model,
                     "attachments": turn.attachments,
                     "materials": turn.materials,
+                    "skills": turn.skills,
+                    "excluded_skill_ids": turn.excluded_skill_ids,
+                    "auto_match": turn.auto_match,
                 }
             )
         handler = self._handlers.get(kind)
