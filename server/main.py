@@ -11,8 +11,6 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-# 注册 Skill 工具到全局注册表
-import server.skills.tools  # noqa: F401, E402
 from server.agent.mcp import LOOPBACK_HOST, ToolServer
 from server.agent.models import ModelCatalog
 from server.api.access import AccessGuard, AccessPolicy

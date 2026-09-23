@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import default_model, get_settings
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -297,6 +297,28 @@ SCHEMA_V18 = (
     "created_at TEXT NOT NULL)",
 )
 
+# Skills 重写（contracts/skill.md，2026-09）：旧设计的运行表全部退役，正文不在 SQLite。
+# skill_changes 记录“提出与应用分离”的每次变更；skill_loads 是进入材料与 skill_view 的加载记录。
+SCHEMA_V19 = (
+    "DROP TABLE IF EXISTS skill_tool_evidence",
+    "DROP TABLE IF EXISTS skill_draft_evidence",
+    "DROP TABLE IF EXISTS skill_run_links",
+    "CREATE TABLE skill_changes (id TEXT PRIMARY KEY, "
+    "review_job_id TEXT, skill_id TEXT, "
+    "action TEXT NOT NULL CHECK(action IN ('create','patch','write_file','remove_file')), "
+    "payload TEXT NOT NULL, base_revision TEXT, reason TEXT NOT NULL, "
+    "evidence_item_ids TEXT NOT NULL, "
+    "actor TEXT NOT NULL CHECK(actor IN ('user','foreground','review')), "
+    "status TEXT NOT NULL CHECK(status IN ('proposed','applied','rejected','conflict')), "
+    "created_at TEXT NOT NULL, applied_at TEXT)",
+    "CREATE INDEX skill_changes_skill ON skill_changes(skill_id, created_at)",
+    "CREATE TABLE skill_loads (run_id TEXT NOT NULL, task_id TEXT NOT NULL, "
+    "skill_id TEXT NOT NULL, revision TEXT NOT NULL, "
+    "source TEXT NOT NULL CHECK(source IN ('manual', 'auto')), "
+    "loaded_at TEXT NOT NULL, PRIMARY KEY(run_id, skill_id))",
+    "CREATE INDEX skill_loads_skill ON skill_loads(skill_id, loaded_at)",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -316,6 +338,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     16: SCHEMA_V16,
     17: SCHEMA_V17,
     18: SCHEMA_V18,
+    19: SCHEMA_V19,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

@@ -40,10 +40,6 @@ class Turn:
     attachments: tuple[TurnAttachment, ...] = ()
     materials: tuple[Material, ...] = ()
     target_operation_id: str | None = None
-    skill_ids: list[str] = ()
-    excluded_skill_ids: list[str] = ()
-    auto_match_skills: bool = True
-    skill_refs: tuple[dict, ...] = ()
     run_id: str | None = None
     db_path: object = None
 

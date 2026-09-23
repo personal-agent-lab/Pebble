@@ -214,18 +214,17 @@ export const listModels = async () => {
 export const cachedCatalog = () => modelCatalog ?? storedCatalog();
 export const cachedModels = () => cachedCatalog()?.models ?? null;
 
-function messageForm(message: string, files: File[], target: MessageTarget | null = null, selection?: import("./features/skills/api").Selection): FormData {
+function messageForm(message: string, files: File[], target: MessageTarget | null = null): FormData {
   const body = new FormData();
   body.set("message", message);
-  if (selection !== undefined) body.set("selection", JSON.stringify(selection));
   if (target !== null) body.set("target", JSON.stringify(target));
   for (const file of files) body.append("files", file);
   return body;
 }
 
 /** `taskId` 由前端生成时兼作幂等键：重复提交同一标识返回已创建的任务。 */
-export const createTask = (message: string, model: string, files: File[], taskId?: string, selection?: import("./features/skills/api").Selection) => {
-  const body = messageForm(message, files, null, selection);
+export const createTask = (message: string, model: string, files: File[], taskId?: string) => {
+  const body = messageForm(message, files, null);
   body.set("model", model);
   if (taskId !== undefined) body.set("task_id", taskId);
   return request<{ task: Task; run: Run }>("/tasks", { method: "POST", body });
@@ -242,10 +241,9 @@ export const sendMessage = (
   message: string,
   target: MessageTarget | null = null,
   files: File[] = [],
-  selection?: import("./features/skills/api").Selection,
 ) => request<Run>(`/tasks/${taskId}/messages`, {
   method: "POST",
-  body: messageForm(message, files, target, selection),
+  body: messageForm(message, files, target),
 });
 
 export const retryLastMessage = (taskId: string) =>

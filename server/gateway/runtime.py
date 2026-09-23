@@ -162,11 +162,6 @@ class GatewayRuntime:
         message: str,
         attachments: list[PreparedAttachment],
         task_id: str | None = None,
-        *,
-        skill_ids: list[str] | None = None,
-        skill_refs: list[dict] | None = None,
-        excluded_skill_ids: list[str] | None = None,
-        auto_match_skills: bool = True,
     ) -> dict:
         """创建用户任务、保存附件并登记首轮调用；失败不留下半个任务。
 
@@ -178,27 +173,13 @@ class GatewayRuntime:
             task_id = str(uuid4())
         elif (existing := self.started_task(task_id)) is not None:
             return existing
-        from server.skills.runtime import validate_refs
-
-        validate_refs(skill_refs or [])
         goal = message.strip() or attachments[0].filename
         self._attachments.save_files(task_id, attachments)
         try:
             with session(self.path) as conn, write(conn):
                 now = timestamp()
                 operations.insert_task(conn, task_id, goal, now, model=model)
-                row = self._insert_message(
-                    conn,
-                    task_id,
-                    message,
-                    attachments,
-                    None,
-                    now,
-                    skill_ids=skill_ids,
-                    skill_refs=skill_refs,
-                    excluded_skill_ids=excluded_skill_ids,
-                    auto_match_skills=auto_match_skills,
-                )
+                row = self._insert_message(conn, task_id, message, attachments, None, now)
                 task = operations.task(conn, task_id)
         except BaseException:
             self._attachments.delete_task_files(task_id)
@@ -243,16 +224,9 @@ class GatewayRuntime:
         *,
         target: dict | None = None,
         attachments: list[PreparedAttachment] | None = None,
-        skill_ids: list[str] | None = None,
-        skill_refs: list[dict] | None = None,
-        excluded_skill_ids: list[str] | None = None,
-        auto_match_skills: bool = True,
     ) -> dict:
         """登记用户消息并返回调用记录；会话标识从任务记录读取。"""
         self.require_gateway()
-        from server.skills.runtime import validate_refs
-
-        validate_refs(skill_refs or [])
         target_operation_id = None
         if target is not None:
             if target.get("kind") != "mail_draft" or not isinstance(
@@ -282,10 +256,6 @@ class GatewayRuntime:
                     prepared,
                     target,
                     now,
-                    skill_ids=skill_ids,
-                    skill_refs=skill_refs,
-                    excluded_skill_ids=excluded_skill_ids,
-                    auto_match_skills=auto_match_skills,
                 )
         except BaseException:
             self._attachments.discard(task_id, prepared)
@@ -310,11 +280,6 @@ class GatewayRuntime:
         attachments: list[PreparedAttachment],
         target: dict | None,
         now: str,
-        *,
-        skill_ids: list[str] | None = None,
-        skill_refs: list[dict] | None = None,
-        excluded_skill_ids: list[str] | None = None,
-        auto_match_skills: bool = True,
     ) -> dict:
         run_id = str(uuid4())
         repo.insert(
@@ -326,10 +291,6 @@ class GatewayRuntime:
                 "message": message,
                 "target": target,
                 "attachment_ids": [item.file_id for item in attachments],
-                "skill_ids": skill_ids or [],
-                "skill_refs": skill_refs or [],
-                "excluded_skill_ids": excluded_skill_ids or [],
-                "auto_match_skills": auto_match_skills,
             },
             None,
             now,
@@ -574,10 +535,6 @@ class GatewayRuntime:
                 version=delivery["version"],
                 result=delivery["result"],
             )
-        # 加载 Skill 列表
-        skill_ids = payload.get("skill_ids", [])
-        excluded_skill_ids = payload.get("excluded_skill_ids", [])
-        auto_match_skills = payload.get("auto_match_skills", True)
 
         return self.gateway.stream_turn(
             Turn(
@@ -593,12 +550,8 @@ class GatewayRuntime:
                     if row["kind"] == repo.KIND_MESSAGE
                     else None
                 ),
-                skill_refs=tuple(payload.get("skill_refs", [])),
                 run_id=row["run_id"],
                 db_path=self.path,
-                skill_ids=skill_ids,
-                excluded_skill_ids=excluded_skill_ids,
-                auto_match_skills=auto_match_skills,
             )
         )
 

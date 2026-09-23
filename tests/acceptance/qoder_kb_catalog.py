@@ -112,9 +112,7 @@ class Harness:
                 )
         items = self.service.get_timeline(task_id)["items"]
         answer = "".join(
-            item["text"]
-            for item in items
-            if item["kind"] == "text" and item["role"] == "assistant"
+            item["text"] for item in items if item["kind"] == "text" and item["role"] == "assistant"
         )
         return {"answer": answer.strip(), "calls": list(self.calls)}
 

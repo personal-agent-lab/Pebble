@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import SkillPicker from "../features/skills/SkillPicker";
-import { emptySelection } from "../features/skills/api";
 import { Link, useNavigate } from "react-router-dom";
 
 import {
@@ -24,7 +22,6 @@ const initialModel = (catalog: ModelCatalog | null) =>
  */
 export default function TaskListPage() {
   const navigate = useNavigate();
-  const [selection, setSelection] = useState(emptySelection);
   const { error, reload } = useTasks();
   const [models, setModels] = useState<ModelEntry[]>(() => cachedModels() ?? []);
   const [model, setModel] = useState(() => initialModel(cachedCatalog()));
@@ -83,7 +80,7 @@ export default function TaskListPage() {
 
   // 不等服务端：先进入任务页显示这条消息，创建结果与失败处理都在任务页。
   const start = async (message: string, files: File[]) => {
-    navigate(`/tasks/${startTask(message, model, files, selection)}`);
+    navigate(`/tasks/${startTask(message, model, files)}`);
     return null;
   };
 
@@ -93,7 +90,6 @@ export default function TaskListPage() {
         <div className="hero-inner">
           <h1 className="hero-title">今天要做什么？</h1>
 
-          <SkillPicker value={selection} onChange={setSelection} />
           <Composer key={draftKey} placeholder="随心输入" sending={false}
             model={model} models={models}
             initialMessage={draft?.message} initialFiles={draft?.files}

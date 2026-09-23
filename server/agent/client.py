@@ -264,23 +264,6 @@ class QoderGateway:
     # ---------- 调用执行 ----------
 
     async def _stream(self, turn: Turn) -> AsyncIterator[AgentEvent]:
-        from server.skills.runtime import Scope, current
-
-        scope = Scope(
-            turn.run_id,
-            set(turn.excluded_skill_ids),
-            turn.auto_match_skills,
-            set(turn.skill_ids),
-            turn.db_path,
-        )
-        token = current.set(scope)
-        try:
-            async for event in self._scoped_stream(turn):
-                yield event
-        finally:
-            current.reset(token)
-
-    async def _scoped_stream(self, turn: Turn) -> AsyncIterator[AgentEvent]:
         queued: asyncio.Queue[AgentEvent] = asyncio.Queue()
         visible = exposed_tools(self.tools, allowed=ALLOWED_EFFECTS[turn.kind])
         announced: str | None = None
@@ -439,35 +422,7 @@ class QoderGateway:
     def _options(
         self, turn: Turn, *, visible: list[ToolDefinition], path: str
     ) -> QoderAgentOptions:
-        from server.skills import runtime as skills_runtime
-        from server.skills.catalog import available_catalog
-
         materials = list(turn.materials)
-        refs = list(turn.skill_refs) or [{"id": sid} for sid in turn.skill_ids]
-        skills_runtime.validate_refs(refs)
-        for ref in refs:
-            skill = skills_runtime.read(ref["id"], ref.get("revision"), "manual")
-            materials.append(
-                context.Material(title=f"用户选择的 Skill：{skill.name}", content=skill.body)
-            )
-        if turn.auto_match_skills:
-            candidates = [s for s in available_catalog() if s.id not in turn.excluded_skill_ids]
-            if candidates:
-                materials.append(
-                    context.Material(
-                        title="可用 Skill 目录",
-                        content={
-                            "说明": (
-                                "按需调用 skill_read 加载相关正文，可以不选。"
-                                "Skill 不覆盖用户本轮要求，Skill 之间冲突时追问。"
-                            ),
-                            "skills": [
-                                {"id": s.id, "name": s.name, "description": s.description}
-                                for s in candidates[:50]
-                            ],
-                        },
-                    )
-                )
         snapshot = self.memory_store.snapshot()
         memory_materials = tuple(
             context.Material(title, snapshot[target]["content"])

@@ -348,9 +348,7 @@ def test_kb_tools_are_skipped_when_store_unavailable(settings):
 
 
 def _manually_edit(path, old, new):
-    path.write_text(
-        path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8"
-    )
+    path.write_text(path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
 
 
 def test_manual_edit_then_save_another_searches_the_edited_content(settings):

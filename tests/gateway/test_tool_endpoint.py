@@ -384,9 +384,7 @@ def test_kb_destructive_tools_emit_notices_and_trigger_turns_can_only_save(setti
             {"expected_version": moved_payload["version"], "id": payload["id"]},
         )
         assert tool_payload(deleted)["path"] == "kb/课程/约定.md"
-        assert notices == [
-            "已删除资料：邀请约定。原位置：「课程」文件夹。历史版本仍保留，可以恢复"
-        ]
+        assert notices == ["已删除资料：邀请约定。原位置：「课程」文件夹。历史版本仍保留，可以恢复"]
 
         restored, notices = await call(
             message_tools, "kb_restore", {"id": payload["id"], "version": payload["version"]}

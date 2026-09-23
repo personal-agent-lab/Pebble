@@ -30,8 +30,7 @@ from tests.support.gmail_double import MockGmailClient
 
 SEED = [
     (
-        "我最近正在学习 Hermes Agent（一个开源个人助理项目）的设计，"
-        "之后大概会经常问你相关的问题。",
+        "我最近正在学习 Hermes Agent（一个开源个人助理项目）的设计，之后大概会经常问你相关的问题。",
         "好的，后续聊到 Hermes Agent 我会直接接上这个背景。",
     ),
     (

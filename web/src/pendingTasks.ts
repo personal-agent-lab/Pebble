@@ -15,7 +15,6 @@ export type PendingTask = {
   message: string;
   model: string;
   files: File[];
-  selection?: import("./features/skills/api").Selection;
   status: "sending" | "failed" | "created";
   error: ApiError | null;
 };
@@ -67,7 +66,7 @@ async function submit(taskId: string): Promise<void> {
   if (entry === undefined) return;
   update(taskId, { ...entry, status: "sending", error: null });
   try {
-    await createTask(entry.message, entry.model, entry.files, taskId, entry.selection);
+    await createTask(entry.message, entry.model, entry.files, taskId);
     writeStored(taskId, null);
     const current = pending.get(taskId);
     if (current !== undefined) update(taskId, { ...current, status: "created" });
@@ -81,9 +80,9 @@ async function submit(taskId: string): Promise<void> {
 }
 
 /** 登记并开始创建任务，立即返回任务标识供页面跳转。 */
-export function startTask(message: string, model: string, files: File[], selection?: import("./features/skills/api").Selection): string {
+export function startTask(message: string, model: string, files: File[]): string {
   const taskId = crypto.randomUUID();
-  update(taskId, { taskId, message, model, files, selection, status: "sending", error: null });
+  update(taskId, { taskId, message, model, files, status: "sending", error: null });
   writeStored(taskId, { message, files: files.length });
   void submit(taskId);
   return taskId;

@@ -390,7 +390,7 @@ def kb_delete(
     notice_renderer=_moved_notice,
     description=(
         "把资料库中的一份资料移动到别的文件夹，按 path 或 id 定位，new_path 是资料库内的新相对"
-        "路径，文件名沿用原文件名（如 \"课程/GSE Lab 1.md\"）。用户要改资料名称时改标题"
+        '路径，文件名沿用原文件名（如 "课程/GSE Lab 1.md"）。用户要改资料名称时改标题'
         "（kb_update 的 title），文件名会随之更新，不用本工具。expected_version 必填，取自最近"
         "一次读取该资料得到的 version。内容与 id 不变，历史版本随之保留；目标位置已有资料时"
         "拒绝。" + NAMING_RULE + CONSENT_RULE
@@ -405,9 +405,7 @@ def kb_move(
     *,
     kb_store: KbStore,
 ) -> dict:
-    return kb_store.move(
-        expected_version=expected_version, new_path=new_path, path=path, doc_id=id
-    )
+    return kb_store.move(expected_version=expected_version, new_path=new_path, path=path, doc_id=id)
 
 
 @tool(

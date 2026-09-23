@@ -69,13 +69,6 @@ const MEMORY_ICON = (
   </svg>
 );
 
-const SKILL_ICON = (
-  <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="4 17 10 11 4 5" />
-    <line x1="12" y1="19" x2="20" y2="19" />
-  </svg>
-);
-
 /** 收起时显示的任务条数：够认出最近在做什么，又不会把下面的入口顶出视野。 */
 const COLLAPSED_COUNT = 5;
 
@@ -139,14 +132,6 @@ function MemoryLink() {
       {MEMORY_ICON}
       记忆
     </NavLink>
-  );
-}
-
-function Placeholders() {
-  return (
-    <>
-      <NavLink to="/skills" className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>{SKILL_ICON}Skill</NavLink>
-    </>
   );
 }
 
@@ -405,7 +390,6 @@ export default function AppShell({ serviceError, children }: Props) {
         <nav className="sidebar-nav">
           <KbLink />
           <MemoryLink />
-          <Placeholders />
           <SidebarTasks />
         </nav>
         {offline && (
@@ -423,7 +407,6 @@ export default function AppShell({ serviceError, children }: Props) {
         <TasksLink />
         <KbLink />
         <MemoryLink />
-        <Placeholders />
       </nav>
     </div>
   );

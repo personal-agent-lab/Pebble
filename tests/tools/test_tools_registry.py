@@ -59,9 +59,16 @@ def test_step_descriptions_are_short_and_come_from_domain_tools():
     assert describe("kb_read", {"ref": ref}) == "正在读取资料：项目/验收.md"
     assert describe("kb_read", {"id": "kb_123"}) == "正在读取资料"
     assert describe("kb_list", {"deleted": True}) == "正在查看已删除的资料"
-    assert describe("calendar_check_conflicts", {
-        "start": "2026-09-17T15:00:00+08:00", "end": "2026-09-17T16:00:00+08:00",
-    }) == "正在检查日程冲突：2026-09-17 15:00 至 2026-09-17 16:00"
+    assert (
+        describe(
+            "calendar_check_conflicts",
+            {
+                "start": "2026-09-17T15:00:00+08:00",
+                "end": "2026-09-17T16:00:00+08:00",
+            },
+        )
+        == "正在检查日程冲突：2026-09-17 15:00 至 2026-09-17 16:00"
+    )
     assert describe("gmail_prepare_reply", {"subject": "回复：邀请"}) == "正在起草回复：回复：邀请"
     assert describe("history_search", {"query": "放弃 A 方案"}) == "正在检索过去的对话：放弃 A 方案"
     # 模型可见的前台工具都给出步骤说明

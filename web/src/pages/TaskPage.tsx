@@ -1,7 +1,4 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import SkillUsage from "../features/skills/SkillUsage";
-import SkillPicker from "../features/skills/SkillPicker";
-import { emptySelection } from "../features/skills/api";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { cachedModels, listModels, type ModelEntry, type TimelineItem } from "../api";
@@ -120,7 +117,6 @@ function TaskDetailView({ taskId, placeholder, models }: {
   const { hash } = useLocation();
   const focusItemId = hash.startsWith("#item-") ? decodeURIComponent(hash.slice("#item-".length)) : null;
   const detail = useTaskDetail(taskId);
-  const [selection, setSelection] = useState(emptySelection);
   const tasks = useTasks();
   const placeholderItems = usePlaceholderItems(detail.task === null ? placeholder : null);
 
@@ -164,7 +160,6 @@ function TaskDetailView({ taskId, placeholder, models }: {
     </TaskHeader>
 
     <div className="chat-main"><div className="feed">
-      <SkillUsage taskId={taskId} refresh={detail.items} />
       <TimelineFeed key={`${taskId}:${focusItemId ?? ""}`} taskId={taskId}
         items={waiting ? placeholderItems : detail.items} running={running}
         activity={running ? detail.activity : null}
@@ -175,12 +170,11 @@ function TaskDetailView({ taskId, placeholder, models }: {
     </div></div>
 
     <div className="msg-composer"><div className="composer-wrap">
-      <SkillPicker value={selection} onChange={setSelection} disabled={detail.sending} />
       <Composer placeholder="随心输入" sending={detail.sending} model={detail.task?.model ?? placeholder?.model ?? ""}
         models={models ?? []} modelsPending={models === null} modelLocked onSubmit={async (text, files) => {
           // 对话框里的消息让待确认的草稿失效：侧栏圆点跟着立即更新，不等下一次轮询。
-          const error = await detail.send(text, null, files, selection);
-          if (error === null) { setSelection(emptySelection()); void tasks.reload(); }
+          const error = await detail.send(text, null, files);
+          if (error === null) { void tasks.reload(); }
           return error;
         }} />
     </div></div>

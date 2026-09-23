@@ -80,6 +80,26 @@ class SkillValidationError(Exception):
         super().__init__(str(errors))
 
 
+class SkillConflictError(Exception):
+    """Skill 变更基于的版本已过期；`current_revision` 是当前内容版本。"""
+
+    def __init__(self, current_revision: str):
+        self.current_revision = current_revision
+        super().__init__(f"当前版本为 {current_revision}")
+
+
+class SkillUnknownError(Exception):
+    """技能或附件不存在，或当前状态不可读。"""
+
+    def __init__(self, target: str):
+        self.target = target
+        super().__init__(f"技能不存在：{target}")
+
+
+class SkillStoreUnavailableError(Exception):
+    """Skill 文件或本地版本仓库当前不可用。"""
+
+
 class MemoryValidationError(Exception):
     """长期记忆操作的字段或定位条件不合法；`memory` 是交回模型重新定位用的带锚点最新内容。"""
 
@@ -170,6 +190,16 @@ def error_details(error: Exception) -> dict | None:
         return {"error": "invalid_draft", "message": "待确认内容未通过校验", "errors": error.errors}
     if isinstance(error, SkillValidationError):
         return {"error": "invalid_skill", "message": "Skill 字段校验未通过", "errors": error.errors}
+    if isinstance(error, SkillConflictError):
+        return {
+            "error": "skill_conflict",
+            "message": str(error),
+            "current_revision": error.current_revision,
+        }
+    if isinstance(error, SkillUnknownError):
+        return {"error": "unknown_skill", "message": str(error)}
+    if isinstance(error, SkillStoreUnavailableError):
+        return {"error": "skill_store_unavailable", "message": str(error)}
     if isinstance(error, MemoryValidationError):
         return {
             "error": "invalid_memory",

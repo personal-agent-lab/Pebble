@@ -556,9 +556,7 @@ class KbStore:
             self._git("mv", "--", rel, new_rel)
             title = meta.get("title") or new_rel
             try:
-                self._git(
-                    "commit", "--quiet", "-m", f"[Kb] Move {title}", "--", rel, new_rel
-                )
+                self._git("commit", "--quiet", "-m", f"[Kb] Move {title}", "--", rel, new_rel)
             except KbStoreUnavailableError:
                 self._git_raw("mv", "--", new_rel, rel)
                 raise
@@ -573,9 +571,7 @@ class KbStore:
                 "index_status": index_status,
             }
 
-    def restore(
-        self, *, version: str, path: str | None = None, doc_id: str | None = None
-    ) -> dict:
+    def restore(self, *, version: str, path: str | None = None, doc_id: str | None = None) -> dict:
         """把资料恢复为某个历史版本；已删除的资料在该版本所在路径重建。恢复产生新提交。"""
         with self._lock:
             self._intake()
@@ -909,9 +905,7 @@ class KbStore:
             cleaned = cleaned[3:]
         parts = cleaned.strip("/").split("/")
         if any(part in ("", ".", "..") for part in parts):
-            raise KbValidationError(
-                [{"field": "directory", "message": "目录必须位于资料库内"}]
-            )
+            raise KbValidationError([{"field": "directory", "message": "目录必须位于资料库内"}])
         return "kb/" + "/".join(parts)
 
     @staticmethod

@@ -133,11 +133,10 @@ export function useTaskDetail(taskId: string) {
     message: string,
     target: MessageTarget | null = null,
     files: File[] = [],
-    selection?: import("./features/skills/api").Selection,
   ) => {
     setSending(true);
     try {
-      await sendMessage(taskId, message, target, files, selection);
+      await sendMessage(taskId, message, target, files);
       await reload();
       return null;
     } catch (failure) { return toApiError(failure); }

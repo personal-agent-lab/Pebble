@@ -18,10 +18,6 @@ GITIGNORE = """*
 !kb/**
 !skills/
 !skills/**
-!skill_drafts/
-!skill_drafts/**
-!skill_archives/
-!skill_archives/**
 """
 
 _locks_guard = threading.Lock()

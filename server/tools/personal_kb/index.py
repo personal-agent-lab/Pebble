@@ -118,9 +118,7 @@ def _body_start(lines: list[str]) -> int:
     return 0
 
 
-def _section(
-    title: str, lines: list[str], start: int, end: int, name: str | None
-) -> list[Section]:
+def _section(title: str, lines: list[str], start: int, end: int, name: str | None) -> list[Section]:
     first, last = start, min(end, len(lines) - 1)
     while first <= last and not lines[first].strip():
         first += 1

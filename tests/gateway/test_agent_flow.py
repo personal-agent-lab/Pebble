@@ -175,9 +175,7 @@ async def test_program_notice_is_persisted_in_timeline(flow):
 
     items = flow.service.get_timeline(task["task_id"])["items"]
     notices = [item for item in items if item["kind"] == "notice"]
-    assert [item["text"] for item in notices] == [
-        "已保存资料：会议纪要。位置：kb/inbox/note.md"
-    ]
+    assert [item["text"] for item in notices] == ["已保存资料：会议纪要。位置：kb/inbox/note.md"]
 
 
 async def test_current_step_is_published_readable_and_cleared_without_entering_timeline(flow):
@@ -642,8 +640,7 @@ async def test_retry_rejects_interrupted_turn_that_already_created_an_operation(
             ),
         )
         conn.execute(
-            "INSERT INTO operations VALUES "
-            "('op-during-run', 'calendar', ?, 1, 'created', ?, ?)",
+            "INSERT INTO operations VALUES ('op-during-run', 'calendar', ?, 1, 'created', ?, ?)",
             (
                 task["task_id"],
                 "2026-09-17T00:00:02+00:00",
