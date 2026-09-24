@@ -67,7 +67,9 @@ test("根目录只列第一层：文件夹在前，根目录资料在后", async
   expect(screen.getByRole("link", { name: /项目/ }).getAttribute("href")).toBe(`/kb?dir=${encodeURIComponent("项目")}`);
   expect(screen.getByRole("link", { name: /inbox/ })).toBeTruthy();
   expect(screen.queryByRole("link", { name: /星云验收纪要/ })).toBeNull();
-  expect(screen.getByText("3 份资料")).toBeTruthy();
+  // 页头只有标题一行，不再显示总份数；份数留在各自的文件夹行上。
+  expect(screen.queryByText("3 份资料")).toBeNull();
+  expect(screen.getAllByText("1 份资料")).toHaveLength(2);
 });
 
 test("点进文件夹列出其中资料，面包屑回到根目录", async () => {
@@ -213,7 +215,7 @@ test("资料行的“⋯”菜单：重命名改标题，完成后提示并刷�
   await user.type(input, "使用说明{Enter}");
 
   expect(update).toHaveBeenCalledWith("kb/说明.md", "c3", { title: "使用说明" });
-  expect(await screen.findByText("已重命名为「使用说明」")).toBeTruthy();
+  expect(await screen.findByText("已重命名")).toBeTruthy();
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
@@ -243,7 +245,7 @@ test("移动对话框：进入文件夹、在里面新建文件夹后移到这�
 
   await user.click(screen.getByRole("button", { name: "移到这里" }));
   expect(move).toHaveBeenCalledWith("kb/说明.md", "c3", "项目/归档/说明.md");
-  expect(await screen.findByText("已把「资料说明」移动到资料库 / 项目 / 归档")).toBeTruthy();
+  expect(await screen.findByText("已移动")).toBeTruthy();
 });
 
 test("删除在对话框里确认；失败原因留在框里", async () => {

@@ -1,4 +1,4 @@
-/** 已保存时间线与实时事件的唯一前端读取 Module。 */
+/** 前端共享 hooks：已保存时间线与实时事件的读取，以及各页共用的操作结果提示。 */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -9,12 +9,10 @@ import {
   type Run,
   type SkillSelection,
   type SkillSummary,
-  type SkillUsageRecord,
   type Task,
   type TaskDetail,
   type TimelineItem,
   getTask,
-  getTaskSkillUsage,
   getTimeline,
   listOperations,
   listSkills,
@@ -26,6 +24,21 @@ import {
 
 const LIST_POLL_MS = 5000;
 const EXECUTION_POLL_MS = 1500;
+
+/** 操作结果提示是瞬时确认，各页共用同一个停留时长。 */
+const NOTE_DISMISS_MS = 3000;
+
+/** 操作结果的一句话提示：setNote 写入后停留 3 秒自动收起，旧结果不留在页面上。 */
+export function useNote(): [string | null, (message: string | null) => void] {
+  const [note, setNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (note === null) return;
+    const timer = window.setTimeout(() => setNote(null), NOTE_DISMISS_MS);
+    return () => window.clearTimeout(timer);
+  }, [note]);
+  return [note, setNote];
+}
+
 const toApiError = (error: unknown) =>
   error instanceof ApiError ? error : new ApiError("offline", String(error), 0);
 
@@ -62,15 +75,6 @@ export function useSkillCatalog(): SkillSummary[] | null {
     void listSkills().then(setSkills).catch(() => setSkills([]));
   }, []);
   return skills;
-}
-
-/** 一个任务已发生的技能加载记录；随时间线重读。 */
-export function useTaskSkillUsage(taskId: string, reloadKey: unknown) {
-  const [usage, setUsage] = useState<SkillUsageRecord[] | null>(null);
-  useEffect(() => {
-    void getTaskSkillUsage(taskId).then(setUsage).catch(() => setUsage(null));
-  }, [taskId, reloadKey]);
-  return usage;
 }
 export function useTaskList() {
   const [entries, setEntries] = useState<TaskEntry[] | null>(null);

@@ -209,3 +209,104 @@ test("后台记忆整理提示带查看记忆入口，其他提示不带", () =>
   expect(links).toHaveLength(1);
   expect(links.every((link) => link.getAttribute("href") === "/memory")).toBe(true);
 });
+
+const toolCall = (item_id: string, name: string, status: "ok" | "error"): Extract<TimelineItem, { kind: "tool" }> => ({
+  item_id, kind: "tool", run_id: "run-1", tool_call_id: "3f2a19c0" + item_id, name,
+  arguments: { skill_id: "weekly-report" }, status,
+  result: "# 周报整理\n\n适用场景：每周五汇总本周日程与邮件。",
+  created_at: "2026-09-24T14:32:00Z",
+});
+
+test("工具分隔的一轮回答只在结束后出现一个复制按钮", async () => {
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  const items: TimelineItem[] = [
+    answer("before-tool", "先读取技能", "2026-09-24T14:31:00Z"),
+    toolCall("tool-1", "skill_view", "ok"),
+    answer("after-tool", "按技能完成周报", "2026-09-24T14:33:00Z"),
+  ];
+  const props = { taskId: "task-1", items, activeRunId: "run-1",
+    sendMessage: vi.fn(), onChanged: vi.fn() };
+  const { rerender } = render(<TimelineFeed {...props} running={true} />);
+  expect(screen.queryByRole("button", { name: "复制回答" })).toBeNull();
+
+  rerender(<TimelineFeed {...props} running={false} />);
+  const buttons = screen.getAllByRole("button", { name: "复制回答" });
+  expect(buttons).toHaveLength(1);
+  await userEvent.click(buttons[0]);
+  expect(writeText).toHaveBeenCalledWith("先读取技能\n\n按技能完成周报");
+});
+
+test("工具调用渲染为可折叠细行，展开显示完整参数与返回", async () => {
+  const items: TimelineItem[] = [
+    { item_id: "ask", kind: "text", role: "user", run_id: "run-1", text: "整理周报", created_at: "2026-09-24T14:31:00Z" },
+    toolCall("tool-1", "skill_view", "ok"),
+    toolCall("tool-2", "calendar_query", "error"),
+    answer("text-1", "本周有 3 个日程", "2026-09-24T14:33:00Z"),
+  ];
+  render(<TimelineFeed taskId="task-1" items={items} running={false}
+    sendMessage={vi.fn()} onChanged={vi.fn()} />);
+
+  // 已识别工具用动作与对象，未知工具回退原名和短参数。
+  expect(screen.getByText("已读取技能")).toBeTruthy();
+  expect(screen.getByText("「weekly-report」")).toBeTruthy();
+  expect(screen.getByText("calendar_query")).toBeTruthy();
+  expect(screen.getByText("失败")).toBeTruthy();
+  expect(screen.queryByText("返回")).toBeNull();
+
+  await userEvent.click(screen.getByRole("button", { name: "展开已读取技能 weekly-report" }));
+  expect(screen.getByText("返回")).toBeTruthy();
+  expect(screen.getByText("skill_view")).toBeTruthy();
+  expect(screen.getByText(/适用场景：每周五汇总本周日程与邮件/)).toBeTruthy();
+  expect(screen.getByText("weekly-report")).toBeTruthy();
+
+  await userEvent.click(screen.getByRole("button", { name: "收起已读取技能 weekly-report" }));
+  expect(screen.queryByText("返回")).toBeNull();
+});
+
+test("未完成工具在运行中和中断后给出不同说明", async () => {
+  const pending: TimelineItem = {
+    ...toolCall("tool-pending", "WebFetch", "ok"), status: "running", result: null,
+  };
+  const props = { taskId: "task-1", items: [pending], activeRunId: "run-1",
+    sendMessage: vi.fn(), onChanged: vi.fn() };
+  const { rerender } = render(<TimelineFeed {...props} running={true} />);
+  expect(screen.getByText("正在读取网页")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "展开正在读取网页" }));
+  expect(screen.getByText("工具仍在运行")).toBeTruthy();
+
+  rerender(<TimelineFeed {...props} running={false} />);
+  expect(screen.queryByText("正在读取网页")).toBeNull();
+  expect(screen.getByText("读取网页")).toBeTruthy();
+  expect(screen.getByText("未记录结果")).toBeTruthy();
+  expect(screen.getByText("中断时未记录结果")).toBeTruthy();
+});
+
+test("依据跳转定位到工具行时自动展开并短暂高亮", () => {
+  const items: TimelineItem[] = [
+    { item_id: "ask", kind: "text", role: "user", run_id: "run-1", text: "整理周报", created_at: "2026-09-24T14:31:00Z" },
+    toolCall("tool-1", "skill_view", "ok"),
+  ];
+  const { container } = render(<TimelineFeed taskId="task-1" items={items} running={false}
+    focusItemId="tool-1" sendMessage={vi.fn()} onChanged={vi.fn()} />);
+
+  expect(container.querySelector("#item-tool-1")?.getAttribute("data-focus")).toBe("true");
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  // 跳转落点自动展开，完整调用一眼可见。
+  expect(screen.getByText("返回")).toBeTruthy();
+});
+
+test("末条是工具行时贴底判断不崩溃，新增内容照常滚动", () => {
+  const items: TimelineItem[] = [
+    { item_id: "ask", kind: "text", role: "user", run_id: "run-1", text: "整理周报", created_at: "2026-09-24T14:31:00Z" },
+    toolCall("tool-1", "skill_view", "ok"),
+  ];
+  const props = { taskId: "task-1", running: false, sendMessage: vi.fn(), onChanged: vi.fn() };
+  const { rerender } = render(<TimelineFeed {...props} items={items} />);
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+
+  rerender(<TimelineFeed {...props} items={[...items,
+    answer("text-1", "本周有 3 个日程", "2026-09-24T14:33:00Z"),
+  ]} />);
+  expect(scrollIntoView).toHaveBeenCalledTimes(2);
+});

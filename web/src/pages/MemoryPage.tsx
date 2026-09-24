@@ -11,6 +11,7 @@ import {
 import AppShell from "../components/AppShell";
 import KbEditor from "../components/KbEditor";
 import Notice from "../components/Notice";
+import { useNote } from "../hooks";
 
 /** 分区说明与服务端 `memory_edit` 工具说明里的分区标准一致：写的是用户本人，还是用户以外的事实。 */
 const SECTIONS: { target: MemoryTarget; title: string; hint: string }[] = [
@@ -84,7 +85,7 @@ function MemoryDocument({ target, title, hint, section, onSaved, onReload, onDir
   const [editorKey, setEditorKey] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const [note, setNote] = useNote();
 
   const dirty = touched || (baseline.current !== null && draft !== null && draft !== baseline.current);
   useEffect(() => { onDirty(target, dirty); }, [target, dirty, onDirty]);
@@ -135,6 +136,24 @@ function MemoryDocument({ target, title, hint, section, onSaved, onReload, onDir
           <div className="memory-hint">{hint}</div>
         </div>
         <Usage chars={chars} limit={section.usage.limit} />
+
+        {/* 保存与放弃跟着被编辑的文档，出现在分区头右端——与技能详情的操作条同一个位置。
+            只在有改动（或刚保存完要说明结果）时出现，与“只打开不编辑不产生保存”一致。 */}
+        {(dirty || note !== null) && (
+          <div className="memory-actions">
+            {dirty ? (
+              <>
+                {over && <span className="memory-over">超出上限，先精简再保存</span>}
+                <button type="button" className="btn-secondary" disabled={saving} onClick={reset}>放弃修改</button>
+                <button type="button" className="btn" disabled={saving || over} onClick={() => void save()}>
+                  {saving ? "保存中…" : "保存"}
+                </button>
+              </>
+            ) : (
+              <span className="memory-note" role="status">{note}</span>
+            )}
+          </div>
+        )}
       </div>
 
       {error !== null && (
@@ -171,21 +190,6 @@ function MemoryDocument({ target, title, hint, section, onSaved, onReload, onDir
         />
       </div>
 
-      {(dirty || note !== null) && (
-        <div className="memory-actions">
-          {dirty ? (
-            <>
-              {over && <span className="memory-over">超出上限，先精简再保存</span>}
-              <button type="button" className="btn-secondary" disabled={saving} onClick={reset}>放弃修改</button>
-              <button type="button" className="btn" disabled={saving || over} onClick={() => void save()}>
-                {saving ? "保存中…" : "保存"}
-              </button>
-            </>
-          ) : (
-            <span className="memory-note" role="status">{note}</span>
-          )}
-        </div>
-      )}
     </section>
   );
 }
@@ -231,7 +235,7 @@ export default function MemoryPage() {
   return (
     <AppShell serviceError={loadError}>
       <div className="topbar">
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="topbar-text">
           <h2>记忆</h2>
         </div>
       </div>

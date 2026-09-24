@@ -44,6 +44,7 @@ flowchart TD
 | Agent Loop | 经 SDK 调用模型与工具，按目录常驻与正文按需加载 Skills | `server/agent/` |
 | Memory | 长期记忆文件，每轮判断与后台回顾写入 | `server/memory/` |
 | Skills | 三种来源、按 managed 分流的变更与审批、目录加载、文件与 Git 版本历史 | `server/skills/` |
+| Observability | 每轮材料、SDK 用量与上下文、工具耗时、压缩及关键静默降级的任务页执行详情；引用既有轨迹，不复制正文 | `server/observability/` |
 | Tools | 集中注册与调用；各实现负责自己的认证、协议与校验 | `server/tools/` |
 | Session Store | 任务、会话关联、固定模型、运行状态、时间线、附件、待确认内容与版本、确认与执行结果 | `server/sessions/`、`attachments.py`、`server/approval/` |
 | Trigger Source | 触发源插孔与 Gmail 增量检测 | `server/gateway/runtime.py`、`server/tools/gmail/sync.py` |
@@ -62,7 +63,8 @@ Pebble/
 │   ├── sessions/       # 任务、运行、时间线与历史检索
 │   ├── approval/       # Confirmation
 │   ├── memory/         # 记忆读写、静默的每轮判断、后台回顾与提示
-│   └── skills/         # 技能模型与文件版本、变更服务、Agent 工具与加载装配
+│   ├── skills/         # 技能模型与文件版本、变更服务、Agent 工具与加载装配
+│   └── observability/  # 每轮运行摘要与步骤、用量口径及只读查询
 ├── tests/              # api/、agent/、gateway/、storage/、tools/、support/；acceptance/ 为真实模型验收
 └── docs/
 ```

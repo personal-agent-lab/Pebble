@@ -21,9 +21,9 @@ import {
   type KbAction,
 } from "../components/KbDialogs";
 import Notice from "../components/Notice";
+import { useNote } from "../hooks";
 import {
   breadcrumbs,
-  countIn,
   displayTitle,
   documentLink,
   folderExists,
@@ -59,14 +59,14 @@ function folderLabel(path: string): string {
 // 文件夹行没有菜单，留同宽的空位，时间列与资料行上下对齐。
 function FolderRow({ folder }: { folder: KbFolderEntry }) {
   return (
-    <div className="kb-row">
-      <Link className="kb-row-link" to={folderLink(folder.path)}>
+    <div className="list-item">
+      <Link className="list-link" to={folderLink(folder.path)}>
         {FOLDER_ICON}
-        <span className="kb-row-title">{folder.name}</span>
-        <span className="kb-row-summary">{folder.count > 0 ? `${folder.count} 份资料` : "空文件夹"}</span>
-        <span className="kb-row-time">{folder.updated_at ? shortTime(folder.updated_at) : "—"}</span>
+        <span className="list-title">{folder.name}</span>
+        <span className="list-sub">{folder.count > 0 ? `${folder.count} 份资料` : "空文件夹"}</span>
+        <span className="list-time">{folder.updated_at ? shortTime(folder.updated_at) : "—"}</span>
       </Link>
-      <span className="kb-row-slot" />
+      <span className="list-slot" />
     </div>
   );
 }
@@ -74,12 +74,12 @@ function FolderRow({ folder }: { folder: KbFolderEntry }) {
 function DocumentRow({ document, onAction }: { document: KbListItem; onAction: (action: KbAction) => void }) {
   const target = { path: document.path, version: document.version, title: displayTitle(document) };
   return (
-    <div className="kb-row">
-      <Link className="kb-row-link" to={documentLink(document.path)}>
+    <div className="list-item">
+      <Link className="list-link" to={documentLink(document.path)}>
         {DOC_ICON}
-        <span className="kb-row-title">{displayTitle(document)}</span>
-        {document.summary && <span className="kb-row-summary">{document.summary}</span>}
-        <span className="kb-row-time">{document.updated_at ? shortTime(document.updated_at) : ""}</span>
+        <span className="list-title">{displayTitle(document)}</span>
+        {document.summary && <span className="list-sub">{document.summary}</span>}
+        <span className="list-time">{document.updated_at ? shortTime(document.updated_at) : ""}</span>
       </Link>
       <KbItemMenu
         onRename={() => onAction({ kind: "rename", target })}
@@ -224,7 +224,7 @@ export default function KbPage() {
   const [error, setError] = useState<ApiError | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [action, setAction] = useState<KbAction | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const [note, setNote] = useNote();
 
   const load = useCallback(async () => {
     try {
@@ -287,25 +287,21 @@ export default function KbPage() {
             {BACK_ICON}
           </Link>
         )}
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="topbar-text">
           {/* 子文件夹里标题就是当前文件夹，面包屑只列上级路径，不重复当前名。 */}
-          <h2 className="kb-title">{current !== undefined ? <>{FOLDER_ICON}{current.name}</> : "资料"}</h2>
-          <nav className="kb-crumbs" aria-label="当前位置">
-            {current !== undefined && (
-              <span>
-                <Link to={folderLink("")}>资料库</Link>
-                {parents.map((crumb) => (
-                  <span key={crumb.path}>
-                    <span className="kb-crumb-sep">/</span>
-                    <Link to={folderLink(crumb.path)}>{crumb.name}</Link>
-                  </span>
-                ))}
-              </span>
-            )}
-            {documents !== null && (
-              <span className="kb-crumb-count">{countIn(documents, dir)} 份资料</span>
-            )}
-          </nav>
+          <h2 className="kb-page-title">{current !== undefined ? <>{FOLDER_ICON}{current.name}</> : "资料"}</h2>
+          {/* 只有进了文件夹才有第二行；根目录页头与记忆、技能一样只有标题一行。 */}
+          {current !== undefined && (
+            <nav className="kb-crumbs" aria-label="当前位置">
+              <Link to={folderLink("")}>资料库</Link>
+              {parents.map((crumb) => (
+                <span key={crumb.path}>
+                  <span className="kb-crumb-sep">/</span>
+                  <Link to={folderLink(crumb.path)}>{crumb.name}</Link>
+                </span>
+              ))}
+            </nav>
+          )}
         </div>
         {exists && (
           <NewMenu onDocument={() => navigate(newDocumentLink(dir))} onFolder={() => setCreatingFolder(true)} />
@@ -345,11 +341,11 @@ export default function KbPage() {
                 <div className="empty-title">{dir ? "这个文件夹还是空的" : "还没有资料"}</div>
                 <div className="empty-sub">新建一份，或在对话里让 Agent 帮你保存。</div>
               </div>
-            : <div className="kb-list">
-                <div className="kb-list-head" aria-hidden="true">
+            : <div className="list">
+                <div className="list-head" aria-hidden="true">
                   <span>名称</span>
-                  <span className="kb-row-time">最近更新</span>
-                  <span className="kb-row-slot" />
+                  <span className="list-time">最近更新</span>
+                  <span className="list-slot" />
                 </div>
                 {view.folders.map((folder) => <FolderRow key={folder.path} folder={folder} />)}
                 {view.documents.map((document) => (
@@ -368,15 +364,15 @@ export default function KbPage() {
       )}
       {action?.kind === "rename" && (
         <RenameDialog target={action.target} onClose={closeAction}
-          onDone={() => finish()} />
+          onDone={() => finish("已重命名")} />
       )}
       {action?.kind === "move" && (
         <MoveDialog target={action.target} onClose={closeAction}
-          onDone={() => finish()} />
+          onDone={() => finish("已移动")} />
       )}
       {action?.kind === "delete" && (
         <DeleteDialog target={action.target} onClose={closeAction}
-          onDone={() => finish(`已删除「${action.target.title}」`)} />
+          onDone={() => finish("已删除")} />
       )}
     </AppShell>
   );

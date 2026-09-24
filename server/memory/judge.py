@@ -59,7 +59,7 @@ def recent_text_items(conn: sqlite3.Connection, task_id: str) -> list[dict]:
             "SELECT rowid FROM agent_runs "
             "WHERE task_id = ? AND kind = 'message' AND status = 'done' "
             "ORDER BY rowid DESC LIMIT ?)), 0) "
-            "ORDER BY i.rowid",
+            "ORDER BY i.sequence",
             (task_id, task_id, JUDGE_RECENT_TURNS),
         )
     ]

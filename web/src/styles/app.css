@@ -249,8 +249,11 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .main {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   background: var(--color-surface);
-  /* 对话栏窄一档保证行长可读；表单与列表页要放下两列，用宽一档的页面栏。 */
-  --feed-col: 760px; --page-col: 1000px;
+  /* 全站只有一个内容栏：页头、列表、长文正文、对话流与输入框都放进同一条 800px 的栏里，
+     左右边缘因此逐像素对齐。--page-col 是栏内宽度，外面还要加两侧 --page-gutter。
+     长文阅读栏过去单独收窄到 760px，那会让同一页的页头与正文错开，已并入这一条。 */
+  --page-col: 800px;
+  --page-gutter: 24px;
 }
 
 .tabbar { display: none; }
@@ -268,13 +271,22 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 }
 
 /* ===== 顶栏 ===== */
+/* 页头与内容共用一条栏：同宽、同左右内边距、同样居中。标题左边缘因此与列表左边缘对齐，
+   右侧主操作与列表右边缘对齐——资料页过去只在正文居中、顶栏通排，按钮比列表宽出一大截。
+   三个页面（以及资料根目录）的页头现在都只有标题一行，高度由 min-height 统一：
+   28 + 34（主按钮）+ 12 = 74，没按钮的页面也占同样高度，内容起始位置一致。 */
+.topbar, .content, .chat-top {
+  width: 100%; max-width: calc(var(--page-col) + var(--page-gutter) * 2);
+  margin: 0 auto; padding-left: var(--page-gutter); padding-right: var(--page-gutter);
+}
 .topbar {
   display: flex; align-items: center; gap: 14px;
-  padding: 12px 20px;
+  padding-top: 28px; padding-bottom: 12px; min-height: 74px;
 }
-.topbar h2 { font-size: var(--text-lg); font-weight: 600; margin: 0; }
+.topbar-text, .chat-top-text { flex: 1; min-width: 0; }
+.topbar h2, .chat-top h2 { font-size: var(--text-lg); font-weight: 600; line-height: 1.3; margin: 0; }
 .topbar .sub { font-size: var(--text-xs); color: var(--color-muted); }
-.content { flex: 1; padding: 20px 24px; min-width: 0; width: 100%; max-width: var(--page-col); margin: 0 auto; }
+.content { flex: 1; padding-top: 20px; padding-bottom: 20px; min-width: 0; }
 
 /* ===== 新任务（居中输入） ===== */
 /* 这一页只有一件事：写下目标。输入框放在视线中央，周围不摆别的内容。 */
@@ -429,30 +441,83 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 
 /* ===== 对话 ===== */
 .chat-top {
-  display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+  display: flex; align-items: center; gap: 12px;
+  padding-top: 28px; padding-bottom: 12px; min-height: 74px;
 }
 /* 标题一行截断：首轮结束前这里是触发文案或用户首句，原文在下方对话里读得到；
-   首个调用结束后会被模型的短标题替换，与侧栏同一份文案。 */
-.chat-top h2 {
-  font-size: var(--text-lg); font-weight: 600; margin: 0; line-height: 1.3;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
+   首个调用结束后会被模型的短标题替换，与侧栏同一份文案。字号字重与 .topbar h2 同一套规则。 */
+.chat-top h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-top .sub { font-size: var(--text-xs); color: var(--color-muted); margin-top: 2px; }
 .chat-top .back, .topbar .back { flex: none; color: var(--color-muted); background: none; border: none; padding: 4px; cursor: pointer; display: grid; }
 .chat-top .back:hover, .topbar .back:hover { color: var(--color-fg); }
 
 .chat-main { flex: 1; display: flex; min-height: 0; }
 .feed {
-  flex: 1; min-width: 0; overflow-y: auto; padding: 24px;
+  flex: 1; min-width: 0; overflow-y: auto; padding: 24px var(--page-gutter);
   display: flex; flex-direction: column; align-items: center; gap: var(--spacing-lg);
 }
-/* 消息、待确认卡与结果卡共用一个阅读栏宽，右边缘对齐；
+/* 消息、待确认卡与结果卡共用一个阅读栏宽，右边缘对齐；这一栏与外层的页头、内容栏同宽，
+   从列表页切到对话页时左右边缘不会跳。
    消息流按自身高度堆叠后再滚动：带 overflow 的子项（如操作卡）自动最小尺寸为 0，
    不禁止收缩就会被压扁裁掉内容，且 feed 不产生溢出、整条消息流无法滚动。 */
-.feed > * { flex: none; width: 100%; max-width: var(--feed-col); }
+.feed > * { flex: none; width: 100%; max-width: var(--page-col); }
 
 .sys-row { display: flex; align-items: center; gap: 8px; font-size: var(--text-xs); color: var(--color-muted); }
 .sys-row .rule { flex: 1; height: 1px; background: var(--color-border-subtle); }
+
+/* 工具调用轨迹行：收起是与 notice 同级的系统细行（动作、对象、状态），
+   展开是完整参数与返回内容的小面板；面板限高内部滚动，长返回不撑爆页面。 */
+.tool-call { display: flex; flex-direction: column; gap: 6px; }
+.tool-call-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 0;
+  font: inherit; font-size: var(--text-xs); color: var(--color-muted);
+  background: none; border: none; cursor: pointer; text-align: left;
+}
+.tool-call-row:hover .tool-call-name { text-decoration: underline; }
+.tool-call-icon { flex: none; color: var(--status-success); }
+.tool-call-icon.pending { color: var(--color-muted); }
+.tool-call-row.failed .tool-call-icon { color: var(--color-danger); }
+.tool-call-name { flex: none; font-family: var(--font-mono); font-weight: 510; }
+.tool-call-name.readable { font-family: inherit; }
+.tool-call-args {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  opacity: 0.85;
+}
+.tool-call-failed { flex: none; color: var(--color-danger); font-weight: 510; }
+.tool-call-row .rule { flex: 1; height: 1px; background: var(--color-border-subtle); }
+/* 面板是固定高的滚动区：子项必须保持自然高度，缩下去就会让 pre 溢出自己的盒子，
+   压住底部元信息行并盖过卡片下边框（返回值一长就出现）。横向一并裁掉，
+   免得不换行的长值（长 URL、长 ID）把面板撑宽、横向溢出卡片。 */
+.tool-call-panel {
+  display: flex; flex-direction: column; gap: 8px; max-height: 40vh; overflow: hidden auto;
+  border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
+  padding: 10px 12px; font-size: var(--text-xs);
+}
+.tool-call-raw-name { color: var(--color-muted); }
+.tool-call-raw-name code { font-family: var(--font-mono); }
+.tool-call-fields { display: flex; flex-direction: column; gap: 4px; margin: 0; flex: none; }
+.tool-call-field { display: grid; grid-template-columns: minmax(80px, max-content) minmax(0, 1fr); gap: 8px; }
+.tool-call-field dt {
+  font-family: var(--font-mono); color: var(--color-muted);
+  overflow: hidden; text-overflow: ellipsis;
+}
+.tool-call-field dd { margin: 0; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+/* 结果块与底部元信息行都不参与收缩：pre 的高度就是内容的真实高度，
+   装不下时由面板滚动，而不是把 pre 压扁后让它画到隔壁去。 */
+.tool-call-result { display: flex; flex-direction: column; gap: 4px; flex: none; }
+.tool-call-label { color: var(--color-muted); }
+.tool-call-result pre {
+  margin: 0; font-family: var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.tool-call-meta {
+  display: flex; align-items: center; gap: 10px; flex: none; color: var(--color-muted);
+  border-top: 1px solid var(--color-border-subtle); padding-top: 8px;
+}
+.tool-call-copy {
+  margin-left: auto; padding: 0; font: inherit; font-size: var(--text-xs);
+  color: var(--color-accent); background: none; border: none; cursor: pointer;
+}
+.tool-call-copy:hover { text-decoration: underline; }
 
 /* Agent 说的话是正文，不装进气泡也不摆头像：整栏通排，
    与下方操作卡、结果卡逐像素同边。用户消息才是靠右收缩的气泡。 */
@@ -631,9 +696,9 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .md th { font-weight: 600; white-space: nowrap; background: color-mix(in oklch, var(--color-fg) 4%, transparent); }
 
 .msg-composer {
-  padding: 4px 24px 16px;
+  padding: 4px var(--page-gutter) 16px;
 }
-.composer-wrap { width: 100%; max-width: var(--feed-col); margin: 0 auto; }
+.composer-wrap { width: 100%; max-width: var(--page-col); margin: 0 auto; }
 .msg-composer .codex-composer > textarea { min-height: 36px; }
 
 /* ===== 对话内完整邮件草稿 =====
@@ -787,22 +852,19 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 /* 列表页：按文件夹逐层浏览，文件夹在前、资料在后，同一张卡片里一行一项。 */
 .kb-content { display: flex; flex-direction: column; gap: var(--spacing-md); }
 .kb-search { font-size: var(--text-md); }
-.kb-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.kb-title .i { width: 18px; height: 18px; color: var(--color-muted); }
+/* 列表页的页面标题：图标 + 文件夹名，字号由 .topbar h2 决定。 */
+.kb-page-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.kb-page-title .i { width: 18px; height: 18px; color: var(--color-muted); }
 .kb-crumbs {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0;
   font-size: var(--text-xs); color: var(--color-muted);
 }
 .kb-crumbs a { color: var(--color-muted); }
 .kb-crumbs a:hover { color: var(--color-fg); }
-.kb-crumbs > span + .kb-crumb-count::before { content: "·"; margin-right: 8px; }
 .kb-crumb-sep { padding: 0 4px; }
 .kb-new { position: relative; flex: none; }
-/* 带下拉箭头的按钮比通用主按钮小一档；箭头自带留白，右内边距收窄，让文字在视觉上居中。 */
-.btn.kb-new-button {
-  display: inline-flex; align-items: center; gap: 2px;
-  padding: 7px 9px 7px 12px; font-size: var(--text-sm);
-}
+/* 带下拉箭头的“新建”与技能页的“新建技能”同一规格：尺寸只由 .btn 决定。 */
+.btn.kb-new-button { display: inline-flex; align-items: center; gap: 2px; }
 .kb-new-button .i { width: 12px; height: 12px; }
 .kb-new-menu { position: absolute; top: calc(100% + 4px); right: 0; min-width: 160px; }
 .kb-new-menu .task-menu-item { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
@@ -837,11 +899,11 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .kb-more-button:hover, .kb-more.open .kb-more-button { color: var(--color-fg); background: color-mix(in oklch, var(--color-fg) 8%, transparent); }
 .kb-more-button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
 .kb-more-button .i { width: 16px; height: 16px; }
-.kb-row .kb-more-button { opacity: 0; pointer-events: none; }
-.kb-row:hover .kb-more-button,
-.kb-row .kb-more.open .kb-more-button,
-.kb-row .kb-more-button:focus-visible { opacity: 1; pointer-events: auto; }
-@media (hover: none) { .kb-row .kb-more-button { opacity: 1; pointer-events: auto; } }
+.list-item .kb-more-button { opacity: 0; pointer-events: none; }
+.list-item:hover .kb-more-button,
+.list-item .kb-more.open .kb-more-button,
+.list-item .kb-more-button:focus-visible { opacity: 1; pointer-events: auto; }
+@media (hover: none) { .list-item .kb-more-button { opacity: 1; pointer-events: auto; } }
 .kb-more-menu { min-width: 160px; }
 .kb-more-menu .task-menu-item { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .kb-more-menu .task-menu-item .i { width: 15px; height: 15px; color: var(--color-muted); }
@@ -875,43 +937,49 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .kb-move-new .input { flex: 1; min-width: 0; padding-top: 5px; padding-bottom: 5px; }
 .kb-move-new .btn { padding-top: 5px; padding-bottom: 5px; }
 .kb-move-empty { padding: 24px 8px; text-align: center; font-size: var(--text-sm); color: var(--color-muted); }
-/* 列表不加卡片边框：每行悬浮时整行铺满底色。 */
-.kb-list { display: flex; flex-direction: column; }
-/* 表头与行共用左右内边距和时间列宽度，两列上下对齐。 */
-/* 右内边距让出行尾“⋯”按钮的位置（行右内边距 + 按钮 + 间距），时间列与资料行对齐。 */
-.kb-list-head {
-  display: flex; align-items: center; gap: 8px; padding: 0 48px 8px 12px; margin-bottom: 4px;
+/* ===== 列表（资料、技能目录共用一套行样式） =====
+   一行 = 名称 + 可伸缩的说明 + 行尾元信息 + 定宽时间列 + 行内“⋯”的空位。
+   不加卡片边框：行与行之间一条细线，悬浮时整行铺底色。 */
+.list { display: flex; flex-direction: column; }
+/* 表头与行共用左右内边距、时间列宽度和行尾空位，四列上下对齐。
+   右内边距 12px 是算出来的：行里的时间列右边缘 = 行右内边距 6 + 行尾空位 28 + 行间距 2 + 链接内边距 12 = 48；
+   表头这侧 = 内边距 12 + 空位 28 + 间距 8 = 48。两边相等，“最近更新”才落在日期那一列上。 */
+.list-head {
+  display: flex; align-items: center; gap: var(--spacing-sm);
+  padding: 0 12px var(--spacing-sm); margin-bottom: var(--spacing-xs);
   border-bottom: 1px solid var(--color-border-subtle);
   font-size: var(--text-xs); color: var(--color-muted);
 }
 /* 整行是容器：链接占满左侧，行尾是“⋯”菜单（按钮不能放进链接里）。 */
-.kb-row {
-  display: flex; align-items: center; gap: 2px; padding-right: 6px; border-radius: var(--radius-md); min-width: 0;
+.list-item {
+  position: relative; display: flex; align-items: center; gap: 2px;
+  padding-right: 6px; border-radius: var(--radius-md); min-width: 0;
 }
-.kb-row-link {
-  flex: 1; display: flex; align-items: center; gap: 8px; padding: 10px 12px; min-width: 0;
+/* 行主体既可能是链接（资料），也可能是按钮（技能）：两者共用同一套排版。 */
+.list-link {
+  flex: 1; display: flex; align-items: center; gap: var(--spacing-sm); padding: 10px 12px; min-width: 0;
+  border: none; background: none; font: inherit; text-align: left; cursor: pointer;
   border-radius: var(--radius-md); color: var(--color-fg);
 }
-.kb-row-slot { flex: none; width: 28px; }
-.kb-row:hover { background: var(--color-bg); }
+.list-slot { flex: none; width: 28px; }
+.list-item:hover { background: var(--color-bg); }
 /* 行间分隔线与文字左右对齐；悬浮行的底色盖住它上下两条线，避免线穿过圆角底色。 */
-.kb-row { position: relative; }
-.kb-row + .kb-row::before {
+.list-item + .list-item::before {
   content: ""; position: absolute; top: 0; left: 12px; right: 12px;
   border-top: 1px solid var(--color-border-subtle);
 }
-.kb-row:hover::before,
-.kb-row:hover + .kb-row::before { opacity: 0; }
-.kb-row-link:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
+.list-item:hover::before,
+.list-item:hover + .list-item::before { opacity: 0; }
+.list-link:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
 .kb-list-note { font-size: var(--text-sm); color: var(--status-success); }
-.kb-row .i { color: var(--color-muted); }
-.kb-row-title { flex: none; max-width: 60%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kb-row-summary {
+.list-item .i { color: var(--color-muted); }
+.list-title { flex: none; max-width: 60%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-sub {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: var(--text-sm); color: var(--color-muted);
 }
 /* 时间列定宽靠右，是次要信息，不抢标题的宽度。 */
-.kb-row-time {
+.list-time {
   margin-left: auto; flex: none; width: 120px; padding-left: 12px; white-space: nowrap;
   font-size: var(--text-xs); color: var(--color-muted); font-variant-numeric: tabular-nums;
 }
@@ -927,11 +995,15 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .kb-hit-snippet { margin-top: 4px; color: var(--color-muted); line-height: var(--leading-body); overflow-wrap: anywhere; }
 .kb-hit-path { margin-top: 6px; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-muted); overflow-wrap: anywhere; }
 
-/* 资料页：标题像文档标题一样直接可改，字段一行排开，正文编辑区占满阅读栏。
+/* 资料页：标题像文档标题一样直接可改，字段一行排开。
    页面本身是滚动容器：子项不参与收缩，否则长正文会把编辑区压扁，文字溢出到区外。 */
-/* 资料页是长文阅读：正文收窄到中文舒适行长（约 45 字），顶栏与正文同一栏宽对齐。 */
-.kb-doc-top, .kb-doc { --doc-col: 760px; }
-.kb-doc-top { width: 100%; max-width: calc(var(--doc-col) + 48px); margin: 0 auto; padding-left: 16px; padding-right: 24px; }
+/* 文档页顶栏就是通用的 .chat-top，与正文同栏；正文按同一栏宽居中，左边缘与顶栏、与列表页一致。 */
+/* 滚动容器占满主区宽度，滚动条贴在页面最右侧；阅读栏靠左右内边距居中收窄。 */
+.kb-doc {
+  display: flex; flex-direction: column; gap: 0; max-width: none; padding-top: 12px;
+  padding-left: max(var(--page-gutter), calc((100% - var(--page-col)) / 2));
+  padding-right: max(var(--page-gutter), calc((100% - var(--page-col)) / 2));
+}
 .kb-doc-where {
   flex: 1; min-width: 0; font-size: var(--text-sm); color: var(--color-muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -939,19 +1011,15 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .kb-doc-where a { color: var(--color-muted); }
 .kb-doc-where a:hover { color: var(--color-fg); }
 .kb-dirty { font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; }
-/* 滚动容器占满主区宽度，滚动条贴在页面最右侧；阅读栏靠左右内边距居中收窄。 */
-.kb-doc {
-  display: flex; flex-direction: column; gap: 0; max-width: none; padding-top: 12px;
-  padding-left: max(24px, calc((100% - var(--doc-col)) / 2));
-  padding-right: max(24px, calc((100% - var(--doc-col)) / 2));
-}
 .kb-doc > * { flex-shrink: 0; }
-.kb-title {
+/* 文档标题：比页面标题大一档的展示字，文件名由它生成，所以它是正文的一部分而不是页头。
+   类名与列表页标题分开——过去两者都叫 .kb-title，两条规则互相污染。 */
+.kb-doc-title {
   width: 100%; border: none; background: none; padding: 0; color: var(--color-fg);
   font: 600 26px/1.3 var(--font-display);
 }
-.kb-title:focus-visible { outline: none; }
-.kb-title::placeholder { color: var(--color-muted); }
+.kb-doc-title:focus-visible { outline: none; }
+.kb-doc-title::placeholder { color: var(--color-muted); }
 .kb-summary { display: flex; align-items: center; gap: 8px; margin: 20px 0 0; min-width: 0; }
 .kb-summary-input {
   flex: 1; min-width: 0; border: none; background: none; padding: 2px 0;
@@ -1030,19 +1098,24 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .kb-image-more[hidden] { display: none; }
 .kb-editor-status { margin: 6px 2px 0; font-size: var(--text-xs); color: var(--color-muted); }
 .kb-editor-status.danger { color: var(--color-danger); }
-.kb-doc .kb-editor {
+/* 资料正文与技能文件的阅读排版只有一套：同一份 Markdown 在哪个页面都排成同一个样子。
+   编辑器只是多了一层可编辑，字号、行高、标题层级、分隔线都不因此改变。 */
+:is(.kb-doc, .skill-doc) .kb-editor {
   min-height: 0; margin-top: 6px; padding: 20px 0 0; border: none; border-top: 1px solid var(--color-border-subtle);
   border-radius: 0; background: none; font-size: 15px; line-height: 1.8;
 }
-.kb-doc .kb-editor .ProseMirror { min-height: 320px; }
-.kb-doc .kb-editor p { margin-bottom: 0.6em; }
-.kb-doc .kb-editor h1, .kb-doc .kb-editor h2, .kb-doc .kb-editor h3, .kb-doc .kb-editor h4 { line-height: 1.4; margin-bottom: 0.5em; }
-.kb-doc .kb-editor h1 { font-size: 20px; margin-top: 1.4em; }
-.kb-doc .kb-editor h2 { font-size: 18px; margin-top: 1.3em; }
-.kb-doc .kb-editor h3 { font-size: 16px; margin-top: 1.2em; }
-.kb-doc .kb-editor h4, .kb-doc .kb-editor h5, .kb-doc .kb-editor h6 { font-size: 15px; margin-top: 1.0em; }
-.kb-doc .kb-editor :is(h1, h2, h3, h4, h5, h6) + :is(h1, h2, h3, h4, h5, h6) { margin-top: 1.0em; }
-.kb-doc .kb-editor .ProseMirror > :first-child { margin-top: 0; }
+:is(.kb-doc, .skill-doc) .kb-editor .ProseMirror { min-height: 320px; }
+:is(.kb-doc, .skill-doc) .kb-editor p { margin-bottom: 0.6em; }
+:is(.kb-doc, .skill-doc) .kb-editor h1, :is(.kb-doc, .skill-doc) .kb-editor h2,
+:is(.kb-doc, .skill-doc) .kb-editor h3, :is(.kb-doc, .skill-doc) .kb-editor h4 { line-height: 1.4; margin-bottom: 0.5em; }
+:is(.kb-doc, .skill-doc) .kb-editor h1 { font-size: 20px; margin-top: 1.4em; }
+:is(.kb-doc, .skill-doc) .kb-editor h2 { font-size: 18px; margin-top: 1.3em; }
+:is(.kb-doc, .skill-doc) .kb-editor h3 { font-size: 16px; margin-top: 1.2em; }
+:is(.kb-doc, .skill-doc) .kb-editor h4,
+:is(.kb-doc, .skill-doc) .kb-editor h5,
+:is(.kb-doc, .skill-doc) .kb-editor h6 { font-size: 15px; margin-top: 1.0em; }
+:is(.kb-doc, .skill-doc) .kb-editor :is(h1, h2, h3, h4, h5, h6) + :is(h1, h2, h3, h4, h5, h6) { margin-top: 1.0em; }
+:is(.kb-doc, .skill-doc) .kb-editor .ProseMirror > :first-child { margin-top: 0; }
 .kb-doc .kb-meta { margin-top: var(--spacing-lg); }
 .kb-editor .ProseMirror span[data-type="html"] { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-muted); }
 
@@ -1058,14 +1131,17 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 
 /* ===== 长期记忆 ===== */
 /* 两个分区各是一份 Markdown 文档：标题与容量条一行，下面是渲染后可直接编辑的正文。 */
-.memory-content { display: flex; flex-direction: column; gap: var(--spacing-lg); max-width: var(--feed-col); }
-.memory-section { display: flex; flex-direction: column; gap: 10px; }
-.memory-head { display: flex; align-items: flex-end; gap: 16px; }
+/* 记忆是编辑页：没有列表，内容是两份可直接改的文档。栏宽交给 .content 的统一内容栏，
+   这一层不再单独收窄——过去它 760px 居中，整块比上面的标题右移了 120px。 */
+.memory-content { display: flex; flex-direction: column; gap: var(--spacing-lg); }
+.memory-section { display: flex; flex-direction: column; gap: var(--spacing-sm); }
+/* 标题与说明在左，容量条与保存动作在右：动作跟被编辑的文档同一条头，不在正文下方。 */
+.memory-head { display: flex; align-items: flex-end; gap: var(--spacing-md); }
 .memory-head-text { flex: 1; min-width: 0; }
 .memory-head h3 { margin: 0; font-size: var(--text-md); font-weight: 600; }
 .memory-hint { margin-top: 2px; font-size: var(--text-xs); color: var(--color-muted); }
 
-.memory-usage { flex: none; display: flex; align-items: center; gap: 8px; font-size: var(--text-xs); color: var(--color-muted); }
+.memory-usage { flex: none; display: flex; align-items: center; gap: var(--spacing-sm); font-size: var(--text-xs); color: var(--color-muted); }
 .memory-meter {
   width: 96px; height: 4px; border-radius: 999px; overflow: hidden;
   background: color-mix(in oklch, var(--color-fg) 8%, transparent);
@@ -1083,7 +1159,7 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   content: "还没有内容。对话中提到的相关信息会自动记在这里，也可以直接写。";
 }
 
-.memory-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.memory-actions { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--spacing-sm); }
 .memory-over { margin-right: auto; font-size: var(--text-sm); color: var(--color-danger); }
 .memory-note { font-size: var(--text-xs); color: var(--status-success); }
 
@@ -1116,7 +1192,8 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 @media (max-width: 899px) {
   .app { flex-direction: column; }
   .sidebar { display: none; }
-  .main { padding-bottom: calc(58px + env(safe-area-inset-bottom)); }
+  /* 窄屏栏距收窄一档：页头、内容、对话流与输入框都跟着这条走，不会各收各的。 */
+  .main { padding-bottom: calc(58px + env(safe-area-inset-bottom)); --page-gutter: 14px; }
 
   .tabbar {
     display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
@@ -1144,8 +1221,9 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   .task-nav .nav-more { font-size: var(--text-md); padding: 10px; }
   .empty { padding: 24px 12px; }
 
-  .topbar { padding: 12px 14px; }
-  .content { padding: 12px 14px; }
+  /* 顶栏高度在窄屏也保持一致：三页的内容都从同一条线开始；上方留白收窄一档省竖直空间。 */
+  .topbar, .chat-top { padding-top: 16px; min-height: 62px; }
+  .content { padding: 12px var(--page-gutter); }
   /* 窄屏内容不够高时仍然居中，够高了就从顶部开始正常滚动。 */
   .hero { padding: 16px 14px 24px; align-items: flex-start; }
   .hero-inner { margin: auto 0; }
@@ -1153,10 +1231,9 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   .codex-composer > textarea { min-height: 64px; padding: 0 4px; }
   .composer-model select { max-width: 150px; font-size: var(--text-md); }
 
-  .chat-top { padding: 12px 14px; }
-  .feed { padding: 12px 14px; overflow: visible; }
+  .feed { padding: 12px var(--page-gutter); overflow: visible; }
   .msg.user .msg-body { max-width: 92%; }
-  .msg-composer { padding: 4px 14px 12px; }
+  .msg-composer { padding: 4px var(--page-gutter) 12px; }
 
   .mail-card { padding: 8px 10px 10px; }
   /* 工具条在窄屏换行：修改要求占满一行，状态与发送留在下一行。 */
@@ -1174,12 +1251,12 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   .mail-compose { padding: 10px 12px; }
   .mail-result { flex-direction: column; }
 
-  .kb-row-summary { display: none; }
-  .kb-row-title { max-width: none; flex: 1; }
-  .kb-row-time { width: 96px; }
+  .list-sub { display: none; }
+  .list-title { max-width: none; flex: 1; }
+  .list-time { width: 96px; }
   .kb-editor { padding: 12px 14px; }
-  .kb-doc .kb-editor { margin-top: 12px; padding: 28px 0 0; }
-  .kb-title { font-size: 22px; }
+  :is(.kb-doc, .skill-doc) .kb-editor { margin-top: 12px; padding: 28px 0 0; }
+  .kb-doc-title { font-size: 22px; }
   .kb-doc { padding-top: 4px; }
   .kb-summary-draft { opacity: 1; }
 
@@ -1190,123 +1267,196 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 
 /* ===== 技能 ===== */
 
-/* 输入框的技能选择 */
-.skill-picker { position: relative; display: flex; }
-.composer-skill-toggle {
-  border: 1px solid var(--color-border); border-radius: var(--button-radius);
-  background: var(--color-surface); color: var(--color-fg);
-  padding: 4px 10px; font-family: var(--font-body); font-size: var(--text-sm);
-  cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+/* 输入框的技能选择：`/` 唤起列表，选中项以胶囊随输入框提交。 */
+.composer-skills { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px; }
+.composer-skill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 5px 4px 9px; border-radius: 999px; background: var(--color-bg);
+  font-size: var(--text-sm);
 }
-.composer-skill-toggle.on { border-color: var(--color-accent); color: var(--color-accent); }
-.composer-skill-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
-.composer-skill-toggle:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
-.skill-picker-count {
-  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
-  background: var(--color-accent); color: var(--button-fg);
-  font-size: var(--text-xs); line-height: 16px; text-align: center;
+.composer-skill > svg { color: var(--color-accent); }
+.composer-skill strong { font-weight: 560; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-skill button {
+  flex: none; display: grid; place-items: center; padding: 3px; border: none; border-radius: 50%;
+  background: transparent; color: var(--color-muted); cursor: pointer;
 }
-.skill-picker-menu {
-  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 30;
-  width: min(360px, calc(100vw - 48px)); max-height: 320px; overflow-y: auto;
-  border: 1px solid var(--color-border); border-radius: var(--button-radius);
-  background: var(--color-surface); box-shadow: var(--shadow-menu, 0 8px 24px rgb(0 0 0 / 0.12));
-  padding: 6px;
+.composer-skill button:hover:not(:disabled) { color: var(--color-fg); background: var(--color-border-subtle); }
+.composer-skill button:disabled { opacity: 0.5; cursor: not-allowed; }
+.composer-skill button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
+.composer-skill-menu {
+  position: absolute; left: 8px; right: 8px; bottom: calc(100% + 6px); z-index: 30;
+  max-height: 320px; overflow-y: auto; padding: 6px;
+  border: 1px solid var(--color-border-subtle); border-radius: 14px; background: var(--color-surface);
+  box-shadow: 0 12px 32px color-mix(in oklch, var(--color-fg) 12%, transparent);
 }
-.skill-picker-empty { padding: 14px 10px; font-size: var(--text-sm); color: var(--color-muted); }
-.skill-picker-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 6px; }
-.skill-picker-row:hover { background: color-mix(in oklch, var(--color-fg) 4%, transparent); }
-.skill-picker-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.skill-picker-copy strong { font-size: var(--text-sm); font-weight: 560; }
-.skill-picker-copy span {
-  font-size: var(--text-xs); color: var(--color-muted);
+.composer-skill-menu-title { padding: 4px 8px 6px; font-size: var(--text-xs); color: var(--color-muted); }
+.composer-skill-empty { padding: 10px 8px 12px; font-size: var(--text-sm); color: var(--color-muted); }
+.composer-skill-option {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px;
+  border: none; border-radius: 8px; background: none; text-align: left;
+  font-family: var(--font-body); font-size: var(--text-sm); color: var(--color-fg); cursor: pointer;
+}
+.composer-skill-option > svg { flex: none; color: var(--color-muted); }
+.composer-skill-option.active { background: var(--color-border-subtle); }
+.composer-skill-option:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
+.composer-skill-name { flex: none; font-weight: 560; }
+.composer-skill-desc {
+  flex: 1; min-width: 0; color: var(--color-muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.skill-picker-actions { display: flex; gap: 4px; flex: none; }
-.skill-picker-actions button {
-  border: 1px solid var(--color-border); border-radius: 999px; background: transparent;
-  color: var(--color-muted); font-family: var(--font-body); font-size: var(--text-xs);
-  padding: 2px 8px; cursor: pointer;
-}
-.skill-picker-actions button.on { border-color: var(--color-accent); color: var(--color-accent); }
-.skill-picker-actions button.on.danger { border-color: var(--color-danger); color: var(--color-danger); }
-.skill-picker-foot {
-  display: flex; align-items: center; justify-content: space-between;
-  border-top: 1px solid var(--color-border-subtle); margin-top: 4px; padding: 8px 8px 4px;
-}
-.skill-picker-auto { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); }
-.skill-picker-reset { border: none; background: none; color: var(--color-muted); font-size: var(--text-xs); cursor: pointer; }
-.skill-picker-reset:hover { color: var(--color-fg); }
-
-/* 任务页的加载面板 */
-.skill-usage { padding: 2px 4px 6px; }
-.skill-usage-toggle {
-  border: none; background: none; padding: 0; cursor: pointer;
-  font-size: var(--text-xs); color: var(--color-muted); font-family: var(--font-body);
-}
-.skill-usage-toggle:hover { color: var(--color-fg); }
-.skill-usage-list { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
-.skill-usage-list li { display: flex; align-items: center; gap: 8px; font-size: var(--text-xs); color: var(--color-muted); }
-.skill-usage-id { font-family: var(--font-mono); color: var(--color-fg); }
-.skill-usage-source { padding: 0 6px; border-radius: 999px; border: 1px solid var(--color-border); }
-.skill-usage-source.manual { color: var(--color-accent); border-color: var(--color-accent); }
-.skill-usage-time { margin-left: auto; }
 
 /* 管理页 */
-.skills-content { display: flex; flex-direction: column; gap: 16px; max-width: var(--feed-col); }
-.skills-tabs { display: flex; gap: 6px; }
+/* 技能目录与资料列表同栏同宽；一行的高度、内边距与时间列都由 .list 提供。 */
+.skills-content { display: flex; flex-direction: column; gap: var(--spacing-md); }
+.skills-tabs { display: flex; gap: var(--spacing-sm); }
 .skills-tab {
   border: 1px solid var(--color-border); border-radius: 999px; background: transparent;
   color: var(--color-muted); font-family: var(--font-body); font-size: var(--text-sm);
   padding: 4px 14px; cursor: pointer;
 }
 .skills-tab.active { border-color: var(--color-accent); color: var(--color-accent); }
-.skills-list { display: flex; flex-direction: column; gap: 8px; }
-.skill-row {
-  display: flex; align-items: center; gap: 12px; text-align: left;
-  border: 1px solid var(--color-border); border-radius: 10px; background: transparent;
-  color: inherit; padding: 12px 14px; cursor: pointer; font-family: var(--font-body);
-}
-.skill-row:hover { border-color: var(--color-accent); }
-.skill-row-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.skill-row-copy strong { font-weight: 560; }
-.skill-row-copy span {
-  font-size: var(--text-xs); color: var(--color-muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.skill-row-meta { display: flex; align-items: center; gap: 8px; flex: none; font-size: var(--text-xs); color: var(--color-muted); }
-.skill-origin { padding: 1px 8px; border-radius: 999px; border: 1px solid var(--color-border); }
-.skill-managed-flag { color: var(--color-accent); }
+/* 来源标签：只出现在详情的版本记录与待审变更里，列表行不再带来源与策略标签。 */
+.skill-origin { flex: none; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--color-border); }
 
-.skill-pane {
-  display: flex; flex-direction: column; gap: 12px;
-  border: 1px solid var(--color-border); border-radius: 10px; padding: 16px;
+/* ===== 技能详情：文件树 + 文档 =====
+   一个技能是一个目录：正文之外还有 references/ 与 templates/ 两层附件（skill-spec.md §3）。
+   左边一列文件树（可收起），右边与资料页同一套文档骨架——顶栏是这个对象的操作，正文一栏到底。
+   整页是一份草稿，没有阅读/编辑两个状态，所以页面上不再有卡片把正文框起来。 */
+.skill-detail { flex: 1; min-height: 0; display: flex; }
+.skill-detail:not(.tree-open) .skill-tree { display: none; }
+.skill-tree {
+  flex: none; width: 200px; min-height: 0; display: flex; flex-direction: column;
+  border-right: 1px solid var(--color-border-subtle);
 }
-.skill-pane h3 { margin: 0; font-size: var(--text-md); font-weight: 600; }
-.skill-pane-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.skill-pane-head h3 { flex: 1; min-width: 0; }
-.skill-managed { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--color-muted); }
-.skill-managed-note { font-size: var(--text-sm); color: var(--color-muted); }
+/* 树头与顶栏同高：两栏的第一行文字落在同一条线上。 */
+.skill-tree-head {
+  display: flex; align-items: center; gap: 6px; min-height: 74px;
+  padding: 28px 14px 12px; font-size: var(--text-xs); color: var(--color-muted);
+}
+.skill-tree-count { margin-left: auto; font-variant-numeric: tabular-nums; }
+.skill-tree-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 16px; }
+.skill-tree-row {
+  display: flex; align-items: center; gap: 6px; padding-right: 2px;
+  border-radius: var(--radius-sm); min-width: 0;
+}
+.skill-tree-row:hover { background: color-mix(in oklch, var(--color-fg) 5%, transparent); }
+.skill-tree-row.active { background: color-mix(in oklch, var(--color-fg) 8%, transparent); }
+.skill-tree-twist { flex: none; width: 14px; height: 14px; display: grid; place-items: center; color: var(--color-muted); }
+.skill-tree-twist .i { width: 12px; height: 12px; transition: transform var(--duration-fast) ease-in-out; }
+.skill-tree-twist.open .i { transform: rotate(90deg); }
+.skill-tree-open {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
+  border: none; background: none; margin: 0; padding: 5px 0;
+  font: inherit; text-align: left; cursor: pointer; color: var(--color-fg);
+}
+.skill-tree-open:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); border-radius: var(--radius-sm); }
+.skill-tree-open .i { flex: none; width: 15px; height: 15px; color: var(--color-muted); }
+.skill-tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); }
+.skill-tree-row.active .skill-tree-name { font-weight: 560; }
+.skill-tree-dot { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--color-accent); }
+.skill-tree-empty { padding: 0 0 4px 34px; font-size: var(--text-xs); color: var(--color-muted); }
+.skill-tree-row.removed .skill-tree-name { text-decoration: line-through; color: var(--color-muted); }
+/* 行内动作（加文件、删文件）平时不出现：指到那一行或键盘走到时才显形，不跟文件名抢注意力。 */
+.skill-tree-act {
+  flex: none; width: 20px; height: 20px; display: grid; place-items: center; opacity: 0;
+  border: none; padding: 0; background: none; border-radius: var(--radius-sm);
+  color: var(--color-muted); cursor: pointer;
+}
+.skill-tree-act .i { width: 14px; height: 14px; }
+.skill-tree-row:hover .skill-tree-act,
+.skill-tree-row.removed .skill-tree-act,
+.skill-tree-act:focus-visible { opacity: 1; }
+.skill-tree-act:hover { color: var(--color-fg); background: color-mix(in oklch, var(--color-fg) 8%, transparent); }
+.skill-tree-act:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
+/* 触屏没有悬浮：动作常显。 */
+@media (hover: none) { .skill-tree-act { opacity: 1; } }
+
+.skill-doc { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+/* 正文区自己滚：顶栏与文件树都不跟着滚。滚动条贴在这一栏右侧。 */
+.skill-doc-body {
+  flex: 1; min-height: 0; overflow-y: auto; padding-top: 12px; padding-bottom: 40px;
+  padding-left: max(var(--page-gutter), calc((100% - var(--page-col)) / 2));
+  padding-right: max(var(--page-gutter), calc((100% - var(--page-col)) / 2));
+}
+/* 读的不是正文时，先用文件自己的路径交代在看什么。 */
+.skill-file-head { display: flex; align-items: baseline; gap: 8px; }
+.skill-file-path { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-muted); overflow-wrap: anywhere; }
+.skill-file-flag { flex: none; font-size: var(--text-xs); color: var(--color-danger); }
+/* 非 Markdown 的附件按纯文本改：所见即所得的编辑器会把缩进、分隔符这类原文重排。 */
+.skill-file-text {
+  display: block; width: 100%; min-height: 420px; margin-top: 20px; padding: 0;
+  border: none; border-top: 1px solid var(--color-border-subtle); border-radius: 0; background: none;
+  resize: vertical; font: var(--text-sm)/1.7 var(--font-mono); color: var(--color-fg);
+}
+.skill-file-text:focus { outline: none; }
+/* SKILL.md 的头部：文件名、显示名、一句话说明与来源摆在文件最开始，标明这是元数据。
+   它们既是给模型判断相关性用的字段，也是这个技能的身份，所以不折成“标题 + 副标题”，
+   而是照文件里的样子逐行列出——一眼能看出哪些是 frontmatter，正文从哪里开始。
+   框只套住元数据，不套正文：正文仍然是一栏到底的文档。 */
+.skill-meta {
+  padding: 13px 14px; margin-bottom: 16px;
+  border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
+  background: var(--color-bg);
+}
+.skill-meta-label { display: block; margin-bottom: 9px; font-size: var(--text-xs); color: var(--color-muted); }
+/* 键列按最长的字段名撑开（description）：写死宽度在窄屏上会被它顶穿，两列挤在一起。 */
+.skill-meta-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; align-items: baseline; }
+/* 块里的字只有一种：等宽小字，字段名浅、值深。名称不做加粗放大——层次留给下面的标题，
+   这里是一份 frontmatter，字段之间没有轻重之分。 */
+.skill-meta-key { font: var(--text-xs)/var(--leading-ui) var(--font-mono); color: var(--color-muted); }
+.skill-meta-value, .skill-meta-input {
+  min-width: 0; font: var(--text-xs)/var(--leading-ui) var(--font-mono);
+  color: var(--color-fg); overflow-wrap: anywhere;
+}
+/* 目录名与字段名同级：它只是个名字，不是要读的内容。 */
+.skill-meta-code { color: var(--color-muted); }
+/* 字段值直接可改：平时就是一行文字，指到或聚焦才显出一层淡底，不做成表单控件的样子。 */
+.skill-meta-input {
+  display: block; width: calc(100% + 12px); margin: -2px 0 -2px -6px; padding: 2px 6px;
+  border: none; border-radius: var(--radius-sm); background: none; text-align: left;
+  transition: background-color var(--duration-fast) ease-in-out;
+}
+.skill-meta-input:hover, .skill-meta-input:focus {
+  outline: none; background: color-mix(in oklch, var(--color-fg) 5%, transparent);
+}
+.skill-meta-input::placeholder { color: var(--color-muted); opacity: 0.7; }
+.skill-meta-hint { margin: 9px 0 0; font-size: var(--text-xs); color: var(--color-muted); }
+/* 元数据下面是这份技能的标题，与资料页的标题同一档展示字。
+   名称在元数据块里改，这里是它的呈现——正文之上仍然要有标题，读的人才知道自己在看哪个技能。 */
+.skill-title { margin: 0 0 20px; font: 600 26px/1.3 var(--font-display); color: var(--color-fg); }
+/* 正文与头部之间不画分隔线：元数据块加标题已经把两段分开了，再来一条线只是多一道框。 */
+.skill-doc .kb-editor.skill-editor-body { margin-top: 0; padding-top: 0; border-top: none; }
+/* 运行里的事实（更新时间、使用次数、复盘策略）收在正文之后。 */
+.skill-facts { margin-top: var(--spacing-lg); }
+.skill-managed { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.skill-managed input { margin: 0; accent-color: var(--color-accent); }
+/* 顶栏里的图标按钮（文件树开关）：选中态用底色表示“正开着”，不用主题色抢主操作。 */
+.topbar .icon-btn {
+  flex: none; display: grid; place-items: center; padding: 4px; cursor: pointer;
+  border: none; background: none; border-radius: var(--radius-sm); color: var(--color-muted);
+}
+.topbar .icon-btn:hover, .topbar .icon-btn.on { color: var(--color-fg); background: color-mix(in oklch, var(--color-fg) 6%, transparent); }
+.topbar .icon-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
+.topbar .icon-btn .i { width: 16px; height: 16px; }
+
+/* 窄屏：文件树从侧栏变成正文上方的一段，默认收起，由顶栏的按钮展开。 */
+@media (max-width: 899px) {
+  .skill-detail { display: block; }
+  .skill-tree { width: auto; border-right: none; border-bottom: 1px solid var(--color-border-subtle); }
+  .skill-tree-head { min-height: 0; padding: 10px 14px 4px; }
+  .skill-tree-scroll { max-height: 40vh; padding: 0 10px 10px; }
+  .skill-doc-body { padding: 12px var(--page-gutter) 32px; }
+  .skill-title { font-size: 22px; margin-bottom: 16px; }
+  .skill-file-text { min-height: 300px; }
+}
+.skill-advanced > summary {
+  cursor: pointer; font-size: var(--text-sm); color: var(--color-muted); user-select: none;
+}
+.skill-advanced > summary:hover { color: var(--color-fg); }
+.skill-advanced-body { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
 .skill-revision { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-muted); }
-.skill-field { display: flex; flex-direction: column; gap: 4px; }
-.skill-field > span { font-size: var(--text-xs); color: var(--color-muted); }
-.skill-field-label { font-size: var(--text-xs); color: var(--color-muted); }
-.skill-body-input { font-family: var(--font-mono); font-size: var(--text-sm); resize: vertical; }
 .skill-pane-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.skill-attachments { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .skill-attachments-empty { font-size: var(--text-sm); color: var(--color-muted); }
-.skill-attachment-chip {
-  display: inline-flex; align-items: center; gap: 4px;
-  border: 1px solid var(--color-border); border-radius: 999px;
-  padding: 2px 10px; font-size: var(--text-xs);
-}
-.skill-attachment-chip > button {
-  border: none; background: none; padding: 0; cursor: pointer; color: var(--color-muted);
-  font-size: var(--text-sm); line-height: 1;
-}
-.skill-attachment-chip > button:hover { color: var(--color-danger); }
-.skill-attachment-view { border: none; background: none; padding: 0; cursor: pointer; color: inherit; font: inherit; }
-.skill-attachment-view:hover { color: var(--color-accent); }
 .skill-file-view { border: 1px solid var(--color-border-subtle); border-radius: 8px; overflow: hidden; }
 .skill-file-view-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -1324,12 +1474,12 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   display: flex; align-items: center; gap: 10px; font-size: var(--text-xs); color: var(--color-muted);
 }
 .skill-version-reason { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.skill-usage-detail ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
-.skill-usage-detail li { display: flex; gap: 12px; font-size: var(--text-xs); color: var(--color-muted); }
+/* 这一版被读过几次：使用记录按版本汇总后就写在这一行上，不另占一块。 */
+.skill-version-loads { flex: none; color: var(--color-muted); white-space: nowrap; }
 
-.skill-changes { display: flex; flex-direction: column; gap: 10px; }
+.skill-changes { display: flex; flex-direction: column; gap: var(--spacing-sm); }
 .skill-changes h3 { margin: 0; font-size: var(--text-md); font-weight: 600; }
-.skill-change { border: 1px solid var(--color-border); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.skill-change { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 12px 14px; display: flex; flex-direction: column; gap: var(--spacing-sm); }
 .skill-change-head { display: flex; align-items: center; gap: 10px; font-size: var(--text-sm); flex-wrap: wrap; }
 .skill-change-reason { font-size: var(--text-sm); color: var(--color-muted); }
 .skill-change-body {

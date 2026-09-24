@@ -579,6 +579,9 @@ class GatewayRuntime:
                 ),
                 run_id=row["run_id"],
                 db_path=self.path,
+                on_timeline_change=lambda: self.events.publish(
+                    task_id, {"type": "timeline_changed", "run_id": row["run_id"]}
+                ),
                 skills=tuple(payload.get("skills", [])),
                 excluded_skill_ids=tuple(payload.get("excluded_skill_ids", [])),
                 auto_match=payload.get("auto_match", True),

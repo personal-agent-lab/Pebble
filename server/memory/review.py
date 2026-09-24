@@ -208,7 +208,7 @@ def window_text_items(
             "SELECT i.kind, i.role, i.text FROM task_timeline_items i "
             "JOIN agent_runs r ON r.run_id = i.run_id "
             "WHERE i.task_id = ? AND i.kind IN ('text', 'notice') "
-            "AND r.rowid > ? AND r.rowid <= ? ORDER BY i.rowid",
+            "AND r.rowid > ? AND r.rowid <= ? ORDER BY i.sequence",
             (task_id, from_rowid, through_rowid),
         )
     ]

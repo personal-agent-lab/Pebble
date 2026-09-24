@@ -23,7 +23,7 @@ const FEEDBACK_MS = 1600;
  * 写剪贴板。异步剪贴板 API 只在安全上下文可用，而 Pebble 在局域网上是 http 访问
  * （README“远程访问”），那里 navigator.clipboard 直接不存在，必须退回 execCommand。
  */
-async function writeClipboard(text: string): Promise<boolean> {
+export async function writeClipboard(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard !== undefined) {
       await navigator.clipboard.writeText(text);

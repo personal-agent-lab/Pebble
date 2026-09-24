@@ -95,6 +95,17 @@ export type TimelineItem =
       run_id: string;
       text: string;
       created_at: string;
+    }
+  | {
+      item_id: string;
+      kind: "tool";
+      run_id: string;
+      tool_call_id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+      status: "running" | "ok" | "error";
+      result: string | null;
+      created_at: string;
     };
 
 export type Timeline = { task_id: string; sdk_session_id: string | null; items: TimelineItem[] };
@@ -130,7 +141,8 @@ export type AgentEvent =
   | { type: "done"; run_id: string }
   | { type: "error"; run_id: string; item_id: string; message: string }
   | { type: "notice"; run_id: string; item_id: string; text: string }
-  | { type: "activity"; run_id: string; text: string };
+  | { type: "activity"; run_id: string; text: string }
+  | { type: "timeline_changed"; run_id: string };
 
 export class ApiError extends Error {
   readonly name = "ApiError";
@@ -287,7 +299,7 @@ export const cancelOperation = (taskId: string, operationId: string, version: nu
 export const verifyExecution = (operationId: string) =>
   request<Execution>(`/operations/${operationId}/verification`, { method: "POST" });
 
-const EVENT_TYPES = ["session", "text", "draft_saved", "done", "error", "notice", "activity"] as const;
+const EVENT_TYPES = ["session", "text", "draft_saved", "done", "error", "notice", "activity", "timeline_changed"] as const;
 export function subscribeEvents(
   taskId: string,
   onEvent: (event: AgentEvent) => void,
@@ -562,8 +574,6 @@ export const approveSkillChange = (changeId: string, expectedRevision: string) =
   });
 export const rejectSkillChange = (changeId: string) =>
   request<void>(`/skill-changes/${changeId}/reject`, { method: "POST" });
-export const getTaskSkillUsage = (taskId: string) =>
-  request<SkillUsageRecord[]>(`/tasks/${taskId}/skill-usage`);
 export const readSkillFile = (skillId: string, path: string) =>
   request<{ path: string; content: string }>(
     `/skills/${skillId}/files/${path.split("/").map(encodeURIComponent).join("/")}`);

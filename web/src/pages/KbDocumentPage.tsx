@@ -15,6 +15,7 @@ import AppShell from "../components/AppShell";
 import { DeleteDialog, KbItemMenu, MoveDialog, RenameDialog, type KbAction } from "../components/KbDialogs";
 import KbEditor from "../components/KbEditor";
 import Notice from "../components/Notice";
+import { useNote } from "../hooks";
 import { breadcrumbs, documentLink, folderLink, normalizeDir, parentDir } from "../kb";
 import { shortTime } from "../status";
 
@@ -59,7 +60,7 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ApiError | null>(null);
   const [action, setAction] = useState<KbAction | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const [note, setNote] = useNote();
   const [drafting, setDrafting] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
 
@@ -220,7 +221,7 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
 
   return (
     <AppShell>
-      <div className="chat-top kb-doc-top">
+      <div className="chat-top">
         <button type="button" className="back" onClick={() => leave(backTo)} aria-label="返回资料列表">{BACK_ICON}</button>
         {/* 标题只在正文区出现一次：顶栏只交代这份资料在哪个文件夹、保存状态如何；
             文件名由程序按标题生成，不展示。 */}
@@ -266,7 +267,7 @@ export default function KbDocumentPage({ creating = false }: { creating?: boolea
         {ready && (
           <>
             <input
-              className="kb-title"
+              className="kb-doc-title"
               value={title}
               placeholder="资料标题"
               aria-label="资料标题"

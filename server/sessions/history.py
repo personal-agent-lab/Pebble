@@ -38,7 +38,7 @@ SYNC_SQL = (
     "AND r.status NOT IN ('pending', 'running') "
     "AND (h.item_id IS NULL OR (i.kind = 'mail_draft' AND "
     "(h.op_version IS NOT o.version OR h.op_status IS NOT o.status))) "
-    "ORDER BY i.rowid"
+    "ORDER BY i.sequence"
 )
 
 
@@ -107,7 +107,7 @@ class HistoryStore:
                 "JOIN task_timeline_items i ON i.item_id = h.item_id "
                 "JOIN tasks t ON t.task_id = h.task_id "
                 f"WHERE {' AND '.join(clauses)} "
-                "ORDER BY i.created_at DESC, i.rowid DESC LIMIT ?",
+                "ORDER BY i.created_at DESC, i.sequence DESC LIMIT ?",
                 params,
             ).fetchall()
         return {
@@ -151,7 +151,7 @@ class HistoryStore:
                 raise NotFoundError(task_id)
             rows = conn.execute(
                 "SELECT i.item_id, i.kind, i.role, i.text, i.operation_id, i.created_at "
-                "FROM task_timeline_items i WHERE i.task_id = ? ORDER BY i.rowid",
+                "FROM task_timeline_items i WHERE i.task_id = ? ORDER BY i.sequence",
                 (task_id,),
             ).fetchall()
             position = next(

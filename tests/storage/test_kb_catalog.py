@@ -86,10 +86,13 @@ def test_store_catalog_follows_files_summary_updates_and_user_edits(settings):
     assert "summary" not in (settings.data_dir / saved["path"]).read_text(encoding="utf-8")
 
     # 用户在文件系统里新建、未写 frontmatter 的文件也进入目录；时间写成未加引号的 YAML 也能排序
+    # 时间相对当前时刻取次日，保证它恒比上面刚保存的资料新，排序断言不随日期过期。
+    from datetime import datetime, timedelta
+
+    newest = (datetime.now().astimezone() + timedelta(days=1)).isoformat(timespec="seconds")
     (settings.data_dir / "kb" / "课程").mkdir()
     (settings.data_dir / "kb" / "课程" / "lab1.md").write_text(
-        "---\ntitle: GSE 实验一\nsummary: 实验要求\n"
-        "updated_at: 2026-09-20T10:00:00+08:00\n---\n\n正文",
+        f"---\ntitle: GSE 实验一\nsummary: 实验要求\nupdated_at: {newest}\n---\n\n正文",
         encoding="utf-8",
     )
     (settings.data_dir / "kb" / "随手记.md").write_text("# 想法\n\n一个想法。", encoding="utf-8")

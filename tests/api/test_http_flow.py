@@ -27,11 +27,23 @@ from tests.support.gmail_double import send
 
 def build_fixture_app() -> FastAPI:
     """子进程后端的装配工厂：脚本化 Agent 替身 + 发送替身，不连接真实服务。
-
     模拟邮件检测：启动时同一邮件重复投递，验证服务端持久去重。
     """
     gateway = FakeAgentGateway()
     app = create_app(gateway=gateway, send_message=send)
+
+    # 子进程没有测试替身可打：模型目录若读真实 .env 的型号配置，每轮校验都会
+    # 同步抓真实目录（慢时远超本测试 8 秒的等待），把本测试变成环境依赖。这里
+    # 给子进程的应用打同一个桩，目录永远即时可用。
+    configured = app.state.model_catalog.default_model
+
+    async def stub_fetch():
+        return [
+            {"value": "auto", "displayName": "Auto", "isEnabled": True},
+            {"value": configured, "displayName": configured, "isEnabled": True},
+        ]
+
+    app.state.model_catalog._fetch = stub_fetch
 
     async def reply(turn):
         yield {"type": "session", "sdk_session_id": turn.sdk_session_id or "test-session"}

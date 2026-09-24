@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,7 @@ from server.config import Settings, get_settings
 from server.errors import DependencyUnavailableError, error_details
 from server.gateway.agent_contract import AgentEvent, AgentProtocolError, Turn
 from server.memory.service import MemoryStore
+from server.sessions.tool_trace import begin_tool_call, finish_tool_call
 from server.tools.memory.tools import judge_registry, review_registry
 from server.tools.personal_kb.catalog import CATALOG_TITLE
 from server.tools.registry import ToolDefinition, activity
@@ -113,6 +115,63 @@ def turn_context_hooks(additional_context: str):
         }
 
     return {"SessionStart": [HookMatcher(hooks=[inject])]}
+
+
+def tool_trace_hooks(
+    task_id: str,
+    run_id: str,
+    builtins: set[str],
+    on_timeline_change: Callable[[], None] | None = None,
+):
+    """仅记录本轮开放的 SDK 内置工具；Pebble MCP 由自身端点记录。"""
+
+    async def capture(data, _tool_use_id, _hook_context):
+        name = data.get("tool_name")
+        call_id = data.get("tool_use_id")
+        arguments = data.get("tool_input")
+        if name not in builtins or not isinstance(call_id, str):
+            return {}
+        arguments = arguments if isinstance(arguments, dict) else {}
+        event = data.get("hook_event_name")
+        if event == "PreToolUse":
+            await begin_tool_call(
+                task_id=task_id,
+                run_id=run_id,
+                tool_call_id=call_id,
+                name=name,
+                arguments=arguments,
+            )
+            if on_timeline_change is not None:
+                on_timeline_change()
+        elif event in ("PostToolUse", "PostToolUseFailure"):
+            if event == "PostToolUse":
+                response = data.get("tool_response")
+                result = (
+                    response
+                    if isinstance(response, str)
+                    else json.dumps(response, ensure_ascii=False, default=str)
+                )
+                status = "ok"
+            else:
+                result = str(data.get("error") or "工具执行失败")
+                status = "error"
+            await finish_tool_call(
+                task_id=task_id,
+                run_id=run_id,
+                tool_call_id=call_id,
+                name=name,
+                arguments=arguments,
+                status=status,
+                result=result,
+            )
+            if on_timeline_change is not None:
+                on_timeline_change()
+        return {}
+
+    return {
+        event: [HookMatcher(hooks=[capture])]
+        for event in ("PreToolUse", "PostToolUse", "PostToolUseFailure")
+    }
 
 
 def _recording(definition: ToolDefinition, records: list[dict]) -> ToolDefinition:
@@ -287,6 +346,8 @@ class QoderGateway:
             task_id=turn.task_id,
             target_operation_id=turn.target_operation_id,
             queued=queued,
+            run_id=turn.run_id,
+            on_timeline_change=turn.on_timeline_change,
         ) as path:
             options = self._options(turn, visible=visible, path=path)
             async with QoderSDKClient(options) as client:
@@ -411,10 +472,18 @@ class QoderGateway:
         workspace.mkdir(parents=True, exist_ok=True)
         return workspace
 
-    def _permission_callback(self, task_id: str, *, web_enabled: bool, read_enabled: bool):
+    def _permission_callback(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        web_enabled: bool,
+        read_enabled: bool,
+        on_timeline_change: Callable[[], None] | None = None,
+    ):
         workspace = self._task_workspace(task_id).resolve()
 
-        async def authorize(tool_name: str, tool_input: dict, _context: Any):
+        async def authorize(tool_name: str, tool_input: dict, permission_context: Any):
             if web_enabled and tool_name in WEB_TOOLS:
                 return PermissionResultAllow()
             if (
@@ -427,9 +496,35 @@ class QoderGateway:
                 try:
                     requested.resolve().relative_to(workspace)
                 except ValueError:
+                    await record_denial(
+                        tool_name, tool_input, permission_context, "只能读取当前任务的附件"
+                    )
                     return PermissionResultDeny(message="只能读取当前任务的附件")
                 return PermissionResultAllow()
-            return PermissionResultDeny(message=f"未授权的工具：{tool_name}")
+            reason = f"未授权的工具：{tool_name}"
+            await record_denial(tool_name, tool_input, permission_context, reason)
+            return PermissionResultDeny(message=reason)
+
+        async def record_denial(
+            tool_name: str, tool_input: dict, permission_context: Any, reason: str
+        ):
+            # SDK 只保证实际进入权限回调的请求可见；没有调用 ID 时等失败 hook。
+            call_id = getattr(permission_context, "tool_use_id", None)
+            if not isinstance(call_id, str):
+                return
+            if tool_name not in {*WEB_TOOLS, "Read"}:
+                return
+            await finish_tool_call(
+                task_id=task_id,
+                run_id=run_id,
+                tool_call_id=call_id,
+                name=tool_name,
+                arguments=tool_input,
+                status="error",
+                result=reason,
+            )
+            if on_timeline_change is not None:
+                on_timeline_change()
 
         return authorize
 
@@ -467,6 +562,10 @@ class QoderGateway:
         web_tools = list(WEB_TOOLS) if turn.kind is TurnKind.MESSAGE else []
         read_enabled = turn.kind is TurnKind.MESSAGE and (workspace / "attachments").is_dir()
         builtins = [*web_tools, *(["Read"] if read_enabled else [])]
+        hooks = turn_context_hooks(ctx.additional_context) or {}
+        hooks.update(
+            tool_trace_hooks(turn.task_id, turn.run_id, set(builtins), turn.on_timeline_change)
+        )
         return QoderAgentOptions(
             # 内置工具只开放联网查询（见 WEB_TOOLS），本机设置一律关闭：模型能看到的其余
             # 工具只有本轮 MCP 端点里的那些。
@@ -477,7 +576,11 @@ class QoderGateway:
             ],
             can_use_tool=(
                 self._permission_callback(
-                    turn.task_id, web_enabled=bool(web_tools), read_enabled=read_enabled
+                    turn.task_id,
+                    turn.run_id,
+                    web_enabled=bool(web_tools),
+                    read_enabled=read_enabled,
+                    on_timeline_change=turn.on_timeline_change,
                 )
                 if builtins
                 else None
@@ -490,7 +593,7 @@ class QoderGateway:
             setting_sources=[],
             skills=ctx.skills,
             system_prompt=ctx.system_prompt,
-            hooks=turn_context_hooks(ctx.additional_context),
+            hooks=hooks,
             cwd=workspace,
             resume=turn.sdk_session_id,
             include_partial_messages=True,

@@ -13,7 +13,7 @@ import asyncio
 import base64
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, nullcontext
 from uuid import uuid4
 
@@ -27,6 +27,8 @@ from starlette.routing import Mount
 from starlette.types import Receive, Scope, Send
 
 from server.errors import error_details
+from server.sessions.service import timestamp
+from server.sessions.tool_trace import begin_tool_call, finish_tool_call
 from server.tools.registry import ToolDefinition, ToolFileResult
 
 logger = logging.getLogger(__name__)
@@ -62,14 +64,22 @@ class ToolServer:
         task_id: str,
         queued: asyncio.Queue,
         target_operation_id: str | None = None,
+        run_id: str | None = None,
+        on_timeline_change: Callable[[], None] | None = None,
     ) -> AsyncIterator[str]:
-        """登记一轮的工具，yield 该轮的 URL 路径；退出时撤销。"""
+        """登记一轮的工具，yield 该轮的 URL 路径；退出时撤销。
+
+        run_id 非空时本轮的每次工具调用记入任务轨迹；一次性会话（记忆判断等）
+        不属于任何轮次，传 None 即不记。
+        """
         token = uuid4().hex
         server = build_server(
             tools,
             task_id=task_id,
             target_operation_id=target_operation_id,
             queued=queued,
+            run_id=run_id,
+            on_timeline_change=on_timeline_change,
         )
         manager = StreamableHTTPSessionManager(app=server, json_response=True, stateless=True)
         async with manager.run():
@@ -124,6 +134,8 @@ def build_server(
     task_id: str,
     queued: asyncio.Queue,
     target_operation_id: str | None = None,
+    run_id: str | None = None,
+    on_timeline_change: Callable[[], None] | None = None,
 ) -> Server:
     """把本轮允许的工具装到一个 MCP server 上：清单与调用都只认这一份。"""
     from server.skills.runtime import current, reset_scope, set_scope
@@ -142,8 +154,33 @@ def build_server(
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> CallToolResult:
         definition = known.get(name)
+        tool_call_id = uuid4().hex
+        created_at = timestamp()
+        await begin_tool_call(
+            task_id=task_id,
+            run_id=run_id,
+            tool_call_id=tool_call_id,
+            name=name,
+            arguments=arguments,
+            created_at=created_at,
+        )
+        if run_id is not None and on_timeline_change is not None:
+            on_timeline_change()
         if definition is None:
-            return error_result({"error": "unknown_tool", "message": UNKNOWN_TOOL_MESSAGE})
+            # 被拒调用也是模型的真实尝试，照记轨迹。
+            result = error_result({"error": "unknown_tool", "message": UNKNOWN_TOOL_MESSAGE})
+            await finish_tool_call(
+                task_id=task_id,
+                run_id=run_id,
+                tool_call_id=tool_call_id,
+                name=name,
+                arguments=arguments,
+                status="error",
+                result=result_text(result),
+            )
+            if run_id is not None and on_timeline_change is not None:
+                on_timeline_change()
+            return result
         token = set_scope(scope)
         try:
             return await invoke(
@@ -152,11 +189,21 @@ def build_server(
                 task_id=task_id,
                 target_operation_id=target_operation_id,
                 queued=queued,
+                run_id=run_id,
+                tool_call_id=tool_call_id,
+                created_at=created_at,
+                on_timeline_change=on_timeline_change,
             )
         finally:
             reset_scope(token)
 
     return server
+
+
+def result_text(result: CallToolResult) -> str:
+    """轨迹记录用的返回内容：文本部分原样、二进制附件只留元数据行。"""
+    parts = [block.text for block in result.content if isinstance(block, TextContent)]
+    return "\n".join(parts)
 
 
 async def invoke(
@@ -166,6 +213,10 @@ async def invoke(
     task_id: str,
     queued: asyncio.Queue,
     target_operation_id: str | None = None,
+    run_id: str | None = None,
+    tool_call_id: str | None = None,
+    created_at: str | None = None,
+    on_timeline_change: Callable[[], None] | None = None,
 ) -> CallToolResult:
     """执行一次工具调用：业务失败按统一错误词汇交回模型，成功事件按工具声明入队。"""
     fields = dict(arguments)
@@ -180,17 +231,39 @@ async def invoke(
             and fields.get("operation_id") != target_operation_id
         )
     ):
-        return error_result({"error": "wrong_target", "message": TARGET_TOOL_MESSAGE})
-    if definition.needs_task_id:
-        fields["task_id"] = task_id
-    try:
-        result = await asyncio.to_thread(definition.func, **fields)
-    except Exception as error:
-        details = error_details(error)
-        if details is None:
-            logger.exception("工具 %s 执行失败", definition.name)
-            details = {"error": "unexpected", "message": TOOL_ERROR_MESSAGE}
-        return error_result(details)
+        result = error_result({"error": "wrong_target", "message": TARGET_TOOL_MESSAGE})
+    else:
+        if definition.needs_task_id:
+            fields["task_id"] = task_id
+        try:
+            result = await _execute(definition, fields, queued)
+        except Exception as error:
+            details = error_details(error)
+            if details is None:
+                logger.exception("工具 %s 执行失败", definition.name)
+                details = {"error": "unexpected", "message": TOOL_ERROR_MESSAGE}
+            result = error_result(details)
+    await finish_tool_call(
+        task_id=task_id,
+        run_id=run_id,
+        tool_call_id=tool_call_id or uuid4().hex,
+        name=definition.name,
+        arguments=arguments,
+        status="error" if result.isError else "ok",
+        result=result_text(result),
+    )
+    if run_id is not None and on_timeline_change is not None:
+        on_timeline_change()
+    return result
+
+
+async def _execute(
+    definition: ToolDefinition,
+    fields: dict,
+    queued: asyncio.Queue,
+) -> CallToolResult:
+    """跑工具本体并把结果包成 MCP 返回；草稿与提示事件按工具声明入队。"""
+    result = await asyncio.to_thread(definition.func, **fields)
     if definition.emits_draft_saved:
         queued.put_nowait(
             {

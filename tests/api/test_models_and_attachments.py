@@ -241,8 +241,9 @@ def test_retry_endpoint_only_restarts_the_latest_interrupted_user_message(settin
                 ),
             )
             conn.execute(
-                "INSERT INTO task_timeline_items VALUES "
-                "('user-http-retry', ?, 'run-http-retry', 'text', 'user', "
+                "INSERT INTO task_timeline_items (item_id, task_id, run_id, sequence, "
+                "kind, role, text, operation_id, created_at) "
+                "VALUES ('user-http-retry', ?, 'run-http-retry', 0, 'text', 'user', "
                 "'继续回答', NULL, ?)",
                 (task["task_id"], "2026-09-17T00:00:00+00:00"),
             )

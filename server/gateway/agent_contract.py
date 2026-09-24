@@ -5,7 +5,7 @@ Gateway 通过本接口把输入交给 Agent 会话并消费事件流；实现�
 一轮的消息与材料由调用方（调度层与触发域）组装，网关不区分触发来源。
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, TypedDict
@@ -42,6 +42,7 @@ class Turn:
     target_operation_id: str | None = None
     run_id: str | None = None
     db_path: object = None
+    on_timeline_change: Callable[[], None] | None = None
     # 技能选择：手动项只带标识，内容版本由装配时绑定（contracts/skill.md §6）。
     skills: tuple[str, ...] = ()
     excluded_skill_ids: tuple[str, ...] = ()

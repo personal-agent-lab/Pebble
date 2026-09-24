@@ -56,7 +56,7 @@ export default function SearchPage() {
   return (
     <AppShell serviceError={error}>
       <div className="topbar">
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="topbar-text">
           <h2>搜索对话</h2>
         </div>
       </div>

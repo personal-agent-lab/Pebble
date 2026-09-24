@@ -2,7 +2,7 @@
 
 目标约定是 `skill-spec.md` 与 `contracts/skill.md`（2026-09-22 重写）；旧实现按旧契约 `contracts/skills.md`（已删除）于 2026-09-19 验收。本文记录两者的差距与重构步骤；实现状态以 `status.md` 为准。
 
-**进度（2026-09-23）**：阶段 A、B 已完成并提交（`skills` 分支），阶段 C 起未开始。
+**进度（2026-09-24）**：阶段 A、B、C 已完成（`skills` 分支；A/B 已提交，C 待提交），阶段 D 起未开始。
 
 ## 1. 主要差距
 
@@ -49,10 +49,10 @@
 - **B2** ✅ `runtime.py` 与 `agent/client.py` 装配：目录材料按契约 §6；选择字段改名；排除与关闭自动匹配由 `skill_list`/`skill_view` 强制执行；装配层复检手动选择额度。
 - **B3** ✅ HTTP（契约 §10，缺 settings）与前端：`/api/skills` 管理接口、`/api/skill-changes` 审批、`/api/tasks/{id}/skill-usage`；管理页（列表、详情、创建编辑含 409、附件、managed、归档恢复、版本历史恢复、待审变更）、输入框 SkillPicker、任务页加载面板。
 
-### 阶段 C：执行轨迹（spec 阶段 2）
+### 阶段 C：执行轨迹（spec 阶段 2）——Pebble MCP 与内置工具路径完成（2026-09-24）；真实验收边界见 `status.md`
 
-- **C1** 持久化工具调用：在 `mcp.invoke` 边界把每次调用与返回写入轨迹存储（tool_call_id、sequence、tool 名、参数键、成败、返回关联）；时间线新增工具条目类型或独立表，选型在实现时定，契约 §3 只约束可查询形状。
-- **C2** 轨迹视图查询：按任务返回有序条目流，供 C 之后复盘装配与 evidence_item_ids 存在性校验。
+- **C1** ✅ 持久化工具调用：在 `mcp.invoke` 边界把每次调用与返回写入轨迹存储（tool_call_id、sequence、tool 名、参数含值、成败、返回内容）；轨迹条目并入 `task_timeline_items`（v20：加 `sequence` 列按 rowid 回填 + `tool` 条目），任务页以可折叠细行渲染（含展开完整参数与返回、复制原始记录、依据定位自动展开；2026-09-24 与用户确认，参数含值已改契约 §3）。被拒调用（unknown_tool、wrong_target）与业务失败同样记为失败；一次性会话（run_id 为空）不记；写入失败只告警不中断调用。
+- **C2** ✅ 轨迹视图查询：`server/sessions/trajectory.py` 按任务返回有序条目流（轮状态映射 running/completed/failed/cancelled、条目角色 user/assistant/notice/tool），支持 `since_item_id`/`through_item_id` 边界截取；`item_within_boundary` 供 D 阶段 evidence_item_ids 边界校验。
 
 ### 阶段 D：自动沉淀（spec 阶段 3）
 
@@ -69,5 +69,6 @@
 
 ## 4. 验证
 
-- 每阶段跑既有测试并对齐改造：`test_skills.py`（A）、`test_skills_service.py`（A4）、`test_skills_runtime.py`（B2）、`test_skills_http.py`（B3）；轨迹与复盘测试随 C/D 新增（参照 `test_skill_evidence.py` 的替身模式，该文件已随 evidence 模块删除）。
+- 每阶段跑既有测试并对齐改造：`test_skills.py`（A）、`test_skills_service.py`（A4）、`test_skills_runtime.py`（B2）、`test_skills_http.py`（B3）；轨迹测试为 `tests/gateway/test_trajectory.py`（C：记录、顺序、重启持久、重试保留、一次性会话不记），复盘测试随 D 新增。
 - 阶段 A/B 完成后按 spec §12 场景 1、2 做真实模型验收，三种方式都做：`tests/acceptance/qoder_skills_basic.py`（临时实例 + 真实 Qoder 模型，断言附证据）、管理页与选择器的浏览器点验（Playwright 驱动的创建→编辑→冲突→版本恢复、Picker 勾选与排除随消息提交）、`http://127.0.0.1:8000` 上真实运行实例的对话入口走查（含手动选择、排除、关闭自动匹配与 409/422/404 边界）。
+- 阶段 C 已按 spec §12 场景 7 的轨迹一半做真实模型验收：`tests/acceptance/qoder_skills_trajectory.py`（走生产 GatewayRuntime 路径：失败链重建、重启持久、轮状态映射、依据边界校验、时间线载荷），2026-09-24 通过；复盘对照的一半随 D 补。

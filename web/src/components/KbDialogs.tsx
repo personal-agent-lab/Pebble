@@ -12,6 +12,7 @@ import {
   type KbWriteResult,
 } from "../api";
 import { breadcrumbs, displayTitle, fileName, folderView, parentDir } from "../kb";
+import { MoreMenu } from "./MoreMenu";
 
 export const FOLDER_ICON = (
   <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -23,14 +24,6 @@ export const DOC_ICON = (
   <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
     <polyline points="14 3 14 8 19 8" />
-  </svg>
-);
-
-const MORE_ICON = (
-  <svg className="i" viewBox="0 0 24 24" fill="currentColor">
-    <circle cx="5" cy="12" r="1.7" />
-    <circle cx="12" cy="12" r="1.7" />
-    <circle cx="19" cy="12" r="1.7" />
   </svg>
 );
 
@@ -64,80 +57,22 @@ function failureText(failure: unknown): string {
   return failure.fieldErrors?.map((item) => item.message).join("；") || failure.message;
 }
 
-/**
- * 资料的“⋯”菜单：重命名、移动、删除，具体操作交给对话框。
- * 弹层用 fixed 定位，坐标在打开时按按钮量一次，不被列表或页面的滚动区裁掉。
- */
+/** 资料的“⋯”菜单：重命名、移动、删除，具体操作交给对话框。 */
 export function KbItemMenu({ disabledReason, onRename, onMove, onDelete }: {
   disabledReason?: string;
   onRename: () => void;
   onMove: () => void;
   onDelete: () => void;
 }) {
-  const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
-  const root = useRef<HTMLDivElement>(null);
-  const button = useRef<HTMLButtonElement>(null);
-  const open = anchor !== null;
-
-  useEffect(() => {
-    if (!open) return;
-    const close = () => setAnchor(null);
-    const onPointerDown = (event: MouseEvent) => {
-      if (root.current !== null && !root.current.contains(event.target as Node)) close();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
-    };
-  }, [open]);
-
-  const toggle = () => {
-    if (open) {
-      setAnchor(null);
-      return;
-    }
-    const rect = button.current?.getBoundingClientRect();
-    if (rect === undefined) return;
-    setAnchor({ top: rect.bottom + 4, right: document.documentElement.clientWidth - rect.right });
-  };
-
-  const pick = (action: () => void) => {
-    setAnchor(null);
-    action();
-  };
-
-  const disabled = disabledReason !== undefined;
   return (
-    <div className={`kb-more${open ? " open" : ""}`} ref={root}>
-      <button type="button" ref={button} className="kb-more-button" aria-label="更多操作"
-        aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
-        {MORE_ICON}
-      </button>
-      {anchor !== null && (
-        <div className="task-menu kb-more-menu" role="menu" title={disabledReason}
-          style={{ position: "fixed", top: anchor.top, right: anchor.right }}>
-          <button type="button" role="menuitem" className="task-menu-item" disabled={disabled} onClick={() => pick(onRename)}>
-            {RENAME_ICON}重命名
-          </button>
-          <button type="button" role="menuitem" className="task-menu-item" disabled={disabled} onClick={() => pick(onMove)}>
-            {MOVE_ICON}移动
-          </button>
-          <button type="button" role="menuitem" className="task-menu-item danger" disabled={disabled} onClick={() => pick(onDelete)}>
-            {DELETE_ICON}删除
-          </button>
-          {disabled && <div className="kb-more-hint">{disabledReason}</div>}
-        </div>
-      )}
-    </div>
+    <MoreMenu
+      disabledReason={disabledReason}
+      items={[
+        { key: "rename", label: "重命名", icon: RENAME_ICON, onSelect: onRename },
+        { key: "move", label: "移动", icon: MOVE_ICON, onSelect: onMove },
+        { key: "delete", label: "删除", icon: DELETE_ICON, danger: true, onSelect: onDelete },
+      ]}
+    />
   );
 }
 

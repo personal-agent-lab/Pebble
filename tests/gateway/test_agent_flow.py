@@ -562,9 +562,10 @@ async def test_retry_reuses_latest_interrupted_message_and_replaces_partial_answ
             ),
         )
         conn.execute(
-            "INSERT INTO task_timeline_items VALUES "
-            "('user-retry', ?, 'run-retry', 'text', 'user', '原问题', NULL, ?), "
-            "('partial-retry', ?, 'run-retry', 'text', 'assistant', '半截回答', NULL, ?)",
+            "INSERT INTO task_timeline_items (item_id, task_id, run_id, sequence, kind, role, "
+            "text, operation_id, created_at) VALUES "
+            "('user-retry', ?, 'run-retry', 0, 'text', 'user', '原问题', NULL, ?), "
+            "('partial-retry', ?, 'run-retry', 1, 'text', 'assistant', '半截回答', NULL, ?)",
             (
                 task["task_id"],
                 "2026-09-17T00:00:00+00:00",

@@ -8,6 +8,7 @@ import { isMemoryNotice } from "../memory";
 import MailDraftCard from "./MailDraftCard";
 import Markdown from "./Markdown";
 import MessageActions from "./MessageActions";
+import ToolCallRow from "./ToolCallRow";
 
 const STICK_PX = 48;
 const FOCUS_MS = 2400;
@@ -41,6 +42,7 @@ function contentSignature(items: TimelineItem[]): string {
   if (last === undefined) return "0";
   const growth = last.kind === "text" ? `${last.text.length}:${(last.attachments ?? []).map((item) => item.file_id).join(",")}`
     : last.kind === "mail_draft" ? `${last.draft.version}:${last.execution.status}`
+    : last.kind === "tool" ? `${last.name}:${last.status}`
     : last.text.length;
   return `${items.length}:${last.item_id}:${growth}`;
 }
@@ -64,13 +66,13 @@ function MessageAttachments({ items }: { items: Attachment[] }) {
   </div>;
 }
 
-/** 连续几条 Agent 文字读起来是同一个回答，复制要拿到完整一段而不是最后一截。 */
-function answerText(items: TimelineItem[], endIndex: number): string {
+/** 一轮回答可能被工具行分隔；复制时取本轮全部助手文字。 */
+function answerText(items: TimelineItem[], runId: string): string {
   const parts: string[] = [];
-  for (let index = endIndex; index >= 0; index -= 1) {
-    const item = items[index];
-    if (item.kind !== "text" || item.role !== "assistant") break;
-    parts.unshift(item.text);
+  for (const item of items) {
+    if (item.kind === "text" && item.role === "assistant" && item.run_id === runId) {
+      parts.push(item.text);
+    }
   }
   return parts.join("\n\n");
 }
@@ -79,6 +81,7 @@ type Props = {
   taskId: string;
   items: TimelineItem[];
   running: boolean;
+  activeRunId?: string | null;
   /** 进行中的当前步骤说明；没有时只显示跳动的点。 */
   activity?: string | null;
   /** 从历史搜索跳转过来时要定位的条目：滚到它并短暂高亮，不再自动贴底。 */
@@ -92,7 +95,7 @@ type Props = {
 };
 
 export default function TimelineFeed({
-  taskId, items, running, activity = null, focusItemId = null, retryRunId = null,
+  taskId, items, running, activeRunId = null, activity = null, focusItemId = null, retryRunId = null,
   retrying = false, retryMessage, sendMessage, onChanged,
 }: Props) {
   const anchor = useRef<HTMLDivElement>(null);
@@ -100,6 +103,15 @@ export default function TimelineFeed({
   const focused = useRef<string | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const toggleTool = (itemId: string) => {
+    setExpandedTools((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  };
   useEffect(() => {
     let scroller = scrollParent(anchor.current);
     let target = scrollEventTarget(scroller);
@@ -130,11 +142,15 @@ export default function TimelineFeed({
   useEffect(() => { if (stick.current) anchor.current?.scrollIntoView({ block: "end" }); }, [signature, running]);
 
   // 定位只做一次：条目读出来之后滚到它；之后的新内容照常，不再把视图拽回这里。
+  // 定位到工具行时顺带展开，审批页跳依据条目时能直接看到完整调用。
   const present = focusItemId !== null && items.some((item) => item.item_id === focusItemId);
   useEffect(() => {
     if (focusItemId === null || !present || focused.current === focusItemId) return;
     focused.current = focusItemId;
     stick.current = false;
+    if (items.some((item) => item.item_id === focusItemId && item.kind === "tool")) {
+      setExpandedTools((prev) => new Set(prev).add(focusItemId));
+    }
     document.getElementById(itemAnchor(focusItemId))?.scrollIntoView({ block: "center" });
     setHighlight(focusItemId);
     const timer = window.setTimeout(() => setHighlight(null), FOCUS_MS);
@@ -144,6 +160,11 @@ export default function TimelineFeed({
     id: itemAnchor(itemId),
     "data-focus": highlight === itemId ? "true" : undefined,
   });
+  const lastAssistantByRun = new Map<string, string>();
+  for (const item of items) {
+    if (item.kind === "text" && item.role === "assistant") lastAssistantByRun.set(item.run_id, item.item_id);
+  }
+  const currentRunId = running ? activeRunId ?? items[items.length - 1]?.run_id : null;
 
   return <>
     {items.map((item, index) => {
@@ -158,14 +179,19 @@ export default function TimelineFeed({
       if (item.kind === "mail_draft") return <div className="focus-frame" key={item.item_id} {...mark(item.item_id)}>
         <MailDraftCard taskId={taskId} item={item} sendMessage={sendMessage} onChanged={onChanged} />
       </div>;
+      if (item.kind === "tool") return <div key={item.item_id} {...mark(item.item_id)}>
+        <ToolCallRow item={item} focused={highlight === item.item_id}
+          active={running && item.run_id === activeRunId}
+          expanded={expandedTools.has(item.item_id)}
+          onToggle={() => toggleTool(item.item_id)} />
+      </div>;
       const agent = item.role === "assistant";
       const previous = items[index - 1];
-      const next = items[index + 1];
       const grouped = previous?.kind === "text" && previous.role === item.role;
-      // 落款只挂在一个回答的最后一条上；还在流式输出时先不挂，
-      // 否则复制到的是半截文字，时间也还不是这段回答的时间。
+      // 同一轮即使被工具调用分成多段，也只在最后一段挂一次复制入口。
       const last = index === items.length - 1;
-      const ended = !(next?.kind === "text" && next.role === "assistant") && !(last && running);
+      const ended = agent && lastAssistantByRun.get(item.run_id) === item.item_id
+        && item.run_id !== currentRunId;
       const canRetry = !agent && item.run_id === retryRunId && retryMessage !== undefined;
       return <div className={`msg ${agent ? "agent" : "user"}${grouped ? " cont" : ""}`} key={item.item_id}
         {...mark(item.item_id)}>
@@ -185,7 +211,7 @@ export default function TimelineFeed({
             </button>}
             {item.text && <MessageActions text={item.text} pinned={false} end copyLabel="复制消息" />}
           </div>}
-          {agent && ended && <MessageActions text={answerText(items, index)}
+          {ended && <MessageActions text={answerText(items, item.run_id)}
             createdAt={item.created_at} pinned={last} />}
         </div>
       </div>;

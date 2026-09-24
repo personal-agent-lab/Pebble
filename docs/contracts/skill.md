@@ -46,11 +46,12 @@
 | 任务（对应 Session） | `task_id`、`created_at` | 既有任务表 |
 | 轮（对应 Turn） | `turn_id`、`task_id`、`status`（`running/completed/failed/cancelled`）、`started_at`、`ended_at` | 既有轮次记录 |
 | 条目（对应 Message） | `item_id`、`turn_id`、`sequence`、`role`（`user/assistant/notice/tool`）、`content`、`tool_call_id`、`created_at` | 既有时间线 |
-| 工具调用 | `tool_call_id`、`turn_id`、`name`、`arguments` 键、`status`（成功/失败）、`created_at` | 既有工具执行记录 |
+| 工具调用 | `tool_call_id`、`turn_id`、`name`、`arguments`（含值）、`status`（`running/ok/error`）、`result`（运行中为空）、`created_at` | 既有工具执行记录 |
 
-- `sequence` 全任务单调递增，保证顺序可恢复；工具返回条目用 `tool_call_id` 与调用配对，可重建“调用 → 失败 → 调整 → 成功 → 回答”的完整链。
+- `sequence` 全任务单调递增，工具开始时占位、结束时更新同一条；并行调用按开始顺序恢复。中断时未收到结果的条目保留 `running`，读取界面显示“未记录结果”，不推断成功或失败。
 - `status=completed` 只表示执行结束，不表示方法经验证；判断权在复盘（`skill-spec.md` §5）。
-- 轨迹留在 SQLite，不进技能 Git 仓库；外部格式导出不在范围内。
+- 轨迹留在 SQLite，不进技能 Git 仓库、不同步；参数值与返回内容随轨迹只存本地。外部格式导出不在范围内。
+- Pebble MCP 调用由现有工具边界记录；本轮开放的内置 WebSearch、WebFetch、附件 Read 由 SDK 的工具回调记录成功与失败，以 tool_use_id 配对调用和结果。同一次 MCP 调用不再由 SDK 回调重复记入轨迹。运行观测只引用轨迹条目，不复制参数值或返回内容（见 contracts/observability.md）。
 
 ## 4. ReviewJob：一次后台复盘
 
@@ -162,7 +163,7 @@ archive_skill(skill_id) / restore_skill(skill_id)
 | `GET /api/tasks/{task_id}/skill-usage` | — | 本任务加载记录：`skill_id`、`revision`、`source`、轮次 |
 | `GET/PUT /api/skills/settings` | `review_interval`、`review_enabled`、`stale_days` | 复盘与陈旧配置 |
 
-管理页 `/skills`：目录浏览、正文与附件查看、创建、编辑、启停归档恢复、`managed` 切换、历史版本与恢复、待审变更（差异对比、依据条目跳转原对话）、使用统计。发起任务的输入框提供技能多选与排除，随消息提交 `selection`。字段错误 422；版本冲突 409 附 `current_revision`；不存在 404。
+管理页 `/skills`：目录浏览、按 `SKILL.md` 与 `references/`、`templates/` 的层次浏览，正文与附件都可直接编辑、附件可增删、保存时一次提交（同属一个 `revision`）、创建、启停归档恢复、`managed` 切换、历史版本与恢复、待审变更（差异对比、依据条目跳转原对话）、使用统计。发起与续聊的输入框输入 `/` 唤起技能列表（按名称与标识过滤、键盘可选），选中项以胶囊展示并随消息提交 `selection`；界面只设置手动项，`excluded_skill_ids` 与 `auto_match` 恒为默认值。字段错误 422；版本冲突 409 附 `current_revision`；不存在 404。
 
 ## 11. 错误
 

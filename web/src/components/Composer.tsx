@@ -1,9 +1,8 @@
-import { ArrowUp, FileText, Plus, X } from "@phosphor-icons/react";
-import { useEffect, useRef, useState } from "react";
+import { ArrowUp, Cube, FileText, Plus, X } from "@phosphor-icons/react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import type { ApiError, ModelEntry, SkillSelection, SkillSummary } from "../api";
 import ModelPicker from "./ModelPicker";
-import SkillPicker from "./SkillPicker";
 
 const MAX_FILES = 10;
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
@@ -18,7 +17,7 @@ type Props = {
   /** 目录尚未读到时不显示固定型号，免得先闪出型号标识。 */
   modelsPending?: boolean;
   onModelChange?: (model: string) => void;
-  /** 可选的技能目录；提供时输入框出现技能选择，选择随每条消息提交并重置。 */
+  /** 可选的技能目录；提供时输入 `/` 唤起技能列表，选中项随每条消息提交并重置。 */
   skills?: SkillSummary[];
   /** 模型目录读不到最新版本时的提示；沿用旧目录，不阻止发送。 */
   catalogNotice?: { message: string; retrying: boolean; onRetry: () => void } | null;
@@ -42,8 +41,12 @@ export default function Composer({
     skills: [], excluded_skill_ids: [], auto_match: true,
   });
   const [error, setError] = useState<string | null>(null);
+  // `/` 列表用 Esc 收起后，同一条 `/` 文本不再自动弹出，继续输入才重新出现。
+  const [dismissed, setDismissed] = useState(false);
+  const [highlight, setHighlight] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
   const previews = useRef(new Map<File, string>());
 
   useEffect(() => () => {
@@ -52,6 +55,12 @@ export default function Composer({
 
   // 预填的多行文字要撑开输入框，与手动输入时一致。
   useEffect(() => { if (initialMessage) resize(); }, []);
+
+  // `/` 后的文本就是过滤词，词变了高亮从头开始。
+  const slashQuery = /^\/(\S*)$/.exec(message)?.[1] ?? null;
+  useEffect(() => { setHighlight(0); }, [slashQuery]);
+  // 收起是粘性的：点外面或 Esc 之后，同一段 `/` 文本继续输入不再弹出；清掉 `/` 重打才恢复。
+  useEffect(() => { if (slashQuery === null) setDismissed(false); }, [slashQuery]);
 
   const imageUrl = (file: File) => {
     const known = previews.current.get(file);
@@ -89,6 +98,38 @@ export default function Composer({
     setFiles((current) => current.filter((file) => file !== target));
   };
 
+  const slashOpen = skills !== undefined && slashQuery !== null && !dismissed;
+  const pickedIds = selection.skills.map((pick) => pick.id);
+  // 已选中的不再进列表（移除走胶囊上的 ×），按名称或标识不区分大小写过滤。
+  const candidates = slashOpen && skills !== undefined ? skills.filter((skill) =>
+    !pickedIds.includes(skill.skill_id)
+    && [skill.name, skill.skill_id].some((text) => text.toLowerCase().includes(slashQuery!.toLowerCase())),
+  ) : [];
+  const active = Math.min(highlight, candidates.length - 1);
+  const pickedSkills = (skills ?? []).filter((skill) => pickedIds.includes(skill.skill_id));
+
+  // 列表开着时，点它以外的任何地方都收起（点选项本身不收，走选中流程）。
+  useEffect(() => {
+    if (!slashOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (menu.current === null || !menu.current.contains(event.target as Node)) setDismissed(true);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [slashOpen]);
+
+  /** 选中即从输入框拿掉 `/` 文本，挂成胶囊；列表随文本清空自然收起。 */
+  const pickSkill = (skill: SkillSummary) => {
+    setSelection((current) => ({ ...current, skills: [...current.skills, { id: skill.skill_id }] }));
+    setMessage("");
+    setDismissed(false);
+    if (textarea.current !== null) textarea.current.style.height = "auto";
+  };
+
+  const removeSkill = (id: string) => setSelection((current) => ({
+    ...current, skills: current.skills.filter((pick) => pick.id !== id),
+  }));
+
   const submit = async () => {
     const text = message.trim();
     if ((!text && files.length === 0) || sending || !model) return;
@@ -106,7 +147,70 @@ export default function Composer({
     if (textarea.current !== null) textarea.current.style.height = "auto";
   };
 
+  const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (slashOpen) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setHighlight(Math.min(active + 1, candidates.length - 1));
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setHighlight(Math.max(active - 1, 0));
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setDismissed(true);
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        // 没有可选项时 Enter 只收起列表：`/xxx` 多半是误触，不该当正文发出去。
+        if (candidates.length > 0) {
+          event.preventDefault();
+          pickSkill(candidates[active]);
+        } else if (event.key === "Enter") {
+          event.preventDefault();
+          setDismissed(true);
+        }
+        return;
+      }
+    }
+    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
+  };
+
   return <div className="codex-composer">
+    {slashOpen && <div ref={menu} className="composer-skill-menu" role="listbox" aria-label="技能列表">
+      <div className="composer-skill-menu-title">技能</div>
+      {candidates.length === 0 && <div className="composer-skill-empty">
+        {skills !== undefined && skills.length === 0 ? "还没有启用中的技能，可在“技能”页创建" : "无匹配技能"}
+      </div>}
+      {candidates.map((skill, index) => (
+        <button type="button" role="option" aria-selected={index === active} key={skill.skill_id}
+          className={`composer-skill-option${index === active ? " active" : ""}`}
+          // 按下不转移焦点，输入框继续接收后续按键；鼠标移动把高亮带过去，回车选中的就是悬停项。
+          onMouseDown={(event) => event.preventDefault()}
+          onMouseMove={() => setHighlight(index)}
+          onClick={() => pickSkill(skill)}
+          ref={(node) => { if (index === active && node !== null) node.scrollIntoView({ block: "nearest" }); }}>
+          <Cube size={15} weight="duotone" />
+          <span className="composer-skill-name">{skill.name}</span>
+          <span className="composer-skill-desc">{skill.description}</span>
+        </button>
+      ))}
+    </div>}
+
+    {pickedSkills.length > 0 && <div className="composer-skills" aria-label="待发送技能">
+      {pickedSkills.map((skill) => (
+        <div className="composer-skill" key={skill.skill_id}>
+          <Cube size={13} weight="fill" />
+          <strong title={skill.description}>{skill.name}</strong>
+          <button type="button" onClick={() => removeSkill(skill.skill_id)} disabled={sending}
+            aria-label={`移除技能 ${skill.name}`}><X size={12} weight="bold" /></button>
+        </div>
+      ))}
+    </div>}
+
     {files.length > 0 && <div className="composer-files" aria-label="待发送附件">
       {files.map((file, index) => {
         const image = file.type.startsWith("image/");
@@ -125,9 +229,7 @@ export default function Composer({
 
     <textarea ref={textarea} value={message} rows={1} placeholder={placeholder} aria-label="消息"
       disabled={sending} onChange={(event) => { setMessage(event.target.value); resize(); }}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
-      }} />
+      onKeyDown={onComposerKeyDown} />
 
     {error !== null && <div className="composer-error" role="alert">{error}</div>}
 
@@ -139,10 +241,6 @@ export default function Composer({
         }} />
       <button type="button" className="composer-add" onClick={() => input.current?.click()}
         disabled={sending} aria-label="添加图片或文件"><Plus size={18} weight="bold" /></button>
-
-      {skills !== undefined && (
-        <SkillPicker skills={skills} selection={selection} onChange={setSelection} disabled={sending} />
-      )}
 
       <div className="composer-spacer" />
       {catalogNotice !== null && !modelLocked && <span className="composer-catalog-notice">

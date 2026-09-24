@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import default_model, get_settings
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 21
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -319,6 +319,68 @@ SCHEMA_V19 = (
     "CREATE INDEX skill_loads_skill ON skill_loads(skill_id, loaded_at)",
 )
 
+# 执行轨迹（contracts/skill.md §3）：时间线补任务内单调 sequence，并新增 tool 条目
+# 承载每次工具调用——工具名、参数（含值）、成败与返回内容。轨迹条目留在时间线里，
+# evidence_item_ids 才能指向真实条目；参数与返回随轨迹只存本地 SQLite。
+SCHEMA_V20 = (
+    "CREATE TABLE task_timeline_items_new (item_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "run_id TEXT NOT NULL REFERENCES agent_runs(run_id), "
+    "sequence INTEGER NOT NULL CHECK(sequence >= 0), "
+    "kind TEXT NOT NULL CHECK(kind IN ('text','mail_draft','error','notice','tool')), "
+    "role TEXT CHECK(role IN ('user','assistant')), text TEXT, "
+    "operation_id TEXT REFERENCES operations(operation_id), "
+    "tool_call_id TEXT, tool_name TEXT, tool_arguments TEXT, "
+    "tool_status TEXT CHECK(tool_status IN ('ok','error')), tool_result TEXT, "
+    "created_at TEXT NOT NULL, "
+    "CHECK ((kind = 'text') = (role IS NOT NULL AND text IS NOT NULL)), "
+    "CHECK ((kind = 'mail_draft') = (operation_id IS NOT NULL)), "
+    "CHECK (kind NOT IN ('error','notice') OR (role IS NULL AND text IS NOT NULL)), "
+    "CHECK ((kind = 'tool') = (tool_call_id IS NOT NULL AND tool_name IS NOT NULL "
+    "AND tool_arguments IS NOT NULL AND tool_status IS NOT NULL)), "
+    "CHECK (kind != 'tool' OR (role IS NULL AND text IS NULL AND operation_id IS NULL "
+    "AND tool_result IS NOT NULL)))",
+    "INSERT INTO task_timeline_items_new (item_id, task_id, run_id, sequence, kind, role, "
+    "text, operation_id, created_at) "
+    "SELECT item_id, task_id, run_id, rowid, kind, role, text, operation_id, created_at "
+    "FROM task_timeline_items",
+    "DROP TABLE task_timeline_items",
+    "ALTER TABLE task_timeline_items_new RENAME TO task_timeline_items",
+    "CREATE UNIQUE INDEX task_timeline_mail_draft ON task_timeline_items(task_id,operation_id) "
+    "WHERE kind='mail_draft'",
+    "CREATE UNIQUE INDEX task_timeline_sequence ON task_timeline_items(task_id, sequence)",
+)
+
+# 工具开始时即占据轨迹位置；结果到达后更新同一行。旧记录原样迁移。
+SCHEMA_V21 = (
+    "CREATE TABLE task_timeline_items_new (item_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL REFERENCES tasks(task_id), "
+    "run_id TEXT NOT NULL REFERENCES agent_runs(run_id), "
+    "sequence INTEGER NOT NULL CHECK(sequence >= 0), "
+    "kind TEXT NOT NULL CHECK(kind IN ('text','mail_draft','error','notice','tool')), "
+    "role TEXT CHECK(role IN ('user','assistant')), text TEXT, "
+    "operation_id TEXT REFERENCES operations(operation_id), "
+    "tool_call_id TEXT, tool_name TEXT, tool_arguments TEXT, "
+    "tool_status TEXT CHECK(tool_status IN ('running','ok','error')), tool_result TEXT, "
+    "created_at TEXT NOT NULL, "
+    "CHECK ((kind = 'text') = (role IS NOT NULL AND text IS NOT NULL)), "
+    "CHECK ((kind = 'mail_draft') = (operation_id IS NOT NULL)), "
+    "CHECK (kind NOT IN ('error','notice') OR (role IS NULL AND text IS NOT NULL)), "
+    "CHECK ((kind = 'tool') = (tool_call_id IS NOT NULL AND tool_name IS NOT NULL "
+    "AND tool_arguments IS NOT NULL AND tool_status IS NOT NULL)), "
+    "CHECK (kind != 'tool' OR (role IS NULL AND text IS NULL AND operation_id IS NULL "
+    "AND ((tool_status = 'running' AND tool_result IS NULL) "
+    "OR (tool_status IN ('ok','error') AND tool_result IS NOT NULL)))))",
+    "INSERT INTO task_timeline_items_new SELECT * FROM task_timeline_items",
+    "DROP TABLE task_timeline_items",
+    "ALTER TABLE task_timeline_items_new RENAME TO task_timeline_items",
+    "CREATE UNIQUE INDEX task_timeline_mail_draft ON task_timeline_items(task_id,operation_id) "
+    "WHERE kind='mail_draft'",
+    "CREATE UNIQUE INDEX task_timeline_sequence ON task_timeline_items(task_id, sequence)",
+    "CREATE UNIQUE INDEX task_timeline_tool_call ON task_timeline_items(run_id, tool_call_id) "
+    "WHERE kind='tool'",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -339,6 +401,8 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     17: SCHEMA_V17,
     18: SCHEMA_V18,
     19: SCHEMA_V19,
+    20: SCHEMA_V20,
+    21: SCHEMA_V21,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

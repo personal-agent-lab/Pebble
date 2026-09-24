@@ -7,8 +7,7 @@ import Composer from "../components/Composer";
 import Notice from "../components/Notice";
 import StatusBadge from "../components/StatusBadge";
 import TimelineFeed from "../components/TimelineFeed";
-import { useTaskDetail, useSkillCatalog, useTaskSkillUsage } from "../hooks";
-import SkillUsage from "../components/SkillUsage";
+import { useTaskDetail, useSkillCatalog } from "../hooks";
 import {
   forgetTask, retryable, retryTask, reviseLostTask, usePendingTask, viewTask, type PendingTask,
 } from "../pendingTasks";
@@ -67,7 +66,7 @@ function TaskHeader({ title, sub, children }: { title: string | null; sub: strin
   const navigate = useNavigate();
   return <div className="chat-top">
     <button type="button" className="back" onClick={() => navigate("/tasks")} aria-label="返回任务列表">{BACK_ICON}</button>
-    <div style={{ minWidth: 0, flex: 1 }}>
+    <div className="chat-top-text">
       <h2 title={title ?? undefined}>{title ?? "读取中…"}</h2>
       <div className="sub">{sub}</div>
     </div>
@@ -120,7 +119,6 @@ function TaskDetailView({ taskId, placeholder, models }: {
   const detail = useTaskDetail(taskId);
   const tasks = useTasks();
   const skills = useSkillCatalog();
-  const skillUsage = useTaskSkillUsage(taskId, detail.items.length);
   const placeholderItems = usePlaceholderItems(detail.task === null ? placeholder : null);
 
   // 刚创建成功：让侧栏立即出现这个任务，不等下一轮列表轮询。
@@ -165,6 +163,7 @@ function TaskDetailView({ taskId, placeholder, models }: {
     <div className="chat-main"><div className="feed">
       <TimelineFeed key={`${taskId}:${focusItemId ?? ""}`} taskId={taskId}
         items={waiting ? placeholderItems : detail.items} running={running}
+        activeRunId={running ? latest?.run_id : null}
         activity={running ? detail.activity : null}
         focusItemId={focusItemId}
         retryRunId={latest?.retryable === true ? latest.run_id : null}
@@ -173,7 +172,6 @@ function TaskDetailView({ taskId, placeholder, models }: {
     </div></div>
 
     <div className="msg-composer"><div className="composer-wrap">
-      {skillUsage !== null && <SkillUsage usage={skillUsage} />}
       <Composer placeholder="随心输入" sending={detail.sending} model={detail.task?.model ?? placeholder?.model ?? ""}
         models={models ?? []} modelsPending={models === null} modelLocked
         skills={skills ?? undefined}

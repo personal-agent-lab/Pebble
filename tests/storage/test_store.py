@@ -342,8 +342,9 @@ def test_delete_task_cascades(stores):
         insert_run(conn, "run-done", task["task_id"], "done")
         insert_run(conn, "run-other", other["task_id"], "done")
         conn.execute(
-            "INSERT INTO task_timeline_items VALUES ('item1', ?, 'run-done', 'text', "
-            "'user', '你好', NULL, ?)",
+            "INSERT INTO task_timeline_items (item_id, task_id, run_id, sequence, kind, "
+            "role, text, operation_id, created_at) "
+            "VALUES ('item1', ?, 'run-done', 0, 'text', 'user', '你好', NULL, ?)",
             (task["task_id"], task["created_at"]),
         )
     tasks.delete_task(task["task_id"])
