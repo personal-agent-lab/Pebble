@@ -270,6 +270,9 @@ class TurnObserver:
                 "duration_api_ms": getattr(message, "duration_api_ms", None),
                 "num_turns": getattr(message, "num_turns", None),
                 "is_error": bool(getattr(message, "is_error", False)),
+                # 结束原因按 SDK 给的两个字段取；都没有就留空，不猜。
+                "stop_reason": getattr(message, "stop_reason", None)
+                or getattr(message, "terminal_reason", None),
                 "usage": list(self._usage),
             }
         )

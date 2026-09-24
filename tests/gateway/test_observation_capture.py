@@ -72,7 +72,9 @@ def test_stream_records_materials_usage_and_result(settings, monkeypatch):
             AssistantMessage(
                 [TextBlock("结论")], "model", usage={"request_id": "req-2"}, message_id="msg-2"
             ),
-            ResultMessage("success", 1200, 800, False, 3, "session-1", result="完成"),
+            ResultMessage(
+                "success", 1200, 800, False, 3, "session-1", stop_reason="end_turn", result="完成"
+            ),
         ],
     )
 
@@ -96,6 +98,7 @@ def test_stream_records_materials_usage_and_result(settings, monkeypatch):
     assert sdk_result["duration_ms"] == 1200
     assert sdk_result["duration_api_ms"] == 800
     assert sdk_result["num_turns"] == 3
+    assert sdk_result["stop_reason"] == "end_turn"
     assert [entry["request_id"] for entry in sdk_result["usage"]] == ["req-1", "req-2"]
     # 请求缺字段（req-2 只有标识）时合计留空，不拿部分值冒充总量。
     from server.sessions.observations import usage_totals

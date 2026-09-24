@@ -16,13 +16,13 @@
 | 个人资料库 Phase 5：主题页与后台主题整理 | 未实现 | `kb-spec.md` §8、`contracts/personal-kb.md` §7 |
 | Skills：技能目录与 `SKILL.md` 正文、`references/` 与 `templates/` 附件、三种来源、按 `managed` 分流的变更与审批、目录常驻与正文按需加载、手动选择、Git 版本与恢复、管理页与输入框 `/` 技能选择；执行轨迹：任务内单调序号、Pebble MCP 与本轮内置工具调用入时间线、运行中实时显示工具行、按条目边界的轨迹视图、任务页可折叠工具行与依据定位 | 基础段与轨迹段已实现；后台复盘、使用统计与陈旧标记未实现 | `skill-spec.md`、`contracts/skill.md` |
 | 认证与 HTTPS 远程访问：Tailscale Serve、账号名单、写请求来源校验、前端同源托管、工具端点独立监听 | 已实现；真机外网验收未完成 | `v1-design.md` §6 |
-| 可观测性：任务页每轮执行详情，含材料装配、SDK 用量与上下文、工具耗时、压缩及关键静默降级 | 未实现（规格已定义） | `observability-spec.md`、`contracts/observability.md` |
+| 可观测性：任务页每轮执行详情，含材料装配与跳过、SDK 时长与调用次数、请求级用量、上下文占用、压缩、权限拒绝与关键静默降级 | 已实现 | `observability-spec.md`、`contracts/observability.md` |
 
-SQLite schema 版本为 21：保留 main 的 1–16；Skills 旧设计的运行表在 17–18 建立，v19 一并删除并新建 `skill_changes`（变更记录）与 `skill_loads`（加载记录）；v20 给 `task_timeline_items` 补任务内单调 `sequence` 并新增 `tool` 条目；v21 允许工具 `running` 时结果为空，工具开始占位、结束更新。技能正文不在 SQLite。
+SQLite schema 版本为 22：保留 main 的 1–16；Skills 旧设计的运行表在 17–18 建立，v19 一并删除并新建 `skill_changes`（变更记录）与 `skill_loads`（加载记录）；v20 给 `task_timeline_items` 补任务内单调 `sequence` 并新增 `tool` 条目；v21 允许工具 `running` 时结果为空，工具开始占位、结束更新；v22 新增 `run_observations`（每轮运行摘要）与 `observation_steps`（本轮的工具、压缩与降级步骤），都从属 `agent_runs` 并随任务删除级联。技能正文不在 SQLite。
 
 ## 2. 交付阶段
 
-阶段定义见 `v1-design.md` §7。阶段 2 已完成代码接入；阶段 3 进行中，主题页尚未接入；阶段 5 的技能基础段已通过真实模型验收（`tests/acceptance/qoder_skills_basic.py`）；执行轨迹的 Pebble MCP 路径已有真实模型验收（`tests/acceptance/qoder_skills_trajectory.py`）。本次内置工具验收在独立临时实例中输入资料核对任务：真实 SDK 会话的 14 次调用（WebSearch 1、WebFetch 1、Read 12）与时间线的 ID 和顺序逐条一致，2 次成功、12 次 Read 失败／权限拒绝；服务重启后记录仍在。同一任务的纠正轮以正确路径成功读取附件，回答包含文件中的校验词。后台复盘与维护尚未实现。阶段 6 已完成代码接入，待真机外网验收；其余阶段尚未验收。真实 Gmail 发送与 iCloud 写入尚未验收。
+阶段定义见 `v1-design.md` §7。阶段 2 已完成代码接入；阶段 3 进行中，主题页尚未接入；阶段 5 的技能基础段已通过真实模型验收（`tests/acceptance/qoder_skills_basic.py`）；执行轨迹的 Pebble MCP 路径已有真实模型验收（`tests/acceptance/qoder_skills_trajectory.py`）。本次内置工具验收在独立临时实例中输入资料核对任务：真实 SDK 会话的 14 次调用（WebSearch 1、WebFetch 1、Read 12）与时间线的 ID 和顺序逐条一致，2 次成功、12 次 Read 失败／权限拒绝；服务重启后记录仍在。同一任务的纠正轮以正确路径成功读取附件，回答包含文件中的校验词。可观测性已按规格 §4 用真实 CN SDK 验收（`tests/acceptance/qoder_observations.py`）：一轮 4 次工具调用（kb_search、kb_read、WebSearch、WebFetch）的轨迹条目与观测步骤逐条对应，工作区外的 Read 实际到达权限回调并记为 denied（轨迹恒为 error、观测为 denied），SDK 总时长 24.8 秒、API 时长 21.2 秒，逐次模型请求各有一条带标识的用量条目，轮末上下文占用 4%；大输入把上下文推到 100% 后，下一轮由网关手动压缩并记下压缩步骤（before 100%、after 3.5%），没有边界信号就不记；重开数据库数据不变，删任务后观测随轮次级联消失。这次验收跑完时账号额度未耗尽；此后为本机可重复运行加固脚本（固定型号目录、额度用尽即停、拒绝的两种起止形状、偶发失败重做），加固后的版本未再真实跑通——账号已到额度上限，脚本会明确报“账号额度已用尽”而不是留下半个结论。后台复盘与维护尚未实现。阶段 6 已完成代码接入，待真机外网验收；其余阶段尚未验收。真实 Gmail 发送与 iCloud 写入尚未验收。
 
 ## 3. 已知偏差与未完成
 
@@ -44,4 +44,4 @@ SQLite schema 版本为 21：保留 main 的 1–16；Skills 旧设计的运行�
 - 技能的不一致检测按 Git 工作区判定：直接改磁盘（未提交）的技能退出目录、装配与 `skill_view`，管理页仍可打开并在保存后恢复；用户自行 `git commit` 的改动没有变更留档，运行时与“服务写入”无法区分，维护阶段补审计。
 - 手动选择的正文上限（10 个、40000 字符）在提交校验与装配两处执行；装配时超出的条目跳过并记日志，不失败整轮。
 - `skill_manage` 对 `managed=false` 技能的直接写入只由“仅用户发起的对话轮可见”保证；后台会话当前结构上拿不到该工具，D 阶段给复盘会话加技能工具时需要显式确认这条约束。
-- 可观测性只有规格（`observability-spec.md`、`contracts/observability.md`），未实现；关键材料跳过与记忆判断失败只在日志里，SDK 时长、调用次数、用量与上下文占用未持久化，任务页也没有每轮执行详情。轨迹已有调用顺序与成败，但还没有这些运行原因数据。
+- 可观测性随真实验收记录四点口径与偏差。第一，本轮用量只取 `AssistantMessage.usage`（契约 §3），实测本地 CN CLI 1.1.38 在这一层把 `input_tokens`／`output_tokens` 填成 0、`credits` 缺省、`request_id` 为空，只有 `message_id` 可用；真实的请求标识与上下文比例出现在 `ResultMessage.usage`，按契约不用于本轮消耗，因此执行详情里的逐请求 token 显示 0、Credits 显示“未记录”、合计显示“未记录”。去重键退化为 `message_id`：同一 `message_id` 的多条消息按一次请求计（SDK 会把一次请求的多个内容块分条上报），拿不到 `request_id` 时无法再校验是否重名。第二，实测真实的权限拒绝先到 PreToolUse、后到权限回调，因此 `observation_steps.started_at` 可能有值，`_begin` 的注释只覆盖“回调先到”的一半；两种形状在界面上都显示“已拒绝”，读取面不做区分。第三，`sdk_result` 只存 `duration_ms`、`duration_api_ms`、`num_turns`、`is_error`、结束原因与逐请求用量；`ResultMessage.total_credits`、`model_usage` 是会话累计值，不落库。第四，观测只在任务轮次里产生：一次性会话（记忆判断、记忆回顾、标题与看图）与 `run_id` 为空的轮次不写观测，`num_turns` 存下来但不冒充“模型调用次数”（后者是去重后实际收到的 usage 条目数）。
