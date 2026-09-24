@@ -51,6 +51,7 @@ from server.config import Settings, get_settings
 from server.errors import DependencyUnavailableError, error_details
 from server.gateway.agent_contract import AgentEvent, AgentProtocolError, Turn
 from server.memory.service import MemoryStore
+from server.sessions.observations import TurnObserver
 from server.sessions.tool_trace import begin_tool_call, finish_tool_call
 from server.tools.memory.tools import judge_registry, review_registry
 from server.tools.personal_kb.catalog import CATALOG_TITLE
@@ -140,6 +141,7 @@ def tool_trace_hooks(
                 tool_call_id=call_id,
                 name=name,
                 arguments=arguments,
+                source="builtin",
             )
             if on_timeline_change is not None:
                 on_timeline_change()
@@ -163,6 +165,7 @@ def tool_trace_hooks(
                 arguments=arguments,
                 status=status,
                 result=result,
+                source="builtin",
             )
             if on_timeline_change is not None:
                 on_timeline_change()
@@ -341,6 +344,7 @@ class QoderGateway:
         visible = exposed_tools(self.tools, allowed=ALLOWED_EFFECTS[turn.kind])
         announced: str | None = None
         streamed = False
+        observer = TurnObserver(turn.run_id)
         async with self.tool_server.serve(
             visible,
             task_id=turn.task_id,
@@ -349,16 +353,19 @@ class QoderGateway:
             run_id=turn.run_id,
             on_timeline_change=turn.on_timeline_change,
         ) as path:
-            options = self._options(turn, visible=visible, path=path)
+            options = self._options(turn, visible=visible, path=path, observer=observer)
             async with QoderSDKClient(options) as client:
+                context_before: dict | None = None
                 if turn.sdk_session_id is not None:
-                    await self._compact_if_needed(client)
+                    context_before = await self._compact_if_needed(client, observer)
                 await client.query(self._query_input(turn))
                 async for message in client.receive_response():
                     # 工具事件在产生它的那次调用之后、模型的下一条消息之前送出。
                     while not queued.empty():
                         yield queued.get_nowait()
                     if isinstance(message, ResultMessage):
+                        observer.record_result(message)
+                        await self._record_context_after(client, observer)
                         yield _result_event(message)
                         return
                     if isinstance(message, SystemMessage) and message.subtype == "init":
@@ -367,12 +374,18 @@ class QoderGateway:
                         if session_id and session_id != announced:
                             announced = session_id
                             yield {"type": "session", "sdk_session_id": session_id}
+                    elif (
+                        isinstance(message, SystemMessage) and message.subtype == "compact_boundary"
+                    ):
+                        # SDK 自动压缩的真实边界信号；没有边界不声称发生过压缩。
+                        observer.record_compact(auto=True, before=context_before)
                     elif isinstance(message, StreamEvent):
                         text = _delta_text(message.event)
                         if text:
                             streamed = True
                             yield {"type": "text", "text": text}
                     elif isinstance(message, AssistantMessage):
+                        observer.collect_usage(message)
                         # 去重只对本条消息生效：已转发它的增量输出就跳过整段文本，随后重置标志；
                         # 整轮共用会让缺少增量的后续消息被误判为重复而整段丢失。
                         if not streamed:
@@ -410,14 +423,25 @@ class QoderGateway:
             return activity(label, arguments.get(field))
         return None
 
-    async def _compact_if_needed(self, client: QoderSDKClient) -> None:
-        """运行时未启用自动压缩时，在达到其阈值后先完成手动压缩。"""
-        usage = await client.get_context_usage()
+    async def _compact_if_needed(
+        self, client: QoderSDKClient, observer: TurnObserver
+    ) -> dict | None:
+        """运行时未启用自动压缩时，在达到其阈值后先完成手动压缩。
+
+        返回轮首的上下文读数供压缩步骤引用；读取失败只留空值。
+        """
+        try:
+            usage = await client.get_context_usage()
+        except Exception:
+            logger.exception("轮首的上下文占用读取失败")
+            return None
+        context_before = _context_reading(usage)
+        observer.record_context(before=context_before)
         automatic = usage["autoCompact"]
         if automatic["enabled"]:
-            return
+            return context_before
         if usage["contextWindow"]["usedPercentage"] < automatic["thresholdPercentage"]:
-            return
+            return context_before
 
         compacted = False
         await client.query("/compact")
@@ -429,8 +453,26 @@ class QoderGateway:
                 raise AgentProtocolError(detail)
         if not compacted:
             raise AgentProtocolError(COMPACTION_ERROR_MESSAGE)
+        after = None
+        try:
+            after = _context_reading(await client.get_context_usage())
+        except Exception:
+            logger.exception("手动压缩后的上下文占用读取失败")
+        observer.record_compact(auto=False, before=context_before, after=after)
+        return context_before
 
-    def _catalog_materials(self) -> tuple[context.Material, ...]:
+    async def _record_context_after(self, client: QoderSDKClient, observer: TurnObserver) -> None:
+        """轮末读取上下文占用并回填压缩步骤的后占用；读取失败只留空值。"""
+        try:
+            usage = await client.get_context_usage()
+        except Exception:
+            logger.exception("轮末的上下文占用读取失败")
+            return
+        observer.record_context(after=_context_reading(usage))
+
+    def _catalog_materials(
+        self, observer: TurnObserver | None = None
+    ) -> tuple[context.Material, ...]:
         """常驻的资料目录：记忆全文之后、本轮材料之前。读不出来时本轮不带目录，不中断调用。"""
         if self.kb_store is None:
             return ()
@@ -438,6 +480,12 @@ class QoderGateway:
             catalog = self.kb_store.catalog()
         except Exception:
             logger.exception("资料目录生成失败，本轮不注入")
+            if observer is not None:
+                observer.degraded(
+                    "catalog_failed",
+                    {"catalog": "kb"},
+                    skipped={"category": "资料目录", "reason": "生成失败"},
+                )
             return ()
         return (context.Material(CATALOG_TITLE, catalog),) if catalog else ()
 
@@ -522,6 +570,8 @@ class QoderGateway:
                 arguments=tool_input,
                 status="error",
                 result=reason,
+                source="builtin",
+                denied=True,
             )
             if on_timeline_change is not None:
                 on_timeline_change()
@@ -529,7 +579,12 @@ class QoderGateway:
         return authorize
 
     def _options(
-        self, turn: Turn, *, visible: list[ToolDefinition], path: str
+        self,
+        turn: Turn,
+        *,
+        visible: list[ToolDefinition],
+        path: str,
+        observer: TurnObserver | None = None,
     ) -> QoderAgentOptions:
         materials = list(turn.materials)
         if self.skills_store is not None:
@@ -541,11 +596,14 @@ class QoderGateway:
                     turn.skills,
                     task_id=turn.task_id,
                     run_id=turn.run_id,
+                    observer=observer,
                 )
             )
             if turn.auto_match:
                 catalog = skills_runtime.catalog_material(
-                    self.skills_store, excluded_skill_ids=turn.excluded_skill_ids
+                    self.skills_store,
+                    excluded_skill_ids=turn.excluded_skill_ids,
+                    observer=observer,
                 )
                 if catalog is not None:
                     materials.append(catalog)
@@ -555,9 +613,16 @@ class QoderGateway:
             for target, title in (("user", "关于你"), ("memory", "事实与约定"))
             if snapshot[target]["content"]
         )
-        ctx = context.assemble(
-            materials=(*memory_materials, *self._catalog_materials(), *materials)
-        )
+        kb_materials = self._catalog_materials(observer)
+        ctx = context.assemble(materials=(*memory_materials, *kb_materials, *materials))
+        if observer is not None:
+            # 只记 Pebble 提交给 SDK 的材料：名称与字符数，不存正文。
+            observer.record_materials(
+                [
+                    {"title": material.title, "chars": len(material.content)}
+                    for material in (*memory_materials, *kb_materials, *materials)
+                ]
+            )
         workspace = self._task_workspace(turn.task_id)
         web_tools = list(WEB_TOOLS) if turn.kind is TurnKind.MESSAGE else []
         read_enabled = turn.kind is TurnKind.MESSAGE and (workspace / "attachments").is_dir()
@@ -696,6 +761,19 @@ class QoderGateway:
         if settings.light_model_base_url:
             custom["url"] = settings.light_model_base_url
         return {"resolve_model": lambda _context: {"model": custom}}
+
+
+def _context_reading(usage: dict | None) -> dict | None:
+    """把 get_context_usage() 的读数压成观测存储的形状；读不到的字段留空。"""
+    if not isinstance(usage, dict):
+        return None
+    context_window = usage.get("contextWindow") or {}
+    automatic = usage.get("autoCompact") or {}
+    return {
+        "used_percentage": context_window.get("usedPercentage"),
+        "threshold_percentage": automatic.get("thresholdPercentage"),
+        "auto_compact_enabled": bool(automatic.get("enabled")),
+    }
 
 
 def _result_event(message: ResultMessage) -> AgentEvent:

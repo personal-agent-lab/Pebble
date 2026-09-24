@@ -31,7 +31,7 @@ from server.agent.client import QoderGateway
 from server.agent.mcp import MCP_MOUNT_PATH, ToolServer
 from server.agent.toolset import ToolDeps
 from server.config import Settings, get_settings
-from server.db import init_db, session
+from server.db import SCHEMA_VERSION, init_db, session
 from server.gateway.runtime import GatewayRuntime
 from server.sessions.service import SessionStore
 from server.sessions.timeline import TimelineStore
@@ -203,7 +203,7 @@ async def scenario_failure_chain(service: GatewayRuntime, skills: SkillService) 
 def scenario_reopen(task_id: str) -> dict:
     """场景 2：重新初始化并重开数据库后轨迹仍在。"""
 
-    check(init_db() == 21, "重新初始化没有停在 v21", init_db())
+    check(init_db() == SCHEMA_VERSION, "重新初始化没有停在 v21", init_db())
     with session() as conn:
         reopened = tool_view(conn, task_id)
     check(

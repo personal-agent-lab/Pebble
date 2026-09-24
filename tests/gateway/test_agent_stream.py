@@ -439,7 +439,8 @@ def test_catalog_failure_does_not_break_the_turn(settings, monkeypatch):
 def test_turn_without_materials_does_not_register_context_hook(settings):
     options = options_for(make_gateway(settings), TurnKind.MESSAGE)
 
-    assert options.hooks is None
+    # 工具轨迹回调照常注册；无材料时不注册 SessionStart 注入钩子。
+    assert "SessionStart" not in (options.hooks or {})
 
 
 def test_manual_compaction_runs_before_resumed_turn_when_sdk_auto_compact_is_off(

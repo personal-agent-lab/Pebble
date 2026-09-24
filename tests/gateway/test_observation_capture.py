@@ -1,0 +1,300 @@
+"""观测采集：材料摘要、请求级用量、SDK 结果、工具步骤与降级在真实轮次里落库。
+
+契约 contracts/observability.md：观测只补运行事实，参数与返回正文仍只在时间线；
+权限拒绝与执行失败在步骤状态上区分；缺字段留空不补零。
+"""
+
+import asyncio
+import json
+
+from qodercn_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, TextBlock
+
+from server.agent import client as agent_client
+from server.agent.client import QoderGateway, tool_trace_hooks
+from server.agent.context import Material
+from server.agent.toolset import TurnKind
+from server.db import session
+from server.gateway.agent_contract import Turn
+from server.sessions.observations import TurnObserver
+from server.sessions.service import SessionStore
+from tests.gateway.test_agent_stream import (
+    ToolCall,
+    collect,
+    install_sdk,
+    make_gateway,
+    result,
+)
+from tests.gateway.test_trajectory import seed_turn
+
+
+def summary(run_id: str) -> dict | None:
+    with session() as conn:
+        row = conn.execute("SELECT * FROM run_observations WHERE run_id = ?", (run_id,)).fetchone()
+    return dict(row) if row is not None else None
+
+
+def steps(run_id: str) -> list[dict]:
+    with session() as conn:
+        return [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM observation_steps WHERE run_id = ? ORDER BY rowid",
+                (run_id,),
+            )
+        ]
+
+
+def observed_turn(task_id: str, run_id: str, **turn_fields) -> Turn:
+    return Turn(
+        kind=TurnKind.MESSAGE,
+        task_id=task_id,
+        sdk_session_id=None,
+        message="测试输入",
+        run_id=run_id,
+        **turn_fields,
+    )
+
+
+def test_stream_records_materials_usage_and_result(settings, monkeypatch):
+    gateway = make_gateway(settings)
+    task = SessionStore().create_task("观测一轮")
+    seed_turn(task["task_id"], "run-obs", "测试输入")
+    usage = {"request_id": "req-1", "input_tokens": 11, "output_tokens": 7, "credits": 0.5}
+    usage_again = dict(usage)
+    install_sdk(
+        monkeypatch,
+        gateway,
+        [
+            SystemMessage("init", {"session_id": "session-1"}),
+            AssistantMessage([TextBlock("先查")], "model", usage=usage, message_id="msg-1"),
+            # 同一请求重发：按 message_id / request_id 去重，不产生第二条用量。
+            AssistantMessage([TextBlock("先查")], "model", usage=usage_again, message_id="msg-1"),
+            AssistantMessage(
+                [TextBlock("结论")], "model", usage={"request_id": "req-2"}, message_id="msg-2"
+            ),
+            ResultMessage("success", 1200, 800, False, 3, "session-1", result="完成"),
+        ],
+    )
+
+    events = asyncio.run(
+        collect(
+            gateway.stream_turn(
+                observed_turn(
+                    task["task_id"],
+                    "run-obs",
+                    materials=(Material("本轮材料", "照常进行"),),
+                )
+            )
+        )
+    )
+    assert [event["type"] for event in events][-1] == "done"
+
+    row = summary("run-obs")
+    materials = json.loads(row["materials"])
+    assert {"title": "本轮材料", "chars": 4} in materials["assembled"]
+    sdk_result = json.loads(row["sdk_result"])
+    assert sdk_result["duration_ms"] == 1200
+    assert sdk_result["duration_api_ms"] == 800
+    assert sdk_result["num_turns"] == 3
+    assert [entry["request_id"] for entry in sdk_result["usage"]] == ["req-1", "req-2"]
+    # 请求缺字段（req-2 只有标识）时合计留空，不拿部分值冒充总量。
+    from server.sessions.observations import usage_totals
+
+    assert usage_totals(sdk_result["usage"])["input_tokens"] is None
+
+
+def test_resumed_turn_records_context_and_manual_compact(settings, monkeypatch):
+    gateway = make_gateway(settings)
+    task = SessionStore().create_task("压缩观测")
+    seed_turn(task["task_id"], "run-compact", "继续任务")
+
+    class CompactingClient:
+        def __init__(self, _options):
+            self.responses = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get_context_usage(self):
+            return {
+                "contextWindow": {"usedPercentage": 85},
+                "autoCompact": {"enabled": False, "thresholdPercentage": 80},
+            }
+
+        async def query(self, message):
+            if message == "/compact":
+                self.responses = [
+                    SystemMessage("compact_boundary", {"compact_metadata": {"trigger": "manual"}}),
+                    result(),
+                ]
+            else:
+                self.responses = [result()]
+
+        async def receive_response(self):
+            for item in self.responses:
+                yield item
+
+    monkeypatch.setattr(agent_client, "QoderSDKClient", CompactingClient)
+    turn = Turn(
+        kind=TurnKind.MESSAGE,
+        task_id=task["task_id"],
+        sdk_session_id="session-1",
+        message="继续任务",
+        run_id="run-compact",
+    )
+    events = asyncio.run(collect(gateway.stream_turn(turn)))
+    assert events[-1] == {"type": "done"}
+
+    row = summary("run-compact")
+    before = json.loads(row["context_before"])
+    after = json.loads(row["context_after"])
+    assert before["used_percentage"] == 85 and before["threshold_percentage"] == 80
+    assert after["used_percentage"] == 85
+    compact = steps("run-compact")[0]
+    assert compact["kind"] == "compact" and compact["status"] == "ok"
+    detail = json.loads(compact["detail"])
+    assert detail["auto"] is False and detail["before"]["used_percentage"] == 85
+
+
+def test_tool_steps_pair_with_timeline_and_distinguish_denial(settings, monkeypatch):
+    gateway = make_gateway(settings)
+    task = SessionStore().create_task("工具观测")
+    seed_turn(task["task_id"], "run-tools", "查邮件")
+    install_sdk(
+        monkeypatch,
+        gateway,
+        [
+            SystemMessage("init", {"session_id": "session-1"}),
+            ToolCall("gmail_get_message", {"message_id": "msg_invite_001"}),
+            result(),
+        ],
+    )
+    from server.sessions.tool_trace import finish_tool_call
+
+    hooks = tool_trace_hooks(task["task_id"], "run-tools", {"WebSearch", "WebFetch"})
+
+    async def emit(event, name, call_id, **extra):
+        await hooks[event][0].hooks[0](
+            {
+                "hook_event_name": event,
+                "tool_name": name,
+                "tool_use_id": call_id,
+                "tool_input": {"query": call_id},
+                **extra,
+            },
+            call_id,
+            None,
+        )
+
+    asyncio.run(_scenario(gateway, task, emit, finish_tool_call))
+
+    rows = steps("run-tools")
+    tools = [row for row in rows if row["kind"] == "tool"]
+    by_code = {row["code"]: row for row in tools}
+    assert set(by_code) == {"gmail_get_message", "WebSearch", "WebFetch"}
+    mcp_step = by_code["gmail_get_message"]
+    assert mcp_step["status"] == "ok" and json.loads(mcp_step["detail"])["source"] == "mcp"
+    assert mcp_step["item_id"] is not None
+    assert by_code["WebFetch"]["status"] == "error"
+    # 权限拒绝：无开始信号（started_at 为空），状态与执行失败区分。
+    denied = by_code["WebSearch"]
+    assert denied["status"] == "denied" and denied["started_at"] is None
+
+    with session() as conn:
+        items = {
+            row["item_id"]: row
+            for row in conn.execute(
+                "SELECT item_id, tool_call_id FROM task_timeline_items WHERE kind = 'tool'"
+            )
+        }
+    for step in tools:
+        assert step["item_id"] in items
+        assert items[step["item_id"]]["tool_call_id"] == step["tool_call_id"]
+
+
+async def _scenario(gateway, task, emit, finish_tool_call):
+    events = await collect(gateway.stream_turn(observed_turn(task["task_id"], "run-tools")))
+    assert events[-1] == {"type": "done"}
+    await emit("PreToolUse", "WebSearch", "web-1")
+    await emit("PostToolUse", "WebSearch", "web-1", tool_response={"results": [1]})
+    await emit("PostToolUseFailure", "WebFetch", "web-2", error="超时")
+    await finish_tool_call(
+        task_id=task["task_id"],
+        run_id="run-tools",
+        tool_call_id="web-3",
+        name="WebSearch",
+        arguments={},
+        status="error",
+        result="未授权的工具：WebSearch",
+        source="builtin",
+        denied=True,
+    )
+
+
+def test_catalog_failure_records_degraded_and_skipped(settings, monkeypatch):
+    from server.agent.mcp import ToolServer
+    from server.agent.toolset import ToolDeps
+    from server.db import init_db
+    from server.tools.gmail.service import MailDraftStore
+    from server.tools.personal_kb.service import KbStore
+    from tests.gateway.test_agent_stream import configured
+    from tests.support.gmail_double import MockGmailClient
+
+    init_db()
+    kb = KbStore(settings.data_dir)
+    gateway = QoderGateway(
+        ToolDeps(
+            drafts=MailDraftStore(), tasks=SessionStore(), gmail=MockGmailClient(), kb_store=kb
+        ),
+        ToolServer(),
+        settings=configured(settings),
+    )
+    task = SessionStore().create_task("降级观测")
+    seed_turn(task["task_id"], "run-degraded", "查资料")
+
+    def broken():
+        raise RuntimeError("模拟读取失败")
+
+    monkeypatch.setattr(kb, "catalog", broken)
+    turn = observed_turn(task["task_id"], "run-degraded")
+    observer = TurnObserver("run-degraded")
+    gateway._options(
+        turn,
+        visible=[],
+        path="/mnt/pebble/test",
+        observer=observer,
+    )
+
+    degraded = steps("run-degraded")
+    assert [row["code"] for row in degraded] == ["catalog_failed"]
+    assert json.loads(degraded[0]["detail"]) == {"catalog": "kb"}
+    row = summary("run-degraded")
+    materials = json.loads(row["materials"])
+    assert materials["skipped"] == [{"category": "资料目录", "reason": "生成失败"}]
+
+
+def test_memory_judgment_failure_records_degraded(settings, monkeypatch):
+    """记忆判断失败不影响主回答，只记降级步骤（运行时入口 _judge 的口径）。"""
+    from server.gateway.runtime import GatewayRuntime
+    from server.memory import judge
+
+    gateway = make_gateway(settings)
+    task = SessionStore().create_task("判断降级")
+    seed_turn(task["task_id"], "run-judge", "记一下")
+
+    async def broken(**_kwargs):
+        raise RuntimeError("模拟判断失败")
+
+    monkeypatch.setattr(judge, "run_judgment", broken)
+    runtime = GatewayRuntime.__new__(GatewayRuntime)
+    runtime.gateway = gateway
+    runtime.memory_store = gateway.memory_store
+    runtime.path = settings.db_path
+    row = {"task_id": task["task_id"], "run_id": "run-judge", "kind": "message"}
+    asyncio.run(runtime._judge(row, "记一下"))
+
+    degraded = steps("run-judge")
+    assert [item["code"] for item in degraded] == ["memory_judge_failed"]

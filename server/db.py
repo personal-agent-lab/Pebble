@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import default_model, get_settings
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -381,6 +381,25 @@ SCHEMA_V21 = (
     "WHERE kind='tool'",
 )
 
+# 运行观测（contracts/observability.md）：run_observations 是一轮的运行摘要，
+# observation_steps 记本轮的工具尝试、压缩与静默降级；都从属 agent_runs，删轮次时级联删除。
+# 工具参数与返回正文只在时间线存一份，这里只存引用与规模。
+SCHEMA_V22 = (
+    "CREATE TABLE run_observations (run_id TEXT PRIMARY KEY "
+    "REFERENCES agent_runs(run_id) ON DELETE CASCADE, "
+    "materials TEXT, sdk_result TEXT, context_before TEXT, context_after TEXT, "
+    "updated_at TEXT NOT NULL)",
+    "CREATE TABLE observation_steps (step_id TEXT PRIMARY KEY, "
+    "run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE, "
+    "kind TEXT NOT NULL CHECK(kind IN ('tool','compact','degraded')), "
+    "code TEXT NOT NULL, "
+    "status TEXT NOT NULL CHECK(status IN ('running','ok','error','denied')), "
+    "started_at TEXT, ended_at TEXT, item_id TEXT, tool_call_id TEXT, detail TEXT)",
+    "CREATE INDEX observation_steps_run ON observation_steps(run_id)",
+    "CREATE UNIQUE INDEX observation_steps_tool ON observation_steps(run_id, tool_call_id) "
+    "WHERE kind='tool'",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -403,6 +422,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     19: SCHEMA_V19,
     20: SCHEMA_V20,
     21: SCHEMA_V21,
+    22: SCHEMA_V22,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

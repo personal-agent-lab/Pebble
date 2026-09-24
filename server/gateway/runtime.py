@@ -35,9 +35,9 @@ from server.memory.review import (
     interrupt_running_reviews,
 )
 from server.memory.service import MemoryStore
+from server.sessions import observations, timeline
 from server.sessions import repository as operations
 from server.sessions import runs as repo
-from server.sessions import timeline
 from server.sessions.service import SessionStore, timestamp
 from server.sessions.timeline import TimelineStore
 from server.tools.gmail.service import MailDraftStore
@@ -666,7 +666,7 @@ class GatewayRuntime:
         task.add_done_callback(self._judges.discard)
 
     async def _judge(self, row: dict, message: str) -> None:
-        """静默执行一轮记忆判断；判断失败不影响本轮回答。"""
+        """静默执行一轮记忆判断；判断失败不影响本轮回答，只记降级步骤。"""
         try:
             await run_judgment(
                 self.gateway,
@@ -677,6 +677,7 @@ class GatewayRuntime:
             )
         except Exception:
             logging.getLogger(__name__).exception("记忆判断失败")
+            observations.record_degraded_sync(row["run_id"], "memory_judge_failed")
 
     # ---------- 任务标题 ----------
 

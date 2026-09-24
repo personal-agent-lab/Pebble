@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sqlite3
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -24,6 +25,7 @@ from server.errors import (
 from server.gateway.runtime import GatewayRuntime
 from server.memory.service import MemoryStore
 from server.sessions.history import HistoryStore
+from server.sessions.observations import read_observations
 from server.sessions.service import SessionStore
 from server.skills.models import ChangeAction, ChangeActor, SkillState
 from server.skills.service import ChangeRequest, SkillService
@@ -222,6 +224,17 @@ def task_operations(task_id: str, tasks: Tasks) -> list[dict]:
 @router.get("/tasks/{task_id}/timeline", tags=["tasks"])
 def task_timeline(task_id: str, agent: Agent) -> dict:
     return agent.get_timeline(task_id)
+
+
+@router.get("/tasks/{task_id}/observations", tags=["tasks"])
+def task_observations(task_id: str, tasks: Tasks) -> dict:
+    """任务每轮的运行观测；只读，沿用任务权限（contracts/observability.md §4）。"""
+    tasks.get_task(task_id)
+    try:
+        runs = read_observations(task_id)
+    except sqlite3.Error as error:
+        raise DependencyUnavailableError("观测存储不可用") from error
+    return {"runs": runs}
 
 
 KEEPALIVE_SECONDS = 15

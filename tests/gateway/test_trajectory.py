@@ -10,7 +10,7 @@ import json
 from server.agent.client import tool_trace_hooks
 from server.agent.mcp import ToolServer
 from server.agent.toolset import ALLOWED_EFFECTS, ToolDeps, TurnKind, build_tools, exposed_tools
-from server.db import init_db, session, write
+from server.db import SCHEMA_VERSION, init_db, session, write
 from server.sessions import runs
 from server.sessions.service import SessionStore, timestamp
 from server.sessions.timeline import TimelineStore, insert_text, insert_tool_item
@@ -180,7 +180,7 @@ def test_trajectory_survives_reopen(settings):
     assert len(tool_items(task["task_id"])) == 1
 
     # 重新初始化（等价于服务重启后的打开路径）不丢轨迹、不重复迁移。
-    assert init_db() == 21
+    assert init_db() == SCHEMA_VERSION
     rows = tool_items(task["task_id"])
     assert len(rows) == 1
     assert rows[0]["tool_status"] == "ok"
@@ -222,7 +222,7 @@ def test_builtin_callbacks_pair_parallel_calls_and_leave_interrupted_call(settin
     assert [row["tool_status"] for row in rows] == ["ok", "ok", "running"]
     assert json.loads(rows[0]["tool_result"]) == {"results": [1]}
     assert rows[2]["tool_result"] is None
-    assert init_db() == 21
+    assert init_db() == SCHEMA_VERSION
     assert [row["tool_call_id"] for row in tool_items(task_id)] == ["first", "second", "unfinished"]
 
 

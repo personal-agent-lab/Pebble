@@ -76,8 +76,14 @@ def turn_scope(*, task_id, run_id, skills=(), excluded_skill_ids=(), auto_match=
         _current.reset(token)
 
 
-def catalog_material(service: SkillService, *, excluded_skill_ids=()) -> Material | None:
-    """目录材料：最多 CATALOG_LIMIT 条“标识+名称+一句描述”，超出按最近使用截取并注明。"""
+def catalog_material(
+    service: SkillService, *, excluded_skill_ids=(), observer=None
+) -> Material | None:
+    """目录材料：最多 CATALOG_LIMIT 条“标识+名称+一句描述”，超出按最近使用截取并注明。
+
+    目录生成失败是关键静默降级：经 observer 记步骤并进材料摘要的跳过清单，
+    没有目录可装配（无激活技能）不算跳过。
+    """
 
     try:
         entries = [
@@ -87,6 +93,12 @@ def catalog_material(service: SkillService, *, excluded_skill_ids=()) -> Materia
         ]
     except Exception:
         logger.exception("技能目录装配失败，本轮不注入目录")
+        if observer is not None:
+            observer.degraded(
+                "catalog_failed",
+                {"catalog": "skills"},
+                skipped={"category": "技能目录", "reason": "生成失败"},
+            )
         return None
     if not entries:
         return None
@@ -108,32 +120,50 @@ def catalog_material(service: SkillService, *, excluded_skill_ids=()) -> Materia
     return Material(title=CATALOG_TITLE, content=content)
 
 
-def manual_materials(service: SkillService, skill_ids, *, task_id, run_id) -> list[Material]:
+def _skip_skill(observer, skill_id: str, reason: str) -> None:
+    if observer is None:
+        return
+    observer.degraded(
+        "manual_skill_not_assembled",
+        {"skill_id": skill_id, "reason": reason},
+        skipped={"category": "技能", "skill_id": skill_id, "reason": reason},
+    )
+
+
+def manual_materials(
+    service: SkillService, skill_ids, *, task_id, run_id, observer=None
+) -> list[Material]:
     """手动选择的技能正文：发送时绑定当前内容版本并记入加载记录（source=manual）。
 
     提交时已校验；这里再按同一额度兜底（额度在服务层与装配层都要成立），装配时目标
-    已被删除、停用或磁盘被直接改动过的跳过并告警，不失败整轮。
+    已被删除、停用或磁盘被直接改动过的跳过并告警，不失败整轮。跳过经 observer 记
+    降级步骤并进材料摘要的跳过清单。
     """
 
     materials: list[Material] = []
     seen: set[str] = set()
     total = 0
-    for skill_id in skill_ids:
+    for index, skill_id in enumerate(skill_ids):
         if skill_id in seen:
             continue
         seen.add(skill_id)
         if len(seen) > MANUAL_SKILL_LIMIT:
             logger.warning("手动选择的技能超过 %s 个，其余不装配", MANUAL_SKILL_LIMIT)
+            rest = [skill_id, *(s for s in skill_ids[index + 1 :] if s not in seen)]
+            for skipped_id in rest:
+                _skip_skill(observer, skipped_id, "over_limit")
             break
         try:
             skill = service.loadable(skill_id)
         except Exception:
             logger.warning("手动选择的技能 %s 不可用，本轮不装配", skill_id)
+            _skip_skill(observer, skill_id, "not_loadable")
             continue
         if total + len(skill.body) > MANUAL_BODY_BUDGET:
             logger.warning(
                 "手动选择的技能正文超过 %s 字符，%s 不装配", MANUAL_BODY_BUDGET, skill_id
             )
+            _skip_skill(observer, skill_id, "body_over_budget")
             continue
         total += len(skill.body)
         try:
