@@ -71,6 +71,19 @@ function stepStateLabel(step: ObservationStep, runActive: boolean): string {
   return "成功";
 }
 
+/** 压缩步骤的前后占用：读数是那一刻的实测值，不保证已经反映压缩结果。 */
+function compactReading(step: ObservationStep): string {
+  const detail = (step.detail ?? {}) as {
+    before?: { used_percentage?: number | null } | null;
+    after?: { used_percentage?: number | null } | null;
+  };
+  const read = (value: { used_percentage?: number | null } | null | undefined): string =>
+    value?.used_percentage === null || value?.used_percentage === undefined
+      ? NOT_RECORDED
+      : `${Math.round(value.used_percentage)}%`;
+  return `占用 ${read(detail.before)} → ${read(detail.after)}`;
+}
+
 function StepStatusIcon({ status }: { status: ObservationStep["status"] }) {
   if (status === "running") return <CircleNotch size={13} className="run-step-icon pending" aria-hidden />;
   if (status === "denied") return <Prohibit size={13} className="run-step-icon denied" aria-hidden />;
@@ -188,6 +201,7 @@ export default function RunDetails({ run, runActive, expanded, focusStepId, onTo
             data-step-id={step.step_id}>
             <StepStatusIcon status={step.status} />
             <span className="run-step-name">{stepLabel(step)}</span>
+            {step.kind === "compact" && <span className="run-step-detail">{compactReading(step)}</span>}
             <span className={`run-step-state${step.status === "denied" ? " denied" : ""}${step.status === "error" ? " failed" : ""}`}>
               {stepStateLabel(step, runActive)}
             </span>

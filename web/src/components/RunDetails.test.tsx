@@ -120,11 +120,23 @@ test("步骤区分成功、已拒绝、进行中与压缩、降级；工具步�
   // 已结束轮里留下的 running 步骤显示中断语义。
   expect(screen.getByText("中断时未记录结果")).toBeTruthy();
   expect(screen.getByText("上下文压缩")).toBeTruthy();
+  // 压缩行直接给出前后占用读数，不靠点开才知道压缩了什么。
+  expect(screen.getByText("占用 85% → 25%")).toBeTruthy();
   expect(screen.getByText("记忆判断失败")).toBeTruthy();
 
   const buttons = screen.getAllByRole("button", { name: "定位" });
   await userEvent.click(buttons[0]);
   expect(locate).toHaveBeenCalledWith("item-1");
+});
+
+test("压缩步骤缺读数时显示「未记录」，不冒充零", () => {
+  render(<RunDetails run={run({ steps: [{
+    step_id: "s1", kind: "compact", code: "compact", status: "ok",
+    started_at: "2026-09-24T10:00:07Z", ended_at: "2026-09-24T10:00:08Z",
+    item_id: null, tool_call_id: null, detail: { auto: true, before: null, after: null },
+  }] })} runActive={false} expanded={true} focusStepId={null}
+    onToggle={vi.fn()} onLocateItem={vi.fn()} />);
+  expect(screen.getByText("占用 未记录 → 未记录")).toBeTruthy();
 });
 
 test("运行中的轮里 running 步骤显示进行中", () => {

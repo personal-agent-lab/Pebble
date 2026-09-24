@@ -49,6 +49,9 @@ OUTSIDE_HINT = "hosts"
 # 压缩场景的填充输入：真实往上下文里推，不用假的用量数字。实测 9000 行约占窗口七成，
 # 这里留出余量越过阈值；压缩是否发生仍以 SDK 的边界信号为准。
 FILLER_LINES = 16_000
+# 验收固定的托管型号：不写 auto，避免 Auto 路由到当天额度用尽的型号，验收结果也就与
+# 具体型号绑定、可比较。`auto` 仍是产品默认值，这里只是把验收变量固定下来。
+MODEL = os.environ.get("PEBBLE_ACCEPTANCE_MODEL", "qmodel_38max")
 
 TURN_TIMEOUT = 420.0
 
@@ -130,7 +133,7 @@ async def start_task(
 
     `ready` 为真时先备好任务工作区的 `attachments` 目录：本轮要暴露内置 Read 就得先有它。
     """
-    started = runtime.start_task(model="auto", message=message, attachments=[])
+    started = runtime.start_task(model=MODEL, message=message, attachments=[])
     task_id = started["task"]["task_id"]
     if ready:
         (instance.root / "agent" / "workspaces" / task_id / "attachments").mkdir(
@@ -194,7 +197,7 @@ class Instance:
         self.runtime = GatewayRuntime(
             self.gateway,
             memory_store=self.memory,
-            model_catalog=FixedCatalog(settings.qoder_model or "auto"),
+            model_catalog=FixedCatalog(MODEL),
             path=self.database,
         )
         app = FastAPI()
@@ -475,6 +478,11 @@ async def scenario_compaction(instance: Instance, runtime: GatewayRuntime) -> di
         "大输入轮没有轮末读数",
         readings[0],
     )
+    check(
+        first_reading["used_percentage"] >= first_reading["threshold_percentage"],
+        "大输入没有把上下文推过阈值，下一轮不会触发压缩",
+        first_reading,
+    )
     run = await start_turn(runtime, heavy_task, "本轮只回复 READY，不要调用任何工具。")
     check(run["status"] == "done", "压缩场景的轮次没有正常结束", run)
 
@@ -514,18 +522,28 @@ async def scenario_compaction(instance: Instance, runtime: GatewayRuntime) -> di
     check(step["status"] in ("ok", "error"), "压缩步骤状态非法", step)
     detail = step["detail"]
     check(isinstance(detail, dict), "压缩步骤没有 detail", step)
-    check(detail.get("before") is not None, "压缩步骤没有前占用", detail)
-    if detail.get("auto"):
-        # 自动压缩没有前后实测，后占用取轮末读数回填。
-        check(detail.get("after") is not None, "自动压缩步骤的回填后占用缺失", detail)
-        check(
-            detail["after"]["used_percentage"] == reading["used_percentage"],
-            "自动压缩步骤的后占用不是轮末读数",
-            (detail["after"], reading),
-        )
+    before = detail.get("before")
+    after = detail.get("after")
+    check(isinstance(before, dict), "压缩步骤没有前占用", detail)
+    check(
+        before.get("used_percentage") is not None and before["used_percentage"] >= 100,
+        "压缩前的占用读数没有越过阈值",
+        before,
+    )
+    # 后占用必须是真实读数（不是照抄前占用）。它的高度依赖读的时刻：手动压缩在压缩完成后
+    # 立刻读，实测 CLI 1.1.38 在 autoCompact 关闭时这一刻仍报 100%（窗口占用只在下一轮
+    # 请求时才按压缩后的上下文重算），因此这里只核对它有值、来自同一条读数口径，
+    # 回落幅度留给报告呈现，不硬性断言。
+    check(isinstance(after, dict), "压缩步骤没有后占用", detail)
+    check(after.get("used_percentage") is not None, "压缩步骤的后占用没有读数", after)
+    check(
+        after.get("threshold_percentage") == before.get("threshold_percentage"),
+        "压缩步骤的前后读数不是同一口径",
+        detail,
+    )
+    report["after_still_at_limit"] = after["used_percentage"] >= 100
     report["compaction"] = (
-        f"已记录压缩步骤：auto={bool(detail.get('auto'))}，"
-        f"before={detail.get('before')}，after={detail.get('after')}"
+        f"已记录压缩步骤：auto={bool(detail.get('auto'))}，before={before}，after={after}"
     )
     return report
 
@@ -595,6 +613,9 @@ def main() -> None:
         # 进程内的会话助手按环境变量找数据库：先把实例目录指到临时目录，
         # 否则工具轨迹与观测会写进真实 `.data`。
         os.environ["PEBBLE_DATA_DIR"] = directory
+        # 后台的标题与记忆判断沿用托管型号，不配就会走 auto：这里一并固定成验收型号，
+        # 免得侧路调用落到当天额度用尽的型号上。
+        os.environ.setdefault("PEBBLE_QODER_MODEL", MODEL)
         get_settings.cache_clear()
         report = asyncio.run(verify(Path(directory)))
     print(json.dumps(report, ensure_ascii=False, indent=2))

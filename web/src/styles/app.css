@@ -1558,6 +1558,7 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 /* 拒绝是授权层的结果，不是工具失败：弱色标出，与「失败」的红色区分。 */
 .run-step-icon.denied { color: var(--color-muted); }
 .run-step-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-step-detail { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; opacity: 0.85; }
 .run-step-state { flex: none; color: var(--color-muted); }
 .run-step-state.failed { color: var(--color-danger); }
 .run-step-duration { flex: 1; text-align: right; color: var(--color-muted); font-variant-numeric: tabular-nums; }
