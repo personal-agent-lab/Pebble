@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CaretDown, CaretUp, CheckCircle, CircleNotch, WarningCircle } from "@phosphor-icons/react";
 
-import type { TimelineItem } from "../api";
+import type { ObservationStep, TimelineItem } from "../api";
 import { writeClipboard } from "./MessageActions";
 import { toolCallDisplay } from "./toolCallDisplay";
 
@@ -32,13 +32,18 @@ type Props = {
   focused: boolean;
   expanded: boolean;
   onToggle: () => void;
+  /** 该调用的观测步骤；存在时工具行可以跳到所在轮的执行详情。 */
+  observationStep?: ObservationStep | null;
+  onLocateDetails?: () => void;
 };
 
 /**
  * 一次工具调用的轨迹行：收起时是系统细行（动作、对象、状态），展开后是
  * 完整参数与返回内容。定位（依据条目跳转、锚点高亮）由外层 mark 属性挂上。
  */
-export default function ToolCallRow({ item, active, focused, expanded, onToggle }: Props) {
+export default function ToolCallRow({
+  item, active, focused, expanded, onToggle, observationStep = null, onLocateDetails,
+}: Props) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -69,26 +74,32 @@ export default function ToolCallRow({ item, active, focused, expanded, onToggle 
     ? display.label.replace(/^正在/, "") : display.label;
   const summary = display.known ? undefined : inlineSummary(item.arguments);
   return <div className="tool-call">
-    <button type="button"
-      className={`tool-call-row${failed ? " failed" : ""}`}
-      onClick={onToggle}
-      aria-expanded={expanded}
-      aria-label={`${expanded ? "收起" : "展开"}${rowLabel}${display.target ? ` ${display.target}` : ""}${display.known && unfinished && !active ? ` ${stateLabel}` : ""}`}>
-      {unfinished
-        ? <CircleNotch size={14} className="tool-call-icon pending" aria-hidden />
-        : failed
-        ? <WarningCircle size={14} weight="fill" className="tool-call-icon" aria-hidden />
-        : <CheckCircle size={14} weight="fill" className="tool-call-icon" aria-hidden />}
-      <span className={`tool-call-name${display.known ? " readable" : ""}`}>{rowLabel}</span>
-      {display.target && <span className="tool-call-args" title={display.target}>「{display.target}」</span>}
-      {summary && <span className="tool-call-args">({summary})</span>}
-      {!display.known && (failed || unfinished) && <span className={failed ? "tool-call-failed" : undefined}>{stateLabel}</span>}
-      {display.known && unfinished && !active && <span>{stateLabel}</span>}
-      <span className="rule" />
-      {expanded
-        ? <CaretUp size={12} weight="bold" aria-hidden />
-        : <CaretDown size={12} weight="bold" aria-hidden />}
-    </button>
+    <div className="tool-call-line">
+      <button type="button"
+        className={`tool-call-row${failed ? " failed" : ""}`}
+        onClick={onToggle}
+        aria-expanded={expanded}
+        aria-label={`${expanded ? "收起" : "展开"}${rowLabel}${display.target ? ` ${display.target}` : ""}${display.known && unfinished && !active ? ` ${stateLabel}` : ""}`}>
+        {unfinished
+          ? <CircleNotch size={14} className="tool-call-icon pending" aria-hidden />
+          : failed
+          ? <WarningCircle size={14} weight="fill" className="tool-call-icon" aria-hidden />
+          : <CheckCircle size={14} weight="fill" className="tool-call-icon" aria-hidden />}
+        <span className={`tool-call-name${display.known ? " readable" : ""}`}>{rowLabel}</span>
+        {display.target && <span className="tool-call-args" title={display.target}>「{display.target}」</span>}
+        {summary && <span className="tool-call-args">({summary})</span>}
+        {!display.known && (failed || unfinished) && <span className={failed ? "tool-call-failed" : undefined}>{stateLabel}</span>}
+        {display.known && unfinished && !active && <span>{stateLabel}</span>}
+        <span className="rule" />
+        {expanded
+          ? <CaretUp size={12} weight="bold" aria-hidden />
+          : <CaretDown size={12} weight="bold" aria-hidden />}
+      </button>
+      {onLocateDetails !== undefined && observationStep !== null
+        && <button type="button" className="tool-call-locate"
+          onClick={onLocateDetails}
+          aria-label="在执行详情中定位这次调用">执行详情</button>}
+    </div>
     {expanded && <div className="tool-call-panel">
       <div className="tool-call-raw-name">工具：<code>{item.name}</code> · {stateLabel}</div>
       {Object.keys(item.arguments).length > 0 && <dl className="tool-call-fields">

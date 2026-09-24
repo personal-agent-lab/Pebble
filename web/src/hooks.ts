@@ -7,11 +7,13 @@ import {
   type MessageTarget,
   type OperationSummary,
   type Run,
+  type RunObservation,
   type SkillSelection,
   type SkillSummary,
   type Task,
   type TaskDetail,
   type TimelineItem,
+  getObservations,
   getTask,
   getTimeline,
   listOperations,
@@ -103,6 +105,8 @@ export function useTaskDetail(taskId: string) {
   const [retrying, setRetrying] = useState(false);
   // 当前步骤只来自实时事件与重读时服务端记住的那一步，不进时间线。
   const [activity, setActivity] = useState<string | null>(null);
+  // 运行观测：读取失败不影响对话主界面，只收起执行详情。
+  const [observations, setObservations] = useState<RunObservation[]>([]);
 
   const reload = useCallback(async () => {
     try {
@@ -115,6 +119,9 @@ export function useTaskDetail(taskId: string) {
       setItems(timeline.items);
       setError(null);
     } catch (failure) { setError(toApiError(failure)); }
+    void getObservations(taskId)
+      .then((payload) => setObservations(payload.runs))
+      .catch(() => undefined);
   }, [taskId]);
   useEffect(() => void reload(), [reload]);
 
@@ -181,5 +188,5 @@ export function useTaskDetail(taskId: string) {
     finally { setRetrying(false); }
   }, [taskId, reload]);
 
-  return { task, operations, items, activity, error, sending, retrying, send, retry, reload };
+  return { task, operations, items, observations, activity, error, sending, retrying, send, retry, reload };
 }

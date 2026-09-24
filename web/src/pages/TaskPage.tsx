@@ -163,6 +163,7 @@ function TaskDetailView({ taskId, placeholder, models }: {
     <div className="chat-main"><div className="feed">
       <TimelineFeed key={`${taskId}:${focusItemId ?? ""}`} taskId={taskId}
         items={waiting ? placeholderItems : detail.items} running={running}
+        observations={waiting ? [] : detail.observations}
         activeRunId={running ? latest?.run_id : null}
         activity={running ? detail.activity : null}
         focusItemId={focusItemId}

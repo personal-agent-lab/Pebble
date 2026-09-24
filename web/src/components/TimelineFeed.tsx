@@ -3,11 +3,19 @@ import { Link } from "react-router-dom";
 
 import { FileText } from "@phosphor-icons/react";
 
-import { type ApiError, type Attachment, type MessageTarget, type TimelineItem } from "../api";
+import {
+  type ApiError,
+  type Attachment,
+  type MessageTarget,
+  type ObservationStep,
+  type RunObservation,
+  type TimelineItem,
+} from "../api";
 import { isMemoryNotice } from "../memory";
 import MailDraftCard from "./MailDraftCard";
 import Markdown from "./Markdown";
 import MessageActions from "./MessageActions";
+import RunDetails from "./RunDetails";
 import ToolCallRow from "./ToolCallRow";
 
 const STICK_PX = 48;
@@ -80,6 +88,8 @@ function answerText(items: TimelineItem[], runId: string): string {
 type Props = {
   taskId: string;
   items: TimelineItem[];
+  /** 每轮的运行观测；缺省或读取失败为空，面板随之不显示，不影响对话。 */
+  observations?: RunObservation[];
   running: boolean;
   activeRunId?: string | null;
   /** 进行中的当前步骤说明；没有时只显示跳动的点。 */
@@ -95,7 +105,7 @@ type Props = {
 };
 
 export default function TimelineFeed({
-  taskId, items, running, activeRunId = null, activity = null, focusItemId = null, retryRunId = null,
+  taskId, items, observations = [], running, activeRunId = null, activity = null, focusItemId = null, retryRunId = null,
   retrying = false, retryMessage, sendMessage, onChanged,
 }: Props) {
   const anchor = useRef<HTMLDivElement>(null);
@@ -104,12 +114,38 @@ export default function TimelineFeed({
   const [highlight, setHighlight] = useState<string | null>(null);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
+  const [focusStepId, setFocusStepId] = useState<string | null>(null);
   const toggleTool = (itemId: string) => {
     setExpandedTools((prev) => {
       const next = new Set(prev);
       if (next.has(itemId)) next.delete(itemId);
       else next.add(itemId);
       return next;
+    });
+  };
+  const toggleRunDetails = (runId: string) => {
+    setExpandedRuns((prev) => {
+      const next = new Set(prev);
+      if (next.has(runId)) next.delete(runId);
+      else next.add(runId);
+      return next;
+    });
+  };
+  /** 执行详情里的工具步骤 → 时间线工具行：展开、高亮并滚动到它。 */
+  const locateItem = (itemId: string) => {
+    setExpandedTools((prev) => new Set(prev).add(itemId));
+    setHighlight(itemId);
+    document.getElementById(itemAnchor(itemId))?.scrollIntoView({ block: "center" });
+    window.setTimeout(() => setHighlight(null), FOCUS_MS);
+  };
+  /** 工具行 → 对应轮的执行详情：展开面板并定位到该步骤。 */
+  const locateDetails = (runId: string, stepId: string) => {
+    setExpandedRuns((prev) => new Set(prev).add(runId));
+    setFocusStepId(stepId);
+    requestAnimationFrame(() => {
+      document.getElementById(`run-details-${runId}`)?.scrollIntoView({ block: "center" });
+      window.setTimeout(() => setFocusStepId(null), FOCUS_MS);
     });
   };
   useEffect(() => {
@@ -165,25 +201,60 @@ export default function TimelineFeed({
     if (item.kind === "text" && item.role === "assistant") lastAssistantByRun.set(item.run_id, item.item_id);
   }
   const currentRunId = running ? activeRunId ?? items[items.length - 1]?.run_id : null;
+  // 每轮的执行详情挂在该轮最后一个条目之后；观测里没有的轮次不显示面板。
+  const observationByRun = new Map(observations.map((run) => [run.run_id, run]));
+  const stepByItem = new Map<string, ObservationStep>();
+  for (const run of observations) {
+    for (const step of run.steps) {
+      if (step.kind === "tool" && step.item_id !== null) stepByItem.set(step.item_id, step);
+    }
+  }
+  const lastIndexByRun = new Map<string, number>();
+  items.forEach((item, index) => lastIndexByRun.set(item.run_id, index));
+  const runDetailsFor = (runId: string, key: string) => {
+    const observed = observationByRun.get(runId);
+    if (observed === undefined) return null;
+    return <RunDetails key={key} run={observed} runActive={runId === currentRunId}
+      expanded={expandedRuns.has(runId)} focusStepId={focusStepId}
+      onToggle={() => toggleRunDetails(runId)}
+      onLocateItem={locateItem} />;
+  };
 
   return <>
     {items.map((item, index) => {
-      if (item.kind === "error") return <div className="sys-row" key={item.item_id} {...mark(item.item_id)}>
-        <span className="error-text">本轮处理失败：{item.text}</span><span className="rule" />
+      const runDetails = index === lastIndexByRun.get(item.run_id) ? runDetailsFor(item.run_id, `details-${item.item_id}`) : null;
+      if (item.kind === "error") return <div key={item.item_id}>
+        <div className="sys-row" {...mark(item.item_id)}>
+          <span className="error-text">本轮处理失败：{item.text}</span><span className="rule" />
+        </div>
+        {runDetails}
       </div>;
-      if (item.kind === "notice") return <div className="sys-row" key={item.item_id} {...mark(item.item_id)}>
-        <span>{item.text}</span>
-        {isMemoryNotice(item.text) && <Link className="sys-link" to="/memory">查看记忆</Link>}
-        <span className="rule" />
+      if (item.kind === "notice") return <div key={item.item_id}>
+        <div className="sys-row" {...mark(item.item_id)}>
+          <span>{item.text}</span>
+          {isMemoryNotice(item.text) && <Link className="sys-link" to="/memory">查看记忆</Link>}
+          <span className="rule" />
+        </div>
+        {runDetails}
       </div>;
-      if (item.kind === "mail_draft") return <div className="focus-frame" key={item.item_id} {...mark(item.item_id)}>
-        <MailDraftCard taskId={taskId} item={item} sendMessage={sendMessage} onChanged={onChanged} />
+      if (item.kind === "mail_draft") return <div key={item.item_id}>
+        <div className="focus-frame" {...mark(item.item_id)}>
+          <MailDraftCard taskId={taskId} item={item} sendMessage={sendMessage} onChanged={onChanged} />
+        </div>
+        {runDetails}
       </div>;
-      if (item.kind === "tool") return <div key={item.item_id} {...mark(item.item_id)}>
-        <ToolCallRow item={item} focused={highlight === item.item_id}
-          active={running && item.run_id === activeRunId}
-          expanded={expandedTools.has(item.item_id)}
-          onToggle={() => toggleTool(item.item_id)} />
+      if (item.kind === "tool") return <div key={item.item_id}>
+        <div {...mark(item.item_id)}>
+          <ToolCallRow item={item} focused={highlight === item.item_id}
+            active={running && item.run_id === activeRunId}
+            expanded={expandedTools.has(item.item_id)}
+            onToggle={() => toggleTool(item.item_id)}
+            observationStep={stepByItem.get(item.item_id) ?? null}
+            onLocateDetails={stepByItem.has(item.item_id)
+              ? () => locateDetails(item.run_id, stepByItem.get(item.item_id)!.step_id)
+              : undefined} />
+        </div>
+        {runDetails}
       </div>;
       const agent = item.role === "assistant";
       const previous = items[index - 1];
@@ -193,27 +264,30 @@ export default function TimelineFeed({
       const ended = agent && lastAssistantByRun.get(item.run_id) === item.item_id
         && item.run_id !== currentRunId;
       const canRetry = !agent && item.run_id === retryRunId && retryMessage !== undefined;
-      return <div className={`msg ${agent ? "agent" : "user"}${grouped ? " cont" : ""}`} key={item.item_id}
-        {...mark(item.item_id)}>
-        <div className="msg-body"><span className="sr-only">{agent ? "Agent 说：" : "我说："}</span>
-          {item.text && <div className="bubble">{agent ? <Markdown text={item.text} /> : item.text}</div>}
-          {!agent && <MessageAttachments items={item.attachments ?? []} />}
-          {!agent && (canRetry || item.text) && <div className="user-message-actions">
-            {canRetry && retryError !== null && <span className="retry-error" role="status">{retryError}</span>}
-            {canRetry && <button type="button" className="retry-message" disabled={retrying} onClick={() => {
-              setRetryError(null);
-              void retryMessage().then((error) => setRetryError(error?.message ?? null));
-            }} aria-label={retrying ? "正在重试这条消息" : "重试这条消息"} title="重试">
-              <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"
-                strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M20 11a8 8 0 1 0-2.34 5.66" /><polyline points="20 4 20 11 13 11" />
-              </svg>
-            </button>}
-            {item.text && <MessageActions text={item.text} pinned={false} end copyLabel="复制消息" />}
-          </div>}
-          {ended && <MessageActions text={answerText(items, item.run_id)}
-            createdAt={item.created_at} pinned={last} />}
+      return <div key={item.item_id}>
+        <div className={`msg ${agent ? "agent" : "user"}${grouped ? " cont" : ""}`}
+          {...mark(item.item_id)}>
+          <div className="msg-body"><span className="sr-only">{agent ? "Agent 说：" : "我说："}</span>
+            {item.text && <div className="bubble">{agent ? <Markdown text={item.text} /> : item.text}</div>}
+            {!agent && <MessageAttachments items={item.attachments ?? []} />}
+            {!agent && (canRetry || item.text) && <div className="user-message-actions">
+              {canRetry && retryError !== null && <span className="retry-error" role="status">{retryError}</span>}
+              {canRetry && <button type="button" className="retry-message" disabled={retrying} onClick={() => {
+                setRetryError(null);
+                void retryMessage().then((error) => setRetryError(error?.message ?? null));
+              }} aria-label={retrying ? "正在重试这条消息" : "重试这条消息"} title="重试">
+                <svg className="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"
+                  strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M20 11a8 8 0 1 0-2.34 5.66" /><polyline points="20 4 20 11 13 11" />
+                </svg>
+              </button>}
+              {item.text && <MessageActions text={item.text} pinned={false} end copyLabel="复制消息" />}
+            </div>}
+            {ended && <MessageActions text={answerText(items, item.run_id)}
+              createdAt={item.created_at} pinned={last} />}
+          </div>
         </div>
+        {runDetails}
       </div>;
     })}
     {running && <div className="thinking" role="status">

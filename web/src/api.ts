@@ -109,6 +109,60 @@ export type TimelineItem =
     };
 
 export type Timeline = { task_id: string; sdk_session_id: string | null; items: TimelineItem[] };
+
+export type ObservationStep = {
+  step_id: string;
+  kind: "tool" | "compact" | "degraded";
+  code: string;
+  status: "running" | "ok" | "error" | "denied";
+  started_at: string | null;
+  ended_at: string | null;
+  item_id: string | null;
+  tool_call_id: string | null;
+  detail: Record<string, unknown> | null;
+};
+
+export type ObservationMaterial = { title: string; chars: number };
+export type ObservationSkipped = { category: string; reason: string; skill_id?: string };
+
+export type UsageEntry = {
+  message_id: string | null;
+  request_id: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  credits: number | null;
+};
+
+export type ContextReading = {
+  used_percentage: number | null;
+  threshold_percentage: number | null;
+  auto_compact_enabled: boolean | null;
+};
+
+export type RunObservation = {
+  run_id: string;
+  kind: string;
+  status: string;
+  model: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  materials: { assembled: ObservationMaterial[]; skipped: ObservationSkipped[] } | null;
+  sdk_result: {
+    duration_ms: number | null;
+    duration_api_ms: number | null;
+    num_turns: number | null;
+    is_error: boolean;
+    stop_reason?: string | null;
+    usage: UsageEntry[];
+  } | null;
+  usage_totals: { input_tokens: number | null; output_tokens: number | null; credits: number | null };
+  context_before: ContextReading | null;
+  context_after: ContextReading | null;
+  steps: ObservationStep[];
+};
+
+export type Observations = { runs: RunObservation[] };
 export type MessageTarget = { kind: "mail_draft"; operation_id: string };
 export type Attachment = {
   file_id: string;
@@ -262,6 +316,8 @@ export const deleteTask = (taskId: string) =>
 export const listOperations = (taskId: string) =>
   request<OperationSummary[]>(`/tasks/${taskId}/operations`);
 export const getTimeline = (taskId: string) => request<Timeline>(`/tasks/${taskId}/timeline`);
+export const getObservations = (taskId: string) =>
+  request<Observations>(`/tasks/${taskId}/observations`);
 
 export const sendMessage = (
   taskId: string,

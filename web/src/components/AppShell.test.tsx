@@ -33,6 +33,8 @@ vi.mock("../api", async (importOriginal) => {
     listOperations: (taskId: string) => Promise.resolve(operations[taskId] ?? []),
     getTimeline: (taskId: string) =>
       Promise.resolve({ task_id: taskId, sdk_session_id: null, items: [] } satisfies Timeline),
+    getObservations: (taskId: string) =>
+      Promise.resolve({ task_id: taskId, runs: [] }),
     subscribeEvents: () => () => undefined,
   };
 });

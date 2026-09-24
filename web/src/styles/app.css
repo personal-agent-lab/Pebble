@@ -1509,3 +1509,62 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .kb-math-block.kb-math-editing .kb-math-output { margin-top: 6px; }
 .kb-math-output { user-select: none; }
 .kb-math-hint { display: block; margin-top: 4px; font-size: 11px; line-height: var(--leading-ui); color: var(--color-muted); text-align: left; }
+
+/* 执行详情：每轮一个默认折叠的运行观测面板（contracts/observability.md §4）。
+   与工具行同属系统细行的视觉层级：小字号、弱色，展开后是分节只读数据。 */
+.run-details { display: flex; flex-direction: column; gap: 4px; }
+.run-details-header {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 0;
+  font: inherit; font-size: var(--text-xs); color: var(--color-muted);
+  background: none; border: none; cursor: pointer; text-align: left;
+}
+.run-details-header:hover .run-details-title { text-decoration: underline; }
+.run-details-title { flex: none; font-weight: 510; }
+.run-details-summary { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85; }
+.run-details-header .rule { flex: 1; height: 1px; background: var(--color-border-subtle); }
+.run-details-header svg { flex: none; }
+.run-details-body {
+  display: flex; flex-direction: column; gap: 12px;
+  border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
+  padding: 10px 12px; font-size: var(--text-xs);
+}
+.run-details-section { display: flex; flex-direction: column; gap: 6px; }
+.run-details-section h4 { margin: 0; font-size: var(--text-xs); font-weight: 510; color: var(--color-muted); }
+.run-details-empty { margin: 0; color: var(--color-muted); }
+.run-details-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, max-content)); gap: 4px 16px; margin: 0; }
+.run-details-field { display: flex; gap: 8px; }
+.run-details-field dt { color: var(--color-muted); flex: none; }
+.run-details-field dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.run-details-materials { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.run-details-materials li { display: flex; gap: 8px; }
+.run-details-material-title { min-width: 0; overflow-wrap: anywhere; }
+.run-details-material-chars { color: var(--color-muted); flex: none; }
+.run-details-skipped { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; color: var(--color-muted); }
+.run-details-usage { border-collapse: collapse; }
+.run-details-usage th, .run-details-usage td { padding: 2px 12px 2px 0; text-align: left; }
+.run-details-usage th { color: var(--color-muted); font-weight: 470; }
+.run-details-usage td { font-variant-numeric: tabular-nums; }
+.run-details-totals { margin: 4px 0 0; }
+.run-details-note { color: var(--color-muted); margin-left: 4px; }
+.run-details-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.run-step { display: flex; align-items: center; gap: 8px; }
+/* 定位命中：从工具行跳过来时短暂标出对应步骤，与工具行高亮同一手法。 */
+.run-step.focused {
+  background: var(--bubble-bg); border-radius: var(--radius-sm); padding: 0 6px; margin: 0 -6px;
+}
+.run-step-icon { flex: none; color: var(--status-success); }
+.run-step-icon.pending { color: var(--color-muted); }
+.run-step-icon.failed { color: var(--color-danger); }
+/* 拒绝是授权层的结果，不是工具失败：弱色标出，与「失败」的红色区分。 */
+.run-step-icon.denied { color: var(--color-muted); }
+.run-step-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-step-state { flex: none; color: var(--color-muted); }
+.run-step-state.failed { color: var(--color-danger); }
+.run-step-duration { flex: 1; text-align: right; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.run-step-locate, .tool-call-locate {
+  flex: none; padding: 0; font: inherit; font-size: var(--text-xs);
+  color: var(--color-accent); background: none; border: none; cursor: pointer;
+}
+.run-step-locate:hover, .tool-call-locate:hover { text-decoration: underline; }
+.tool-call-line { display: flex; align-items: center; gap: 6px; }
+.tool-call-line .tool-call-row { flex: 1; min-width: 0; }

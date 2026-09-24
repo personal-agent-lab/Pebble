@@ -27,6 +27,7 @@ vi.mock("../api", async (importOriginal) => {
       task_id: taskId, sdk_session_id: null,
       items: [{ item_id: "u1", kind: "text", role: "user", run_id: "run-1", text: "服务端的消息", created_at: "2026-09-18T00:00:00Z" }],
     }),
+    getObservations: () => Promise.resolve({ runs: [] }),
     subscribeEvents: () => () => undefined,
   };
 });

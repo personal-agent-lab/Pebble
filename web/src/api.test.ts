@@ -2,8 +2,8 @@
 
 import { afterEach, expect, test, vi } from "vitest";
 
-import type { AgentEvent } from "./api";
-import { subscribeEvents } from "./api";
+import type { AgentEvent, Observations } from "./api";
+import { getObservations, subscribeEvents } from "./api";
 
 /** 最小 EventSource 替身：只提供订阅与关闭，测试手动投递事件。 */
 class FakeEventSource {
@@ -53,4 +53,35 @@ test("带数据的事件按 JSON 投递，连接 error 事件被忽略", () => {
 
   unsubscribe();
   expect(source.closed).toBe(true);
+});
+
+test("运行观测按任务读取，形状原样交给界面", async () => {
+  const payload: Observations = {
+    runs: [{
+      run_id: "run-1",
+      kind: "message",
+      status: "done",
+      model: "auto",
+      created_at: "2026-09-24T10:00:00Z",
+      started_at: "2026-09-24T10:00:01Z",
+      finished_at: "2026-09-24T10:00:09Z",
+      materials: null,
+      sdk_result: null,
+      usage_totals: { input_tokens: null, output_tokens: null, credits: null },
+      context_before: null,
+      context_after: null,
+      steps: [{
+        step_id: "s1", kind: "degraded", code: "memory_judge_failed", status: "ok",
+        started_at: "2026-09-24T10:00:09Z", ended_at: "2026-09-24T10:00:09Z",
+        item_id: null, tool_call_id: null, detail: null,
+      }],
+    }],
+  };
+  const fetchMock = vi.fn(() => Promise.resolve(new Response(JSON.stringify(payload), {
+    status: 200, headers: { "Content-Type": "application/json" },
+  })));
+  vi.stubGlobal("fetch", fetchMock);
+
+  expect(await getObservations("task-1")).toEqual(payload);
+  expect(fetchMock).toHaveBeenCalledWith("/api/tasks/task-1/observations", expect.anything());
 });

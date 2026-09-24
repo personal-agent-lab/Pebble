@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
-import type { TimelineItem } from "../api";
+import type { RunObservation, TimelineItem } from "../api";
 import TimelineFeed from "./TimelineFeed";
 
 const scrollIntoView = vi.fn();
@@ -309,4 +309,64 @@ test("末条是工具行时贴底判断不崩溃，新增内容照常滚动", ()
     answer("text-1", "本周有 3 个日程", "2026-09-24T14:33:00Z"),
   ]} />);
   expect(scrollIntoView).toHaveBeenCalledTimes(2);
+});
+
+test("观测面板挂在该轮最后一个条目后，工具行与步骤互相定位", async () => {
+  const observed: RunObservation = {
+    run_id: "run-1",
+    kind: "message",
+    status: "done",
+    model: "auto",
+    created_at: "2026-09-24T10:00:00Z",
+    started_at: "2026-09-24T10:00:01Z",
+    finished_at: "2026-09-24T10:00:09Z",
+    materials: { assembled: [{ title: "本轮材料", chars: 40 }], skipped: [] },
+    sdk_result: {
+      duration_ms: 8200, duration_api_ms: null, num_turns: 2, is_error: false,
+      usage: [],
+    },
+    usage_totals: { input_tokens: null, output_tokens: null, credits: null },
+    context_before: null,
+    context_after: null,
+    steps: [{
+      step_id: "s1", kind: "tool", code: "skill_view", status: "ok",
+      started_at: "2026-09-24T10:00:02Z", ended_at: "2026-09-24T10:00:04Z",
+      item_id: "tool-1", tool_call_id: "c1", detail: { source: "mcp", chars: 900 },
+    }],
+  };
+  const items: TimelineItem[] = [
+    { item_id: "ask", kind: "text", role: "user", run_id: "run-1", text: "整理周报", created_at: "2026-09-24T10:00:00Z" },
+    toolCall("tool-1", "skill_view", "ok"),
+    answer("text-1", "按技能完成周报", "2026-09-24T14:33:00Z"),
+  ];
+  const { container } = render(<TimelineFeed taskId="task-1" items={items} observations={[observed]}
+    running={false} sendMessage={vi.fn()} onChanged={vi.fn()} />);
+  // 默认折叠，只有摘要行。
+  const header = screen.getByRole("button", { name: /^执行详情/ });
+  expect(screen.queryByText("材料")).toBeNull();
+
+  // 工具行 → 执行详情：点击定位按钮展开面板。
+  await userEvent.click(screen.getByRole("button", { name: "在执行详情中定位这次调用" }));
+  expect(screen.getByText("材料")).toBeTruthy();
+  expect((header as HTMLElement).getAttribute("aria-expanded")).toBe("true");
+  expect(document.getElementById("run-details-run-1")).toBeTruthy();
+  // 同一次调用在工具行与步骤行各出现一次。
+  expect(screen.getAllByText("已读取技能")).toHaveLength(2);
+
+  // 执行详情 → 工具行：点击步骤的定位按钮，展开并滚动到对应工具行。
+  scrollIntoView.mockClear();
+  await userEvent.click(screen.getByRole("button", { name: "定位" }));
+  expect(document.querySelector('[data-step-id="s1"]')?.className).toContain("focused");
+  expect(container.querySelector("#item-tool-1")?.getAttribute("data-focus")).toBe("true");
+  expect(scrollIntoView).toHaveBeenCalled();
+  expect(screen.getByText("返回")).toBeTruthy();
+});
+
+test("没有观测数据的轮次不显示执行详情", () => {
+  const items: TimelineItem[] = [
+    answer("text-1", "没有观测", "2026-09-24T14:33:00Z"),
+  ];
+  render(<TimelineFeed taskId="task-1" items={items} observations={[]} running={false}
+    sendMessage={vi.fn()} onChanged={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: /执行详情/ })).toBeNull();
 });
