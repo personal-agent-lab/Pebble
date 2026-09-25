@@ -21,7 +21,7 @@ HTTPS 远程访问；主题页尚未实现；Skills 支持管理、审核与受�
 - `docs/contracts/mail.md`：Gmail 工具、同步触发、确认发送与核实的字段与语义。
 - `docs/contracts/calendar.md`：iCloud Calendar 工具、直连创建与冲突处理的字段与语义。
 - `docs/contracts/memory.md`：长期记忆与历史检索的文件格式、工具与接口。
-- `docs/contracts/skills.md`：Skills 的文件格式、工具与加载边界。
+- `docs/skill-spec.md`、`docs/contracts/skill.md`：Skills 的目标规格与接口草案；当前实现及后续决定见 `docs/status.md`。
 - `docs/contracts/personal-kb.md`：个人知识库的工具、存储与引用语义。
 
 设计文档第 2 节的组件表与代码结构是目标结构。

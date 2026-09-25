@@ -154,7 +154,7 @@ SDK 内置工具同样只在用户对话轮开放：联网查询（`WebSearch`�
 
 ## 5. Memory、Skills 与个人知识库
 
-三者都是实例数据目录里用户可直接读改的文件。格式与字段见 `contracts/memory.md`、`contracts/skills.md` 与 `contracts/personal-kb.md`。
+三者都是实例数据目录里用户可直接读改的文件。Memory 与资料库格式见 `contracts/memory.md`、`contracts/personal-kb.md`；Skills 的后续规格见 `skill-spec.md`、`contracts/skill.md`，当前实现状态见 `status.md`。
 
 - **Memory**：两个文件，每轮作为“关于你”“事实与约定”两块材料加载；不做版本管理（若数据目录仓库仍跟踪 `memory/`，启动时单独提交移出）。规则不能覆盖外部写授权，该约束由工具可见范围与 Confirmation 保证。
 - **Skills**：用户自建即生效；Agent 从使用记录总结的草稿存放在 SDK 发现目录之外，在对话中提示审阅。批准绑定内容版本，内容再变化即停止加载、回到草稿。加载器只提供已批准且版本一致的内容，经本轮附加上下文与受限 skill_read 加载，恢复会话时重新校验版本。批准 Skill 不改变外部写的授权规则。
