@@ -15,6 +15,7 @@
 | 个人资料库 Phase 6：正文图片与图片说明 | 已实现 | `contracts/personal-kb.md` §10 |
 | 个人资料库 Phase 5：主题页与后台主题整理 | 未实现 | `kb-spec.md` §8、`contracts/personal-kb.md` §7 |
 | Skills：受控加载、草稿审核、管理页 | 已实现旧架构；用户明确指定一次已完成工作后可生成待审核草稿。新规格的目录、附件与轨迹设计尚未实现；自动沉淀方案已被用户后续决定取消 | `skill-spec.md`、`contracts/skill.md`、`skill-tasks.md` |
+| 对话输入与运行步骤：加号菜单选择 Skill 或文件；运行中汇总工具调用、Skill 名称与简要步骤 | 已实现；步骤仅本轮实时展示，刷新后恢复服务端保留的最后一步 | `v1-design.md` |
 | 认证与 HTTPS 远程访问：Tailscale Serve、账号名单、写请求来源校验、前端同源托管、工具端点独立监听 | 已实现；真机外网验收未完成 | `v1-design.md` §6 |
 
 SQLite schema 版本为 18：保留 main 的 1–16，Skills 表使用 17–18。

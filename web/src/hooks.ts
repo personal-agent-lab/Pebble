@@ -76,6 +76,8 @@ export function useTaskDetail(taskId: string) {
   const [retrying, setRetrying] = useState(false);
   // 当前步骤只来自实时事件与重读时服务端记住的那一步，不进时间线。
   const [activity, setActivity] = useState<string | null>(null);
+  const [activities, setActivities] = useState<string[]>([]);
+  const activityRun = useRef<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -83,7 +85,12 @@ export function useTaskDetail(taskId: string) {
         getTask(taskId), listOperations(taskId), getTimeline(taskId),
       ]);
       setTask(detail);
-      setActivity(detail.latest_run?.activity ?? null);
+      const run = detail.latest_run;
+      if (run?.run_id !== activityRun.current) {
+        activityRun.current = run?.run_id ?? null;
+        setActivities(run?.activity ? [run.activity] : []);
+      }
+      setActivity(run?.activity ?? null);
       setOperations(loadedOperations);
       setItems(timeline.items);
       setError(null);
@@ -98,6 +105,12 @@ export function useTaskDetail(taskId: string) {
         return;
       }
       if (event.type === "activity") {
+        if (activityRun.current !== event.run_id) {
+          activityRun.current = event.run_id;
+          setActivities([event.text]);
+        } else {
+          setActivities((current) => [...current, event.text]);
+        }
         setActivity(event.text);
         return;
       }
@@ -154,5 +167,5 @@ export function useTaskDetail(taskId: string) {
     finally { setRetrying(false); }
   }, [taskId, reload]);
 
-  return { task, operations, items, activity, error, sending, retrying, send, retry, reload };
+  return { task, operations, items, activity, activities, error, sending, retrying, send, retry, reload };
 }

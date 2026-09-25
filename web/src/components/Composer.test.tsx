@@ -3,9 +3,12 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
+import { useState } from "react";
 
 import { ApiError, type ModelEntry } from "../api";
 import Composer from "./Composer";
+import { emptySelection } from "../features/skills/api";
 
 const models: ModelEntry[] = [
   { id: "model-a", label: "Model A", kind: "managed" },
@@ -86,4 +89,30 @@ test("模型目录不是最新时提示并可重试，不阻止发送", async ()
   await userEvent.type(screen.getByRole("textbox", { name: "消息" }), "hello");
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
   expect(onSubmit).toHaveBeenCalledWith("hello", []);
+});
+
+test("加号菜单可选 Skill 或文件，Skill 选择保留在输入框内", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify([
+    { id: "sk_one", name: "整理", description: "整理步骤", status: "approved", content_hash: "sha256:one" },
+  ]), { headers: { "Content-Type": "application/json" } }));
+  const onSubmit = vi.fn(async () => null);
+  function Harness() {
+    const [selection, setSelection] = useState(emptySelection);
+    return <Composer placeholder="随心输入" sending={false} model="model-a" onSubmit={onSubmit}
+      selection={selection} onSelectionChange={setSelection} />;
+  }
+  const { container } = render(<MemoryRouter><Harness /></MemoryRouter>);
+  expect(screen.queryByText("添加 Skill")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "添加内容" }));
+  expect(screen.getAllByRole("menuitem")).toHaveLength(2);
+  await userEvent.click(screen.getByRole("menuitem", { name: "Skill" }));
+  expect(await screen.findByRole("checkbox", { name: /整理/ })).toBeTruthy();
+  await userEvent.click(screen.getByRole("checkbox", { name: /整理/ }));
+  expect(container.querySelector(".codex-composer .skill-picker")?.textContent).toContain("整理 ×");
+  await userEvent.click(screen.getByRole("button", { name: "关闭 Skill 选择器" }));
+  await userEvent.click(screen.getByRole("button", { name: "添加内容" }));
+  const fileInput = container.querySelector("input[type=file]") as HTMLInputElement;
+  const click = vi.spyOn(fileInput, "click");
+  await userEvent.click(screen.getByRole("menuitem", { name: "文件" }));
+  expect(click).toHaveBeenCalledOnce();
 });

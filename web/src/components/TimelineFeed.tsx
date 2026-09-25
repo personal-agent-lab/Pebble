@@ -81,6 +81,8 @@ type Props = {
   running: boolean;
   /** 进行中的当前步骤说明；没有时只显示跳动的点。 */
   activity?: string | null;
+  /** 本轮收到的工具步骤，刷新后至少恢复服务端记住的最后一步。 */
+  activities?: string[];
   /** 从历史搜索跳转过来时要定位的条目：滚到它并短暂高亮，不再自动贴底。 */
   focusItemId?: string | null;
   /** 只有任务最后一轮是已中断的用户消息时才有值。 */
@@ -92,7 +94,7 @@ type Props = {
 };
 
 export default function TimelineFeed({
-  taskId, items, running, activity = null, focusItemId = null, retryRunId = null,
+  taskId, items, running, activity = null, activities = [], focusItemId = null, retryRunId = null,
   retrying = false, retryMessage, sendMessage, onChanged,
 }: Props) {
   const anchor = useRef<HTMLDivElement>(null);
@@ -127,7 +129,7 @@ export default function TimelineFeed({
   // 任务列表 5 秒一轮的轮询、输入框里敲的每一个字，都会把页面拽到底部。
   // running 一并入依赖：思考占位出入会改变内容高度，和新增一条消息一样需要贴底。
   const signature = contentSignature(items);
-  useEffect(() => { if (stick.current) anchor.current?.scrollIntoView({ block: "end" }); }, [signature, running]);
+  useEffect(() => { if (stick.current) anchor.current?.scrollIntoView({ block: "end" }); }, [signature, running, activities.length]);
 
   // 定位只做一次：条目读出来之后滚到它；之后的新内容照常，不再把视图拽回这里。
   const present = focusItemId !== null && items.some((item) => item.item_id === focusItemId);
@@ -190,10 +192,14 @@ export default function TimelineFeed({
         </div>
       </div>;
     })}
-    {running && <div className="thinking" role="status">
-      {activity === null && <span className="sr-only">Agent 正在处理</span>}
-      <span className="dot" aria-hidden /><span className="dot" aria-hidden /><span className="dot" aria-hidden />
-      {activity !== null && <span className="thinking-text">{activity}</span>}
+    {running && <div className="run-progress" role="status">
+      {activities.length > 0 && <div className="run-steps" aria-label="本轮处理步骤">
+        {activities.map((step, index) => <div className="run-step" key={index}>{step}</div>)}
+      </div>}
+      <div className="thinking">
+        <span className="dot" aria-hidden /><span className="dot" aria-hidden /><span className="dot" aria-hidden />
+        <span className="thinking-text">{activity ?? (activities.length > 0 ? "正在整理回答" : "正在理解请求")}</span>
+      </div>
     </div>}
     <div ref={anchor} />
   </>;

@@ -45,7 +45,9 @@ test("步骤事件实时显示，Agent 开始写回答就收起；重读时沿�
 
   act(() => onEvent?.({ type: "activity", run_id: "run-1", text: "正在检索资料：星云验收" }));
   expect(result.current.activity).toBe("正在检索资料：星云验收");
+  expect(result.current.activities).toEqual(["正在读取资料：项目/验收.md", "正在检索资料：星云验收"]);
 
   act(() => onEvent?.({ type: "text", run_id: "run-1", item_id: "text-1", text: "找到了" }));
   expect(result.current.activity).toBeNull();
+  expect(result.current.activities).toHaveLength(2);
 });

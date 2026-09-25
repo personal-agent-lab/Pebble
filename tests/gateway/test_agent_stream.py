@@ -788,7 +788,7 @@ def test_later_message_without_deltas_still_sends_full_text(settings, monkeypatc
 
 
 def test_tool_calls_announce_the_current_step_before_they_run(settings, monkeypatch):
-    """模型给出工具调用时先告诉页面这一步在做什么；没有声明说明、本轮不可见的工具不展示。"""
+    """模型给出工具调用时先告诉页面这一步在做什么；未知的 Pebble 工具不展示。"""
     gateway = make_gateway(settings)
     captured = install_sdk(
         monkeypatch,
@@ -806,7 +806,7 @@ def test_tool_calls_announce_the_current_step_before_they_run(settings, monkeypa
             AssistantMessage(
                 [ToolUseBlock("t2", "WebSearch", {"query": "第二会议室 位置"})], "model"
             ),
-            # 新邮件轮之外才可见的工具、未知工具与内置的其他工具都不产生步骤
+            # 未注册的 Pebble 工具不产生步骤，其他内置工具显示名称。
             AssistantMessage(
                 [
                     ToolUseBlock("t3", "mcp__pebble__not_registered", {}),
@@ -824,15 +824,16 @@ def test_tool_calls_announce_the_current_step_before_they_run(settings, monkeypa
     assert [(event["type"], event.get("text")) for event in events] == [
         ("session", None),
         ("text", "我先查一下。"),
-        ("activity", "正在搜索邮件：活动邀请"),
-        ("activity", "正在联网搜索：第二会议室 位置"),
+        ("activity", "正在搜索邮件：活动邀请 · gmail_search"),
+        ("activity", "正在联网搜索：第二会议室 位置 · WebSearch"),
+        ("activity", "正在调用工具：Bash"),
         ("text", "找到了。"),
         ("done", None),
     ]
     assert captured["results"][0].isError is False
 
 
-def test_step_description_failure_is_skipped(settings, monkeypatch):
+def test_step_description_failure_uses_tool_name(settings, monkeypatch):
     gateway = make_gateway(settings)
     search = next(tool for tool in gateway.tools if tool.name == "gmail_search")
 
@@ -856,7 +857,10 @@ def test_step_description_failure_is_skipped(settings, monkeypatch):
 
     events = asyncio.run(collect(gateway.stream_turn(message_turn("搜邮件"))))
 
-    assert [event["type"] for event in events] == ["done"]
+    assert [(event["type"], event.get("text")) for event in events] == [
+        ("activity", "正在调用工具：gmail_search"),
+        ("done", None),
+    ]
 
 
 def test_repeated_init_announces_session_once(settings, monkeypatch):

@@ -292,6 +292,18 @@ class QoderGateway:
             queued=queued,
         ) as path:
             options = self._options(turn, visible=visible, path=path)
+            # 用户手动选中的 Skill 在装配时已直接注入正文，不会产生 skill_read 调用。
+            # 此处按实际装载结果通知页面，避免把它误报为模型自主调用。
+            if turn.skill_refs or turn.skill_ids:
+                from server.skills.catalog import available_catalog
+
+                names = {skill.id: skill.name for skill in available_catalog()}
+                refs = list(turn.skill_refs) or [{"id": sid} for sid in turn.skill_ids]
+                for skill_id in dict.fromkeys(ref["id"] for ref in refs):
+                    yield {
+                        "type": "activity",
+                        "text": f"已加载「{names[skill_id]}」Skill（用户选择）",
+                    }
             async with QoderSDKClient(options) as client:
                 if turn.sdk_session_id is not None:
                     await self._compact_if_needed(client)
@@ -334,23 +346,25 @@ class QoderGateway:
 
     @staticmethod
     def _activity_text(block: ToolUseBlock, visible: list[ToolDefinition]) -> str | None:
-        """把一次工具调用换成用户能读懂的步骤说明；没有声明说明的工具不展示。"""
+        """把一次工具调用换成用户能读懂的步骤说明；未声明文案时显示工具名。"""
         arguments = block.input if isinstance(block.input, dict) else {}
         prefix = f"mcp__{TOOL_SERVER_NAME}__"
         if block.name.startswith(prefix):
             name = block.name[len(prefix) :]
             definition = next((tool for tool in visible if tool.name == name), None)
-            if definition is None or definition.activity_renderer is None:
+            if definition is None:
                 return None
+            if definition.activity_renderer is None:
+                return f"正在调用工具：{name}"
             try:
-                return definition.activity_renderer(arguments)
+                return f"{definition.activity_renderer(arguments)} · {name}"
             except Exception:
                 logger.exception("工具 %s 的步骤说明生成失败", name)
-                return None
+                return f"正在调用工具：{name}"
         if block.name in WEB_TOOL_ACTIVITIES:
             label, field = WEB_TOOL_ACTIVITIES[block.name]
-            return activity(label, arguments.get(field))
-        return None
+            return f"{activity(label, arguments.get(field))} · {block.name}"
+        return f"正在调用工具：{block.name}" if block.name.isidentifier() else None
 
     async def _compact_if_needed(self, client: QoderSDKClient) -> None:
         """运行时未启用自动压缩时，在达到其阈值后先完成手动压缩。"""

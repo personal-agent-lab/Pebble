@@ -7,10 +7,17 @@ from server.skills.runtime import current, read
 from server.tools.registry import SideEffect, tool
 
 
+def _skill_activity(args: dict) -> str:
+    skill_id = args.get("skill_id")
+    name = next((item.name for item in catalog.available_catalog() if item.id == skill_id), None)
+    return f"正在调用「{name or skill_id}」Skill" if name or skill_id else "正在调用 Skill"
+
+
 @tool(
     name="skill_list",
     description="返回可用 Skill 的名称、描述与状态。用于了解有哪些 Skill 可用。",
     side_effect=SideEffect.READONLY,
+    activity_renderer=lambda _args: "正在查看可用 Skill",
 )
 def skill_list() -> list[dict]:
     scope = current.get()
@@ -35,6 +42,7 @@ def skill_list() -> list[dict]:
     name="skill_read",
     description="读取指定 Skill 的完整内容。返回 SKILL.md 的正文，供你按流程执行。",
     side_effect=SideEffect.READONLY,
+    activity_renderer=_skill_activity,
 )
 def skill_read(skill_id: str) -> dict:
     skill = read(skill_id)
@@ -64,6 +72,7 @@ def skill_read(skill_id: str) -> dict:
         "只提交待审核草稿，不能批准；提交后提示用户到 Skills 页面审核。"
     ),
     side_effect=SideEffect.LOCAL_WRITE,
+    activity_renderer=lambda args: f"正在生成「{args.get('name', '新')}」Skill 草稿",
 )
 def skill_propose(
     name: str,
@@ -124,6 +133,7 @@ def skill_propose(
     name="skill_find_evidence",
     description="用户要求总结已完成工作时，查询当前或指定任务的已完成轮次；不判断是否值得保存。",
     side_effect=SideEffect.READONLY,
+    activity_renderer=lambda _args: "正在核对已完成的工作",
 )
 def skill_find_evidence(source_task_id: str | None = None) -> dict:
     from server.skills.evidence import find

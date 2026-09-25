@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import SkillPicker from "../features/skills/SkillPicker";
 import { emptySelection } from "../features/skills/api";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -93,8 +92,8 @@ export default function TaskListPage() {
         <div className="hero-inner">
           <h1 className="hero-title">今天要做什么？</h1>
 
-          <SkillPicker value={selection} onChange={setSelection} />
           <Composer key={draftKey} placeholder="随心输入" sending={false}
+            selection={selection} onSelectionChange={setSelection}
             model={model} models={models}
             initialMessage={draft?.message} initialFiles={draft?.files}
             onModelChange={setModel} onSubmit={start}

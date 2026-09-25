@@ -182,13 +182,17 @@ test("从搜索结果跳进来时滚到命中条目并高亮，之后的新内�
   expect(scrollIntoView).toHaveBeenCalledTimes(1);
 });
 
-test("处理中显示当前步骤；没有步骤时只有跳动的点", () => {
+test("处理中显示当前步骤和本轮工具调用", () => {
   const props = { taskId: "task-1", items: [] as TimelineItem[], sendMessage: vi.fn(), onChanged: vi.fn() };
   const { rerender } = render(<TimelineFeed {...props} running activity={null} />);
-  expect(screen.getByRole("status").textContent).toBe("Agent 正在处理");
+  expect(screen.getByRole("status").textContent).toBe("正在理解请求");
 
   rerender(<TimelineFeed {...props} running activity="正在检索资料：星云验收" />);
   expect(screen.getByRole("status").textContent).toBe("正在检索资料：星云验收");
+
+  rerender(<TimelineFeed {...props} running activity="正在调用「整理」Skill"
+    activities={["正在检索资料：星云验收", "正在调用「整理」Skill"]} />);
+  expect(screen.getByLabelText("本轮处理步骤").textContent).toContain("正在调用「整理」Skill");
 
   rerender(<TimelineFeed {...props} running={false} activity="正在检索资料：星云验收" />);
   expect(screen.queryByRole("status")).toBeNull();

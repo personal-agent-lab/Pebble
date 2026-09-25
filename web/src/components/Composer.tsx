@@ -1,8 +1,10 @@
-import { ArrowUp, FileText, Plus, X } from "@phosphor-icons/react";
+import { ArrowUp, FileText, Plus, Sparkle, X } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 
 import type { ApiError, ModelEntry } from "../api";
 import ModelPicker from "./ModelPicker";
+import SkillPicker from "../features/skills/SkillPicker";
+import type { Selection } from "../features/skills/api";
 
 const MAX_FILES = 10;
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
@@ -23,6 +25,8 @@ type Props = {
   /** 未发出的消息退回时预填的文字与附件。 */
   initialMessage?: string;
   initialFiles?: File[];
+  selection?: Selection;
+  onSelectionChange?: (selection: Selection) => void;
 };
 
 const formatSize = (size: number) => size >= 1024 * 1024
@@ -32,16 +36,34 @@ const formatSize = (size: number) => size >= 1024 * 1024
 export default function Composer({
   placeholder, sending, model, models = [], modelLocked = false, modelsPending = false, catalogNotice = null, onModelChange, onSubmit,
   initialMessage = "", initialFiles = [],
+  selection, onSelectionChange,
 }: Props) {
   const [message, setMessage] = useState(initialMessage);
   const [files, setFiles] = useState<File[]>(initialFiles);
   const [error, setError] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const addArea = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const previews = useRef(new Map<File, string>());
 
   useEffect(() => () => {
     for (const url of previews.current.values()) URL.revokeObjectURL(url);
+  }, []);
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (addArea.current && !addArea.current.contains(event.target as Node)) {
+        setAddOpen(false);
+        setSkillsOpen(false);
+      }
+    };
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setAddOpen(false); setSkillsOpen(false); }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onEscape);
+    return () => { document.removeEventListener("pointerdown", onPointerDown); document.removeEventListener("keydown", onEscape); };
   }, []);
 
   // 预填的多行文字要撑开输入框，与手动输入时一致。
@@ -99,7 +121,9 @@ export default function Composer({
     if (textarea.current !== null) textarea.current.style.height = "auto";
   };
 
-  return <div className="codex-composer">
+  return <div className="codex-composer" ref={addArea}>
+    {selection && onSelectionChange && <SkillPicker value={selection} onChange={onSelectionChange}
+      open={skillsOpen} onClose={() => setSkillsOpen(false)} disabled={sending} />}
     {files.length > 0 && <div className="composer-files" aria-label="待发送附件">
       {files.map((file, index) => {
         const image = file.type.startsWith("image/");
@@ -130,8 +154,14 @@ export default function Composer({
           addFiles(Array.from(event.target.files ?? []));
           event.target.value = "";
         }} />
-      <button type="button" className="composer-add" onClick={() => input.current?.click()}
-        disabled={sending} aria-label="添加图片或文件"><Plus size={18} weight="bold" /></button>
+      <div className="composer-add-area">
+        <button type="button" className="composer-add" onClick={() => { setSkillsOpen(false); setAddOpen(!addOpen); }}
+          disabled={sending} aria-label="添加内容" aria-expanded={addOpen}><Plus size={18} weight="bold" /></button>
+        {addOpen && <div className="composer-add-menu" role="menu">
+          {selection && onSelectionChange && <button type="button" role="menuitem" onClick={() => { setAddOpen(false); setSkillsOpen(true); }}><Sparkle size={17} />Skill</button>}
+          <button type="button" role="menuitem" onClick={() => { setAddOpen(false); input.current?.click(); }}><FileText size={17} />文件</button>
+        </div>}
+      </div>
 
       <div className="composer-spacer" />
       {catalogNotice !== null && !modelLocked && <span className="composer-catalog-notice">

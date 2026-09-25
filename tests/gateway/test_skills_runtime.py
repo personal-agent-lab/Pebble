@@ -3,11 +3,19 @@ import asyncio
 from server.agent.mcp import ToolServer
 from server.agent.toolset import TurnKind
 from server.db import init_db, session, write
+from server.gateway.agent_contract import Turn
 from server.sessions.service import SessionStore
 from server.skills import service
 from server.skills.runtime import Scope, current
-from server.tools.registry import default_registry
-from tests.gateway.test_agent_stream import injected_context, make_gateway, options_for
+from server.skills.tools import skill_list, skill_read
+from tests.gateway.test_agent_stream import (
+    collect,
+    injected_context,
+    install_sdk,
+    make_gateway,
+    options_for,
+    result,
+)
 from tests.support.mcp_http import mcp_session, tool_payload
 
 
@@ -31,6 +39,24 @@ def test_manual_body_and_automatic_catalog(settings):
     assert options.hooks is None or skill.description not in injected_context(options)
 
 
+def test_manual_skill_is_announced_when_loaded(settings, monkeypatch):
+    skill = service.create_skill(name="汇报", description="简洁汇报", body="先结论，再依据")
+    gateway = make_gateway(settings)
+    install_sdk(monkeypatch, gateway, [result()])
+    turn = Turn(
+        kind=TurnKind.MESSAGE,
+        task_id="task-1",
+        sdk_session_id=None,
+        message="写一份汇报",
+        skill_refs=({"id": skill.id, "revision": skill.content_hash},),
+    )
+    events = asyncio.run(collect(gateway.stream_turn(turn)))
+    assert events == [
+        {"type": "activity", "text": "已加载「汇报」Skill（用户选择）"},
+        {"type": "done"},
+    ]
+
+
 def test_mcp_scope_and_actual_usage(settings):
     init_db()
     skill = service.create_skill(name="汇报", description="简洁汇报", body="先结论，再依据")
@@ -44,9 +70,7 @@ def test_mcp_scope_and_actual_usage(settings):
 
     async def scenario():
         server = ToolServer()
-        definitions = [
-            d for d in default_registry.list_tools() if d.name in {"skill_read", "skill_list"}
-        ]
+        definitions = [skill_read, skill_list]
         scope = Scope("run", {skill.id}, True, set())
         token = current.set(scope)
         try:
