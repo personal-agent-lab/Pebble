@@ -14,7 +14,7 @@
 | 个人资料库 Phase 1–4：保存、读取、更新、历史，分节检索与按引用读取，删除、移动、恢复与用户改动跟随，资料目录，管理界面，任务归档 | 已实现 | `kb-spec.md`、`contracts/personal-kb.md` |
 | 个人资料库 Phase 6：正文图片与图片说明 | 已实现 | `contracts/personal-kb.md` §10 |
 | 个人资料库 Phase 5：主题页与后台主题整理 | 未实现 | `kb-spec.md` §8、`contracts/personal-kb.md` §7 |
-| Skills：两条来源、草稿审核、受控加载、管理页 | 已实现；支持与附件一起选择并记录运行版本 | `contracts/skills.md` |
+| Skills：两条来源、草稿审核、受控加载、管理页 | 已实现；支持与附件一起选择并记录运行版本；用户明确指定一次已完成工作后可生成待审核 Skill 草稿 | `contracts/skills.md` |
 | 认证与 HTTPS 远程访问：Tailscale Serve、账号名单、写请求来源校验、前端同源托管、工具端点独立监听 | 已实现；真机外网验收未完成 | `v1-design.md` §6 |
 
 SQLite schema 版本为 18：保留 main 的 1–16，Skills 表使用 17–18。

@@ -55,10 +55,13 @@ def skill_read(skill_id: str) -> dict:
 @tool(
     name="skill_propose",
     description=(
-        "任务收尾时若发现可复用流程，先用 skill_find_evidence 查询。"
-        "至少三个不同任务成功完成相同工具序列才提交草稿。"
-        "抽象参数，不复制私人信息；优先改进已有 Skill。"
-        "不能批准，提交后提示用户到 Skills 待审核页审阅。"
+        "仅当用户在当前对话中明确要求把某项已完成工作总结为 Skill 时调用；"
+        "不要自行判断工作是否值得保存，也不要主动建议保存。"
+        "先理解用户指定的是当前任务还是过去的任务；"
+        "过去的任务用 history_search/history_read 核对内容。"
+        "用简洁标题作 name，概括适用条件、可复用步骤和验证方法，抽象参数且不复制私人信息。"
+        "source_task_id 可省略以指当前任务；服务端核对该任务在本轮前已有完成记录。"
+        "只提交待审核草稿，不能批准；提交后提示用户到 Skills 页面审核。"
     ),
     side_effect=SideEffect.LOCAL_WRITE,
 )
@@ -71,16 +74,28 @@ def skill_propose(
     tools: list[str] | None = None,
     side_effects: list[str] | None = None,
     requires_confirmation: bool = False,
-    evidence: dict | None = None,
+    source_task_id: str | None = None,
     skill_id: str | None = None,
 ) -> dict:
+    from server.errors import SkillValidationError
     from server.skills.evidence import verify
     from server.skills.repository import list_drafts
 
-    evidence = verify(evidence)
+    if not name.strip() or len(name.strip()) > 30:
+        raise SkillValidationError(
+            [{"field": "name", "message": "Skill 标题须简洁，不超过 30 个字符"}]
+        )
+    if not description.strip() or not body.strip():
+        raise SkillValidationError(
+            [{"field": "body", "message": "Skill 需要描述和可复用的流程正文"}]
+        )
+    name = name.strip()
+    evidence = verify(source_task_id)
     for existing in list_drafts():
         if (
             existing.skill.name == name
+            and existing.skill.description == description
+            and existing.skill.body == body
             and existing.skill.evidence
             and existing.skill.evidence.tasks == evidence["tasks"]
         ):
@@ -107,10 +122,10 @@ def skill_propose(
 
 @tool(
     name="skill_find_evidence",
-    description="查找与指定 Skill 相关的执行依据：工具调用序列、成功次数、来源任务标识。",
+    description="用户要求总结已完成工作时，查询当前或指定任务的已完成轮次；不判断是否值得保存。",
     side_effect=SideEffect.READONLY,
 )
-def skill_find_evidence(skill_id: str | None = None) -> dict:
+def skill_find_evidence(source_task_id: str | None = None) -> dict:
     from server.skills.evidence import find
 
-    return find()
+    return find(source_task_id)

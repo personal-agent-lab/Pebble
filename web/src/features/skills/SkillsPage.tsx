@@ -9,7 +9,7 @@ export default function SkillsPage() {
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); setError(""); try { await fn(); await reload(); } catch(e) {setError(String(e));} finally {setBusy(false);} };
   const open = (s: Skill) => void run(async () => {setEditing(s.draft_id ? s : await getSkill(s.id)); setHistory(s.draft_id ? [] : await versions(s.id)); setBase(s.base_revision && s.skill_id ? (await getSkill(s.skill_id)).body : "");});
   const shown = (tab === "draft" ? drafts : items.filter(s => s.status === tab)).filter(s => `${s.name} ${s.description}`.toLowerCase().includes(query.toLowerCase()));
-  return <AppShell><div className="skills-page"><header><h1>Skills</h1><p>保存常用流程，在对话中选择或自动按需使用。</p><button className="btn" onClick={() => {setEditing({name: "", description: "", body: "", triggers: []}); setHistory([]); setBase("");}}>新建 Skill</button></header>
+  return <AppShell><div className="skills-page"><header><h1>Skills</h1><p>保存常用流程，在对话中选择或自动按需使用。也可以在完成一项工作后说“把刚才的工作总结为 Skill”，审核草稿后启用。</p><button className="btn" onClick={() => {setEditing({name: "", description: "", body: "", triggers: []}); setHistory([]); setBase("");}}>新建 Skill</button></header>
     <nav className="skill-tabs">{Object.entries(labels).map(([key,label]) => <button className="btn-secondary" aria-pressed={tab === key} key={key} onClick={() => setTab(key)}>{label}{key === "draft" ? ` (${drafts.length})` : ""}</button>)}</nav>
     <input aria-label="搜索 Skills" placeholder="搜索名称或描述" value={query} onChange={e => setQuery(e.target.value)} />
     {error && <p role="alert">{error} <button onClick={() => void run(reload)}>重试</button></p>}
@@ -21,7 +21,7 @@ export default function SkillsPage() {
         <label>描述<input required value={editing.description ?? ""} onChange={e => setEditing({...editing, description: e.target.value})} /></label>
         <label>提示词正文<textarea required rows={12} value={editing.body ?? ""} onChange={e => setEditing({...editing, body: e.target.value})} /></label>
         <label>适用条件（每行一条）<textarea rows={3} value={(editing.triggers ?? []).join("\n")} onChange={e => setEditing({...editing, triggers: e.target.value.split("\n").filter(Boolean)})} /></label>
-        {editing.evidence && <p>依据：{editing.evidence.occurrences} 个任务，{editing.evidence.tasks.join("、")}</p>}
+        {editing.evidence && <p>来源任务：{editing.evidence.tasks.join("、")}</p>}
         {base && <details><summary>查看当前生效正文，与草稿对比</summary><pre>{base}</pre></details>}
         <div className="skill-tabs"><button disabled={busy || editing.status === "archived"} className="btn">{editing.draft_id ? "保存草稿" : "保存并启用"}</button>
         <button type="button" className="btn-secondary" onClick={() => setEditing(null)}>关闭</button>
