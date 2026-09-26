@@ -220,3 +220,40 @@ test("目录为空时提示去技能页创建；未提供目录时 / 按普通�
   expect(textbox.value).toBe("/abc");
   expect(screen.queryByRole("listbox", { name: "技能列表" })).toBeNull();
 });
+
+test("执行中的轮次把发送按钮换成终止：可点、回车不发送、已写的内容留着", async () => {
+  const onSubmit = vi.fn(async () => null);
+  const onStop = vi.fn(async () => null);
+  const props = { placeholder: "随心输入", sending: false, model: "model-a", onSubmit, onStop };
+  const { rerender } = render(<Composer {...props} running />);
+
+  expect(screen.queryByRole("button", { name: "发送" })).toBeNull();
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+  await userEvent.type(textbox, "接着说");
+  await userEvent.keyboard("{Enter}");
+  expect(onSubmit).not.toHaveBeenCalled();
+
+  await userEvent.click(screen.getByRole("button", { name: "终止" }));
+  expect(onStop).toHaveBeenCalledTimes(1);
+  expect(textbox.value).toBe("接着说");
+
+  // 终止请求还在收尾：按钮不可再点，避免重复请求。
+  rerender(<Composer {...props} running stopping />);
+  const stopping = screen.getByRole("button", { name: "正在终止" }) as HTMLButtonElement;
+  expect(stopping.disabled).toBe(true);
+
+  // 这一轮结束后回到发送。
+  rerender(<Composer {...props} />);
+  expect(screen.getByRole("button", { name: "发送" })).toBeTruthy();
+});
+
+test("终止失败在输入框里说明，不静默丢掉", async () => {
+  const onStop = vi.fn(async () => new ApiError("offline", "无法连接 Pebble 服务", 0));
+  render(<Composer placeholder="随心输入" sending={false} running model="model-a"
+    onSubmit={async () => null} onStop={onStop} />);
+
+  await userEvent.click(screen.getByRole("button", { name: "终止" }));
+
+  expect((await screen.findByRole("alert")).textContent).toContain("无法连接 Pebble 服务");
+  expect(screen.getByRole("button", { name: "终止" })).toBeTruthy();
+});

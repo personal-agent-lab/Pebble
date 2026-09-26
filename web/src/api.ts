@@ -133,10 +133,14 @@ export type UsageEntry = {
   credits: number | null;
 };
 
+/** CLI `/context` 视图的一类：运行时只给占窗口百分比，不给绝对 token 数。 */
+export type ContextCategory = { kind: string; percentage: number | null };
+
 export type ContextReading = {
   used_percentage: number | null;
   threshold_percentage: number | null;
   auto_compact_enabled: boolean | null;
+  categories?: ContextCategory[];
 };
 
 export type RunObservation = {
@@ -209,6 +213,8 @@ export type AgentEvent =
       version: number;
     }
   | { type: "done"; run_id: string }
+  /** 用户终止了这一轮：调用已按中断落库，页面重读即可。 */
+  | { type: "interrupted"; run_id: string }
   | { type: "error"; run_id: string; item_id: string; message: string }
   | { type: "notice"; run_id: string; item_id: string; text: string }
   | { type: "activity"; run_id: string; text: string }
@@ -349,6 +355,10 @@ export const sendMessage = (
 export const retryLastMessage = (taskId: string) =>
   request<Run>(`/tasks/${taskId}/retry`, { method: "POST" });
 
+/** 终止任务当前进行中的一轮：已流出的回答保留，调用记为已中断。 */
+export const interruptTask = (taskId: string) =>
+  request<Run>(`/tasks/${taskId}/interrupt`, { method: "POST" });
+
 export const editDraft = (
   operationId: string,
   expectedVersion: number,
@@ -371,7 +381,7 @@ export const cancelOperation = (taskId: string, operationId: string, version: nu
 export const verifyExecution = (operationId: string) =>
   request<Execution>(`/operations/${operationId}/verification`, { method: "POST" });
 
-const EVENT_TYPES = ["session", "text", "draft_saved", "done", "error", "notice", "activity", "timeline_changed"] as const;
+const EVENT_TYPES = ["session", "text", "draft_saved", "done", "interrupted", "error", "notice", "activity", "timeline_changed"] as const;
 export function subscribeEvents(
   taskId: string,
   onEvent: (event: AgentEvent) => void,

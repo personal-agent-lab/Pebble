@@ -9,6 +9,7 @@ import { ApiError, type Run, type Task, type TaskDetail } from "../api";
 
 const createTask = vi.fn();
 const getTask = vi.fn();
+const interruptTask = vi.fn();
 let created: string[] = [];
 
 vi.mock("../api", async (importOriginal) => {
@@ -28,6 +29,7 @@ vi.mock("../api", async (importOriginal) => {
       items: [{ item_id: "u1", kind: "text", role: "user", run_id: "run-1", text: "服务端的消息", created_at: "2026-09-18T00:00:00Z" }],
     }),
     getObservations: () => Promise.resolve({ runs: [] }),
+    interruptTask: (...args: unknown[]) => interruptTask(...args),
     subscribeEvents: () => () => undefined,
   };
 });
@@ -56,6 +58,7 @@ afterEach(() => {
   cleanup();
   createTask.mockReset();
   getTask.mockReset();
+  interruptTask.mockReset();
   created = [];
   resetPendingTasks();
 });
@@ -88,6 +91,28 @@ test("按下发送立即进入任务页显示消息，创建成功后才读取�
   pending.resolve({ task: task(taskId), run: run(taskId) });
   expect(await screen.findByText("服务端的消息")).toBeTruthy();
   expect(getTask).toHaveBeenCalledWith(taskId);
+});
+
+test("任务执行中底部按钮换成终止，点击后这一轮不再进行", async () => {
+  const pending = deferred<{ task: Task; run: Run }>();
+  createTask.mockReturnValue(pending.promise);
+  let finished = false;
+  getTask.mockImplementation((taskId: string) => Promise.resolve(finished
+    ? { ...task(taskId), latest_run: { ...run(taskId), status: "interrupted" } }
+    : task(taskId)));
+  interruptTask.mockImplementation(async () => { finished = true; return run("run-1"); });
+
+  const user = await send("解释 JIT");
+  const taskId = createTask.mock.calls[0][3] as string;
+  created = [taskId];
+  pending.resolve({ task: task(taskId), run: run(taskId) });
+
+  // 服务端这一轮还在跑：右下角是终止，不再是发送。
+  await user.click(await screen.findByRole("button", { name: "终止" }));
+
+  expect(interruptTask).toHaveBeenCalledWith(taskId);
+  // 终止后重读到这一轮已中断，按钮回到发送。
+  expect(await screen.findByRole("button", { name: "发送" })).toBeTruthy();
 });
 
 test("连接失败可原样重试，重试沿用同一任务标识", async () => {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
   type AgentEvent,
+  type ContextReading,
   type MessageTarget,
   type OperationSummary,
   type Run,
@@ -21,6 +22,7 @@ import {
   listTasks,
   sendMessage,
   retryLastMessage,
+  interruptTask,
   subscribeEvents,
 } from "./api";
 
@@ -103,9 +105,10 @@ export function useTaskDetail(taskId: string) {
   const [error, setError] = useState<ApiError | null>(null);
   const [sending, setSending] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [stopping, setStopping] = useState(false);
   // 当前步骤只来自实时事件与重读时服务端记住的那一步，不进时间线。
   const [activity, setActivity] = useState<string | null>(null);
-  // 运行观测：读取失败不影响对话主界面，只收起执行详情。
+  // 运行观测：读取失败不影响对话主界面，折叠头与上下文标记退回「未记录」。
   const [observations, setObservations] = useState<RunObservation[]>([]);
 
   const reload = useCallback(async () => {
@@ -188,5 +191,36 @@ export function useTaskDetail(taskId: string) {
     finally { setRetrying(false); }
   }, [taskId, reload]);
 
-  return { task, operations, items, observations, activity, error, sending, retrying, send, retry, reload };
+  const stop = useCallback(async () => {
+    setStopping(true);
+    try {
+      await interruptTask(taskId);
+      await reload();
+      return null;
+    } catch (failure) {
+      const error = toApiError(failure);
+      // 请求到达时这一轮已经自己结束：没有可终止的调用，按最新状态对齐即可。
+      if (error.code === "task_not_running") { await reload(); return null; }
+      return error;
+    } finally { setStopping(false); }
+  }, [taskId, reload]);
+
+  return {
+    task, operations, items, observations, activity, error, sending, retrying, stopping,
+    send, retry, stop, reload,
+  };
+}
+
+/**
+ * 最近一轮结束时的上下文读数：取时间上最后一个带轮末读数的轮次。
+ *
+ * 轮首读数只服务于压缩判断，任务首轮没有先前的会话可读，所以这里只认轮末。
+ * 观测读不到时返回 null，输入框左侧的标记环是空的，悬停提示显示「未记录」。
+ */
+export function latestContextReading(observations: RunObservation[]): ContextReading | null {
+  for (let index = observations.length - 1; index >= 0; index -= 1) {
+    const reading = observations[index].context_after;
+    if (reading !== null) return reading;
+  }
+  return null;
 }

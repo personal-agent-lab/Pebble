@@ -1,7 +1,8 @@
-import { ArrowUp, Cube, FileText, Plus, X } from "@phosphor-icons/react";
+import { ArrowUp, Cube, FileText, Plus, Square, X } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
-import type { ApiError, ModelEntry, SkillSelection, SkillSummary } from "../api";
+import type { ApiError, ContextReading, ModelEntry, SkillSelection, SkillSummary } from "../api";
+import ContextMeter from "./ContextMeter";
 import ModelPicker from "./ModelPicker";
 
 const MAX_FILES = 10;
@@ -11,6 +12,11 @@ const ACCEPT = ".png,.jpg,.jpeg,.webp,.pdf,.txt,.md,.markdown,.py,.js,.jsx,.ts,.
 type Props = {
   placeholder: string;
   sending: boolean;
+  /** 有一轮正在执行：右下角按钮换成终止，这一轮里不再发送新消息。 */
+  running?: boolean;
+  /** 终止请求已发出、还在收尾：按钮短暂不可再点。 */
+  stopping?: boolean;
+  onStop?: () => Promise<ApiError | null>;
   model: string;
   models?: ModelEntry[];
   modelLocked?: boolean;
@@ -21,6 +27,8 @@ type Props = {
   skills?: SkillSummary[];
   /** 模型目录读不到最新版本时的提示；沿用旧目录，不阻止发送。 */
   catalogNotice?: { message: string; retrying: boolean; onRetry: () => void } | null;
+  /** 最近一轮结束时的上下文读数；发送按钮左侧的标记按它显示。 */
+  context?: ContextReading | null;
   onSubmit: (message: string, files: File[], selection: SkillSelection) => Promise<ApiError | null>;
   /** 未发出的消息退回时预填的文字与附件。 */
   initialMessage?: string;
@@ -32,8 +40,9 @@ const formatSize = (size: number) => size >= 1024 * 1024
   : `${Math.max(1, Math.round(size / 1024))} KB`;
 
 export default function Composer({
-  placeholder, sending, model, models = [], modelLocked = false, modelsPending = false, catalogNotice = null, onModelChange,
-  skills, onSubmit, initialMessage = "", initialFiles = [],
+  placeholder, sending, running = false, stopping = false, onStop, model, models = [], modelLocked = false,
+  modelsPending = false, catalogNotice = null, onModelChange,
+  skills, context = null, onSubmit, initialMessage = "", initialFiles = [],
 }: Props) {
   const [message, setMessage] = useState(initialMessage);
   const [files, setFiles] = useState<File[]>(initialFiles);
@@ -132,7 +141,8 @@ export default function Composer({
 
   const submit = async () => {
     const text = message.trim();
-    if ((!text && files.length === 0) || sending || !model) return;
+    // 执行中不发送新消息：右下角那个位置是终止按钮，回车与它保持一致。
+    if ((!text && files.length === 0) || sending || running || !model) return;
     const failure = await onSubmit(text, files, selection);
     if (failure !== null) {
       setError(failure.message);
@@ -145,6 +155,12 @@ export default function Composer({
     setSelection({ skills: [], excluded_skill_ids: [], auto_match: true });
     setError(null);
     if (textarea.current !== null) textarea.current.style.height = "auto";
+  };
+
+  const stop = async () => {
+    setError(null);
+    const failure = await onStop?.();
+    if (failure != null) setError(failure.message);
   };
 
   const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -255,9 +271,15 @@ export default function Composer({
         </span>
         : <ModelPicker value={model} models={models} disabled={sending}
           onChange={(value) => onModelChange?.(value)} />}
-      <button type="button" className="composer-send" onClick={() => void submit()}
-        disabled={sending || (!message.trim() && files.length === 0) || !model}
-        aria-label="发送"><ArrowUp size={16} weight="bold" /></button>
+      <ContextMeter reading={context} />
+      {running
+        ? <button type="button" className="composer-stop" onClick={() => void stop()}
+          disabled={stopping} aria-label={stopping ? "正在终止" : "终止"} title="终止这一轮">
+          <Square size={13} weight="fill" />
+        </button>
+        : <button type="button" className="composer-send" onClick={() => void submit()}
+          disabled={sending || (!message.trim() && files.length === 0) || !model}
+          aria-label="发送"><ArrowUp size={16} weight="bold" /></button>}
     </div>
   </div>;
 }

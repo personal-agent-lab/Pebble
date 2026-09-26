@@ -7,7 +7,7 @@ import Composer from "../components/Composer";
 import Notice from "../components/Notice";
 import StatusBadge from "../components/StatusBadge";
 import TimelineFeed from "../components/TimelineFeed";
-import { useTaskDetail, useSkillCatalog } from "../hooks";
+import { latestContextReading, useTaskDetail, useSkillCatalog } from "../hooks";
 import {
   forgetTask, retryable, retryTask, reviseLostTask, usePendingTask, viewTask, type PendingTask,
 } from "../pendingTasks";
@@ -149,7 +149,11 @@ function TaskDetailView({ taskId, placeholder, models }: {
   const badge = taskBadge(detail.task?.latest_run ?? null, detail.operations);
   const latest = detail.task?.latest_run ?? null;
   const waiting = !loaded && placeholder !== null;
-  const running = waiting || (latest !== null && (latest.status === "pending" || latest.status === "running"));
+  // 服务端确实有一轮在跑：右下角按钮换成终止。刚按下发送、任务还没建好时终止不了。
+  const executing = latest !== null && (latest.status === "pending" || latest.status === "running");
+  const running = waiting || executing;
+  // 输入框左侧的上下文标记：显示最近一轮结束时的窗口占用，点开看分解。
+  const context = latestContextReading(waiting ? [] : detail.observations);
   // 顶栏标题与侧栏取同一份任务列表：首个调用结束后模型会把目标改写成短标题，
   // 而详情只在事件到达时重读，改写落盘晚于结束事件，靠列表轮询对齐两处文案。
   const listed = tasks.entries?.find((entry) => entry.task.task_id === taskId)?.task ?? null;
@@ -175,7 +179,8 @@ function TaskDetailView({ taskId, placeholder, models }: {
     <div className="msg-composer"><div className="composer-wrap">
       <Composer placeholder="随心输入" sending={detail.sending} model={detail.task?.model ?? placeholder?.model ?? ""}
         models={models ?? []} modelsPending={models === null} modelLocked
-        skills={skills ?? undefined}
+        skills={skills ?? undefined} context={context}
+        running={executing} stopping={detail.stopping} onStop={detail.stop}
         onSubmit={async (text, files, selection) => {
           // 对话框里的消息让待确认的草稿失效：侧栏圆点跟着立即更新，不等下一次轮询。
           const error = await detail.send(text, null, files, selection);
