@@ -32,17 +32,19 @@ class TurnContext:
     skills: list[str] = field(default_factory=list)
 
 
+def render_material(material: Material) -> str:
+    """单份材料的渲染文本，与 render_materials 里那一段完全一致。"""
+    body = (
+        json.dumps(material.content, ensure_ascii=False, indent=2)
+        if isinstance(material.content, dict)
+        else material.content
+    )
+    return f"## {material.title}\n{body}"
+
+
 def render_materials(materials: Iterable[Material]) -> str:
     """把一轮材料按序渲染为给模型的附加上下文。"""
-    parts = []
-    for material in materials:
-        body = (
-            json.dumps(material.content, ensure_ascii=False, indent=2)
-            if isinstance(material.content, dict)
-            else material.content
-        )
-        parts.append(f"## {material.title}\n{body}")
-    return "\n\n".join(parts)
+    return "\n\n".join(render_material(material) for material in materials)
 
 
 def assemble(*, materials: Iterable[Material] = ()) -> TurnContext:
