@@ -313,7 +313,6 @@ def test_catalog_failure_records_degraded_and_skipped(settings, monkeypatch):
 def test_memory_judgment_failure_records_degraded(settings, monkeypatch):
     """记忆判断失败不影响主回答，只记降级步骤（运行时入口 _judge 的口径）。"""
     from server.gateway.runtime import GatewayRuntime
-    from server.memory import judge
 
     gateway = make_gateway(settings)
     task = SessionStore().create_task("判断降级")
@@ -322,7 +321,7 @@ def test_memory_judgment_failure_records_degraded(settings, monkeypatch):
     async def broken(**_kwargs):
         raise RuntimeError("模拟判断失败")
 
-    monkeypatch.setattr(judge, "run_judgment", broken)
+    monkeypatch.setattr("server.gateway.runtime.run_judgment", broken)
     runtime = GatewayRuntime.__new__(GatewayRuntime)
     runtime.gateway = gateway
     runtime.memory_store = gateway.memory_store

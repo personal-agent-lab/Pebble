@@ -31,6 +31,7 @@ from server.skills.repository import (
     safe_attachment_path,
     skill_dir_path,
 )
+from server.skills.review_state import reset_after_user_write
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class ChangeRequest:
     base_revision: str | None = None
     review_job_id: str | None = None
     evidence_item_ids: tuple[str, ...] = ()
+    change_id: str | None = None
 
 
 class SkillService:
@@ -148,10 +150,31 @@ class SkillService:
     def record_change(self, request: ChangeRequest) -> dict:
         """登记一次变更；user/foreground 直接应用，review 视目标技能的 managed 决定。"""
 
+        if request.change_id is not None:
+            with session(self.db_path) as conn:
+                previous = _find_change(conn, request.change_id)
+            if previous is not None:
+                if previous["status"] != ChangeStatus.PROPOSED.value:
+                    return _change_view(previous)
+                if request.actor is ChangeActor.REVIEW and self._review_may_apply(request):
+                    skill_id = previous["skill_id"]
+                    if skill_id and any(
+                        version.change_id == request.change_id
+                        for version in self.repository.versions(skill_id)
+                    ):
+                        with session(self.db_path) as conn, write(conn):
+                            conn.execute(
+                                "UPDATE skill_changes SET status='applied',applied_at=? WHERE id=?",
+                                (now(), request.change_id),
+                            )
+                        return {**_change_view(previous), "status": "applied"}
+                    return self._apply(request.change_id, expected_revision=request.base_revision)
+                return _change_view(previous)
+
         errors = self._validate(request)
         if errors:
             raise SkillValidationError(errors)
-        change_id = f"chg_{uuid.uuid4().hex[:16]}"
+        change_id = request.change_id or f"chg_{uuid.uuid4().hex[:16]}"
         row = {
             "id": change_id,
             "review_job_id": request.review_job_id,
@@ -178,7 +201,11 @@ class SkillService:
             request.actor is ChangeActor.REVIEW and self._review_may_apply(request)
         )
         if direct:
-            return self._apply(change_id, expected_revision=request.base_revision)
+            result = self._apply(change_id, expected_revision=request.base_revision)
+            if request.actor in (ChangeActor.USER, ChangeActor.FOREGROUND):
+                with session(self.db_path) as conn, write(conn):
+                    reset_after_user_write(conn)
+            return result
         return _change_view(row)
 
     def approve(self, change_id: str, expected_revision: str) -> dict:
@@ -189,7 +216,10 @@ class SkillService:
         if row["status"] != ChangeStatus.PROPOSED.value:
             current = self._current_revision(row["skill_id"])
             raise SkillConflictError(current or (row["base_revision"] or ""))
-        return self._apply(change_id, expected_revision=expected_revision)
+        result = self._apply(change_id, expected_revision=expected_revision)
+        with session(self.db_path) as conn, write(conn):
+            reset_after_user_write(conn)
+        return result
 
     def reject(self, change_id: str) -> dict:
         with session(self.db_path) as conn, write(conn):
@@ -259,6 +289,8 @@ class SkillService:
                 managed=(
                     False
                     if origin is SkillOrigin.USER
+                    else True
+                    if origin is SkillOrigin.REVIEW
                     else bool(payload.get("managed", True))
                 ),
                 state=SkillState.ACTIVE,
@@ -357,6 +389,8 @@ class SkillService:
             )
         updated = Skill(**{**_asdict(skill), "managed": value, "updated_at": now()})
         self.repository.commit_skill(updated, f"[Skills] managed {skill_id} -> {value}")
+        with session(self.db_path) as conn, write(conn):
+            reset_after_user_write(conn)
         return self.get(skill_id)
 
     def restore_version(self, skill_id: str, revision: str) -> dict:
@@ -442,6 +476,8 @@ class SkillService:
         skill = self.get(skill_id)
         updated = Skill(**{**_asdict(skill), "state": state, "updated_at": now()})
         self.repository.commit_skill(updated, f"[Skills] state {skill_id} -> {state.value}")
+        with session(self.db_path) as conn, write(conn):
+            reset_after_user_write(conn)
         return updated
 
     def _current_revision(self, skill_id: str | None) -> str | None:
@@ -462,11 +498,41 @@ class SkillService:
         action = request.action
         if not request.reason.strip():
             errors.append({"field": "reason", "message": "必须说明修改原因"})
+        if request.actor is ChangeActor.REVIEW and request.review_job_id:
+            with session(self.db_path) as conn:
+                review = conn.execute(
+                    "SELECT from_seq,through_seq,generation,status FROM skill_reviews WHERE id=?",
+                    (request.review_job_id,),
+                ).fetchone()
+                state = conn.execute(
+                    "SELECT generation FROM skill_review_state WHERE id=1"
+                ).fetchone()
+                if (
+                    review is None
+                    or review["status"] != "applying"
+                    or review["generation"] != state[0]
+                ):
+                    errors.append({"field": "review_job_id", "message": "复盘已过期或不可写"})
+                if not request.evidence_item_ids:
+                    errors.append(
+                        {"field": "evidence_item_ids", "message": "复盘变更必须有轨迹依据"}
+                    )
         for item_id in request.evidence_item_ids:
             with session(self.db_path) as conn:
-                found = conn.execute(
-                    "SELECT 1 FROM task_timeline_items WHERE item_id = ?", (item_id,)
-                ).fetchone()
+                if (
+                    request.actor is ChangeActor.REVIEW
+                    and request.review_job_id
+                    and review is not None
+                ):
+                    found = conn.execute(
+                        "SELECT 1 FROM task_timeline_items i JOIN skill_review_turns t "
+                        "ON t.run_id=i.run_id WHERE i.item_id=? AND t.seq>? AND t.seq<=?",
+                        (item_id, review["from_seq"], review["through_seq"]),
+                    ).fetchone()
+                else:
+                    found = conn.execute(
+                        "SELECT 1 FROM task_timeline_items WHERE item_id = ?", (item_id,)
+                    ).fetchone()
             if found is None:
                 errors.append(
                     {"field": "evidence_item_ids", "message": f"依据条目不存在：{item_id}"}

@@ -92,6 +92,10 @@ class AgentGateway(Protocol):
 
     async def judge_memory(self, task_id: str, instructions: str, message: str) -> list[dict]: ...
 
+    async def review_skills(
+        self, review_id: str, anchor_task_id: str, instructions: str, material: str, model: str
+    ) -> list[dict]: ...
+
 
 def checked_event(event: object) -> AgentEvent:
     """收敛 Agent 事件到契约结构；不符契约时按协议错误处理。"""

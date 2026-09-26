@@ -2,7 +2,7 @@
 
 目标约定是 `skill-spec.md` 与 `contracts/skill.md`（2026-09-22 重写）；旧实现按旧契约 `contracts/skills.md`（已删除）于 2026-09-19 验收。本文记录两者的差距与重构步骤；实现状态以 `status.md` 为准。
 
-**进度（2026-09-24）**：阶段 A、B、C 已完成（`skills` 分支；A/B 已提交，C 待提交），阶段 D 起未开始。
+各阶段的当前实现与验收状态以 `status.md` 为准；下列步骤保留交付拆分与对应代码位置。
 
 ## 1. 主要差距
 
@@ -54,11 +54,11 @@
 - **C1** ✅ 持久化工具调用：在 `mcp.invoke` 边界把每次调用与返回写入轨迹存储（tool_call_id、sequence、tool 名、参数含值、成败、返回内容）；轨迹条目并入 `task_timeline_items`（v20：加 `sequence` 列按 rowid 回填 + `tool` 条目），任务页以可折叠细行渲染（含展开完整参数与返回、复制原始记录、依据定位自动展开；2026-09-24 与用户确认，参数含值已改契约 §3）。被拒调用（unknown_tool、wrong_target）与业务失败同样记为失败；一次性会话（run_id 为空）不记；写入失败只告警不中断调用。
 - **C2** ✅ 轨迹视图查询：`server/sessions/trajectory.py` 按任务返回有序条目流（轮状态映射 running/completed/failed/cancelled、条目角色 user/assistant/notice/tool），支持 `since_item_id`/`through_item_id` 边界截取；`item_within_boundary` 供 D 阶段 evidence_item_ids 边界校验。
 
-### 阶段 D：自动沉淀（spec 阶段 3）
+### 阶段 D：自动沉淀（spec 阶段 3）——代码接入完成，真实模型验收见 `status.md`
 
-- **D1** `skill_reviews` 表 + 全局计数器（自上次技能写入起累计完成消息轮，默认 10）；done 后钩子入队、同 `through_item_id` 去重、空闲调度、启动中断恢复，全部镜像 MemoryReviewScheduler。
-- **D2** 复盘会话：一次性 SDK 会话，材料注入边界内轨迹快照 + 技能目录；工具仅 skill_list/skill_view/skill_manage；产出变更带 evidence_item_ids 与 reason。接入时确认 `skill_manage` 的轮次约束仍成立（复盘会话必须能写 `managed=true` 的技能、只能对用户技能出 proposed）。
-- **D3** 复盘提示词：处理优先级与“不沉淀什么”按 spec §7 写进载荷结构（改模型行为先改载荷，见 KB 经验）。
+- **D1** ✅ `skill_review_turns` 完成序号、全局游标与 `skill_reviews`；done 同事务登记、阈值入队、空复盘推进、失败后下一轮重试与启动恢复。
+- **D2** ✅ 一次性 SDK 会话读取窗口轨迹、目录及已加载 Skill；复盘专用的 skill_list/skill_view/skill_manage 只暂存候选，正常结束后按证据边界、当前版本与 `managed` 应用或提出建议；候选先落库以便中断恢复。
+- **D3** ✅ 复盘提示词按 spec §7 优先补旧、不保存临时错误；真实模型验收与使用边界见 `status.md`。手动复盘及网页设置留到 E 阶段。
 
 ### 阶段 E：维护（spec 阶段 4）
 

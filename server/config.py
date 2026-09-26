@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     memory_review_interval: int = Field(default=5, ge=1)
     memory_review_enabled: bool = True
 
+    # Skill 复盘独立于记忆回顾，按所有任务累计的已完成用户消息轮计数。
+    skill_review_interval: int = Field(default=10, ge=1)
+    skill_review_enabled: bool = True
+
     gmail_credentials_path: Path | None = None
     gmail_token_path: Path | None = None
 

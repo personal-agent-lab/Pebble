@@ -45,6 +45,7 @@ from server.sessions import repository as operations
 from server.sessions import runs as repo
 from server.sessions.service import SessionStore, timestamp
 from server.sessions.timeline import TimelineStore
+from server.skills.review import SkillReviewScheduler, record_completed_turn
 from server.tools.gmail.service import MailDraftStore
 from server.tools.gmail.trigger import NEW_MAIL_GOAL, new_mail_content
 
@@ -121,6 +122,7 @@ class GatewayRuntime:
         *,
         confirmations: ConfirmationService | None = None,
         reviews: MemoryReviewScheduler | None = None,
+        skill_reviews: SkillReviewScheduler | None = None,
         memory_store: MemoryStore | None = None,
         attachments: AttachmentStore | None = None,
         model_catalog: ModelCatalog | None = None,
@@ -129,6 +131,7 @@ class GatewayRuntime:
         self.gateway = gateway
         self.confirmations = confirmations
         self.reviews = reviews
+        self.skill_reviews = skill_reviews
         # 每轮记忆判断要读当前长期记忆组装输入；缺省时按数据目录自建，与网关共享进程级锁。
         self.memory_store = memory_store or MemoryStore(get_settings().data_dir)
         self.path = path
@@ -146,6 +149,7 @@ class GatewayRuntime:
         # 用户已请求终止、等待调用收尾的记录：结束事件到达时按中断落库。
         self._user_interrupts: set[str] = set()
         self._review_tasks: dict[str, asyncio.Task] = {}
+        self._skill_review_task: asyncio.Task | None = None
         self._sends: dict[str, asyncio.Task] = {}
         self._titles: set[asyncio.Task] = set()
         self._judges: set[asyncio.Task] = set()
@@ -447,6 +451,9 @@ class GatewayRuntime:
                 interrupted += interrupt_running_reviews(
                     conn, timestamp(), REVIEW_INTERRUPTED_REASON
                 )
+        if self.skill_reviews is not None:
+            self.skill_reviews.recover()
+            self.skill_reviews.enqueue_if_due()
         self.kick()
         return interrupted
 
@@ -466,6 +473,33 @@ class GatewayRuntime:
             self._active_runs[task_id] = row["run_id"]
             self._active[task_id] = asyncio.create_task(self._execute(task_id, row["run_id"]))
         self._kick_reviews()
+        self._kick_skill_reviews()
+
+    def _kick_skill_reviews(self) -> None:
+        if self._closed or self.gateway is None or self.skill_reviews is None:
+            return
+        if self._skill_review_task is not None:
+            return
+        rows = self.skill_reviews.pending()
+        if rows:
+            self._skill_review_task = asyncio.create_task(self._execute_skill_review(rows[0]["id"]))
+
+    async def _execute_skill_review(self, review_id: str) -> None:
+        try:
+            assert self.skill_reviews is not None
+            row = self.skill_reviews.get(review_id)
+            if row["status"] == "pending" and self.skill_reviews.claim(review_id) is None:
+                return
+            try:
+                await self.skill_reviews.run(review_id, self.gateway)
+            except Exception as error:
+                logging.getLogger(__name__).exception("Skill 后台复盘失败")
+                self.skill_reviews.fail(review_id, str(error))
+        finally:
+            self._skill_review_task = None
+            if self.skill_reviews is not None:
+                self.skill_reviews.enqueue_if_due()
+            self.kick()
 
     def _kick_reviews(self) -> None:
         """记忆回顾域的调度分支：任务空闲且没有进行中的回顾时，启动待处理回顾。
@@ -511,10 +545,17 @@ class GatewayRuntime:
             *self._titles,
             *self._judges,
             *self._review_tasks.values(),
+            *([self._skill_review_task] if self._skill_review_task is not None else []),
         ]:
             task.cancel()
         await asyncio.gather(
-            *[*self._active.values(), *self._titles, *self._judges, *self._review_tasks.values()],
+            *[
+                *self._active.values(),
+                *self._titles,
+                *self._judges,
+                *self._review_tasks.values(),
+                *([self._skill_review_task] if self._skill_review_task is not None else []),
+            ],
             return_exceptions=True,
         )
 
@@ -712,6 +753,8 @@ class GatewayRuntime:
                 self._finish(row["run_id"], "done", None)
                 self._schedule_retitle(row)
                 self._schedule_memory_review(row)
+                if self.skill_reviews is not None and row["kind"] == repo.KIND_MESSAGE:
+                    self.skill_reviews.enqueue_if_due()
             else:
                 message = self._with_last_step(row["run_id"], event["message"])
                 published["message"] = message
@@ -802,6 +845,12 @@ class GatewayRuntime:
     def _finish(self, run_id: str, status: str, error: str | None) -> None:
         with session(self.path) as conn, write(conn):
             repo.finish(conn, run_id, status, error, timestamp())
+            if status == "done" and self.skill_reviews is not None:
+                row = conn.execute(
+                    "SELECT task_id,kind FROM agent_runs WHERE run_id=?", (run_id,)
+                ).fetchone()
+                if row is not None and row["kind"] == repo.KIND_MESSAGE:
+                    record_completed_turn(conn, run_id, row["task_id"])
 
     def _with_last_step(self, run_id: str, message: str) -> str:
         """失败说明附上这一轮最后在做的步骤，看得出停在哪一步；步骤随之清除。"""

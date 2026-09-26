@@ -58,18 +58,18 @@
 | 字段 | 类型 | 语义 |
 | --- | --- | --- |
 | `id` | str | |
-| `trigger` | `interval` / `manual` | 轮数阈值触发 / 用户在管理页手动发起 |
-| `through_item_id` | str | 输入边界：只复盘到此条目 |
-| `since_item_id` | str \| null | 上边界：上次复盘或上次写入的边界 |
-| `status` | `pending/running/completed/failed` | |
+| `from_seq`、`through_seq`、`target_seq` | int | 跨任务完成轮次序号：排他下界、当前处理上界、初始目标上界；材料过大时按完整轮拆分 |
+| `generation` | int | 用户或前台写入 Skill 后递增，过期复盘不能继续写入 |
+| `status` | `pending/running/applying/completed/failed` | 模型运行、候选应用与终态分开 |
 | `result_summary` | str \| null | 复盘结论（含“无值得保存的经验”） |
 | `error` | str \| null | |
 | `created_at`、`finished_at` | datetime | |
 
-- 计数器存 SQLite：自上次技能写入以来累计完成的用户消息轮数，达到阈值（默认 10，可配置、可关闭）即入队，写入后清零。阈值内多次完成不重复入队（同一 `through_item_id` 去重）。
+- SQLite 以 `skill_review_turns.seq` 记录跨任务完成顺序；成功结束的用户消息轮与完成事件同事务写入。首次升级不回填旧轮次。自上次技能写入或成功复盘以来新增 10 轮即入队，同一时刻最多一条待处理或运行中的复盘。空复盘推进游标；用户或前台写 Skill 时从当前完成序号重新计数。
 - 输入由程序装配为材料注入：边界内已完成轮次的轨迹快照 + 当前 `active` 技能目录。复盘不接续对话、不进任务时间线、不等用户消息；工具只有 `skill_list`、`skill_view`、`skill_manage`（受第 6 节限制）。
-- 失败只记 `error`，计数不清零，下次阈值再触发；重启时 `running` 记为 `failed`。
+- 模型或服务失败保留原窗口，在下一条用户消息轮完成后重试，不立即循环；重启时尚未形成候选的 `running` 记为 `failed`，已有候选的 `applying` 从未处理项恢复。候选带稳定变更 ID，避免中断后重复提交。
 - 与记忆的后台回顾独立：各自计数、各自会话、互不触发。
+- 本阶段只开放自动触发；`manual` 入口与网页设置留到维护阶段，服务端配置 `PEBBLE_SKILL_REVIEW_INTERVAL`（默认 10）及 `PEBBLE_SKILL_REVIEW_ENABLED` 可用。
 
 ## 5. SkillChange：一次变更
 
@@ -84,7 +84,7 @@
 | `payload` | dict | create：`skill_id`、frontmatter、正文；patch：`old_string`/`new_string` 或整份正文；write_file：`relative_path`、`content`；remove_file：`relative_path` |
 | `base_revision` | str \| null | 基于的当前版本；create 为空 |
 | `reason` | str | 为什么改，给审批页看 |
-| `evidence_item_ids` | list[str] | 经验依据的时间线条目，必须真实存在且属于边界内轮次，程序校验存在性、不校验语义 |
+| `evidence_item_ids` | list[str] | 经验依据的时间线条目，复盘变更至少一条；程序校验属于本次完成轮窗口，不校验语义 |
 | `actor` | `user/foreground/review` | 管理页 / 用户当轮要求的前台 Agent / 后台复盘 |
 | `status` | `proposed/applied/rejected/conflict` | |
 | `created_at`、`applied_at` | datetime | |
@@ -102,8 +102,9 @@
 | --- | --- | --- | --- |
 | `skill_list` | 所有轮 | 可选 `state` 过滤（默认 `active`） | 目录：`skill_id`、`name`、`description`、`revision` |
 | `skill_view` | 所有轮 | `skill_id`、可选 `file_path`（附件相对路径） | 正文或附件内容、当前 `revision`、附件清单（`relative_path`、`content_hash`）；并记一次加载 |
-| `skill_manage` | 仅用户发起的对话轮 | `action` 及对应 payload（同 §5）、`expected_revision` | 应用结果或（对 `managed=false` 技能的后台调用）`proposed` 的变更 id |
+| `skill_manage` | 用户发起的对话轮；后台复盘另用同名的受限候选工具 | `action` 及对应 payload（同 §5）、`expected_revision` | 前台直接应用；后台先暂存候选，模型正常结束后由程序按 `managed` 应用或提出建议 |
 
+- 复盘会话仅开放三个 Skill 工具，不开放任何外部写工具；专用 `skill_manage` 由程序固定 `actor=review` 与 `review_job_id`，不能取得前台用户轮的权限。
 - 目录常驻装配进每轮材料：最多 50 条、每条 `name` + `description`（超 160 字符截断），超出按最近使用时间取前 50 并注明有省略。正文不进目录。
 - 手动选择随消息提交（multipart `selection` 字段，JSON）：`{"skills": [{"id": …}], "excluded_skill_ids": […], "auto_match": true}`。手动项最多 10 个、装配正文合计 ≤40000 字符；发送时绑定当前 `revision` 并记入加载记录（`source=manual`）；`skill_view` 读取记 `source=auto`。排除项与关闭自动匹配由 `skill_list`/`skill_view` 强制执行。
 - `skill_view` 只返回 `active` 技能；`archived`、`stale`、不存在一律 `unknown_skill`。
@@ -119,9 +120,9 @@ append_timeline_item(task_id, turn_id, item) -> item_id
 finish_turn(turn_id, status)
 
 # 复盘调度
-should_review() -> bool                      # 计数达到阈值且未关闭
-enqueue_review(through_item_id, trigger) -> ReviewJob   # 同边界去重
-run_review(review_job_id)                    # 装配材料，独立会话执行
+record_completed_turn(conn, run_id, task_id)  # 与完成状态同事务登记
+SkillReviewScheduler.enqueue_if_due() -> ReviewJob | None
+SkillReviewScheduler.run(review_job_id, gateway)  # 独立会话审阅与应用
 
 # 变更管理
 record_change(change) -> SkillChange         # 按 §5 规则决定直接应用或 proposed
@@ -161,7 +162,7 @@ archive_skill(skill_id) / restore_skill(skill_id)
 | `POST /api/skill-changes/{id}/approve` | `expected_revision` | 应用 proposed 变更 |
 | `POST /api/skill-changes/{id}/reject` | — | 驳回 |
 | `GET /api/tasks/{task_id}/skill-usage` | — | 本任务加载记录：`skill_id`、`revision`、`source`、轮次 |
-| `GET/PUT /api/skills/settings` | `review_interval`、`review_enabled`、`stale_days` | 复盘与陈旧配置 |
+| `GET/PUT /api/skills/settings`（维护阶段） | `review_interval`、`review_enabled`、`stale_days` | 复盘与陈旧配置 |
 
 管理页 `/skills`：目录浏览、按 `SKILL.md` 与 `references/`、`templates/` 的层次浏览，正文与附件都可直接编辑、附件可增删、保存时一次提交（同属一个 `revision`）、创建、启停归档恢复、`managed` 切换、历史版本与恢复、待审变更（差异对比、依据条目跳转原对话）、使用统计。发起与续聊的输入框输入 `/` 唤起技能列表（按名称与标识过滤、键盘可选），选中项以胶囊展示并随消息提交 `selection`；界面只设置手动项，`excluded_skill_ids` 与 `auto_match` 恒为默认值。字段错误 422；版本冲突 409 附 `current_revision`；不存在 404。
 

@@ -23,7 +23,7 @@ def seed_turn(conn: sqlite3.Connection, task_id: str = "t1", run_id: str = "r1")
     )
 
 
-def test_v21_migrates_to_v22(settings: Settings) -> None:
+def test_v21_migrates_to_current_schema(settings: Settings) -> None:
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
     with session() as conn, write(conn):
         conn.execute("CREATE TABLE schema_meta (version INTEGER NOT NULL)")
@@ -32,11 +32,11 @@ def test_v21_migrates_to_v22(settings: Settings) -> None:
             for statement in db.SCHEMA_MIGRATIONS[version]:
                 conn.execute(statement)
         seed_turn(conn)
-    assert init_db() == SCHEMA_VERSION == 22
+    assert init_db() == SCHEMA_VERSION
     with session() as conn:
-        assert schema_version(conn) == 22
+        assert schema_version(conn) == SCHEMA_VERSION
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
-        assert {"run_observations", "observation_steps"} <= tables
+        assert {"run_observations", "observation_steps", "skill_reviews"} <= tables
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 

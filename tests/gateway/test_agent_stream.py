@@ -32,6 +32,7 @@ from server.errors import DependencyUnavailableError
 from server.gateway.agent_contract import Turn, TurnAttachment
 from server.gateway.runtime import execution_result_content
 from server.sessions.service import SessionStore
+from server.skills.service import SkillService
 from server.tools.gmail.service import MailDraftStore
 from server.tools.gmail.trigger import new_mail_content
 from server.tools.personal_kb.service import KbStore
@@ -682,6 +683,55 @@ def run_judge(gateway: QoderGateway, monkeypatch, *calls: ToolCall, task_id="tas
     script = [*calls, result()]
     install_sdk(monkeypatch, gateway, script)
     return asyncio.run(gateway.judge_memory(task_id, "判断指令", "判断材料"))
+
+
+def test_skill_review_uses_only_staged_skill_tools(settings, monkeypatch):
+    init_db()
+    skills = SkillService(settings.data_dir, settings.db_path)
+    gateway = QoderGateway(
+        ToolDeps(
+            drafts=MailDraftStore(),
+            tasks=SessionStore(),
+            gmail=MockGmailClient(),
+            skills=skills,
+        ),
+        ToolServer(),
+        settings=configured(settings),
+    )
+    task_id = gateway.tasks_store.create_task("复盘")["task_id"]
+    captured = install_sdk(
+        monkeypatch,
+        gateway,
+        [
+            ToolCall(
+                "skill_manage",
+                {
+                    "action": "create",
+                    "payload": {
+                        "skill_id": "learned",
+                        "name": "方法",
+                        "description": "可复用方法",
+                        "body": "步骤",
+                    },
+                    "reason": "用户纠正后成功",
+                    "evidence_item_ids": ["item-1"],
+                },
+            ),
+            ToolCall("gmail_send_message", {"to": ["someone@example.com"]}),
+            result(),
+        ],
+    )
+    candidates = asyncio.run(
+        gateway.review_skills("review-1", task_id, "复盘指令", "轨迹材料", "auto")
+    )
+    assert {name.rsplit("__", 1)[-1] for name in captured["options"].allowed_tools} == {
+        "skill_list",
+        "skill_view",
+        "skill_manage",
+    }
+    assert len(candidates) == 1
+    assert skills.catalog() == []  # 会话只暂存候选；调度器在正常结束后应用。
+    assert captured["results"][1].isError
 
 
 ADD_CHINESE = {"action": "append", "target": "user", "text": "默认使用中文"}

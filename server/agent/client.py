@@ -19,6 +19,7 @@ import logging
 import os
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +56,7 @@ from server.sessions.observations import TurnObserver
 from server.sessions.tool_trace import begin_tool_call, finish_tool_call
 from server.tools.memory.tools import judge_registry, review_registry
 from server.tools.personal_kb.catalog import CATALOG_TITLE
-from server.tools.registry import ToolDefinition, activity
+from server.tools.registry import SideEffect, ToolDefinition, ToolRegistry, activity
 
 logger = logging.getLogger(__name__)
 
@@ -312,6 +313,99 @@ class QoderGateway:
         判断对用户可见的提示由调用方按这些真实记录生成，不使用模型的文本回复。
         """
         return await self._memory_session(self.judge_tools, task_id, instructions, message)
+
+    async def review_skills(
+        self, review_id: str, anchor_task_id: str, instructions: str, material: str, model: str
+    ) -> list[dict]:
+        """一次性 Skill 复盘：只收集候选，模型正常结束后由调度器落库并应用。"""
+        from server.skills.tools import skill_list, skill_view
+
+        if self.skills_store is None:
+            raise DependencyUnavailableError("Skill 服务未接入")
+        candidates: list[dict] = []
+        read_revisions: dict[str, str] = {}
+
+        def view(skill_id: str, file_path: str | None = None) -> dict:
+            result = skill_view.func(skill_id, file_path, skills=self.skills_store)
+            read_revisions[skill_id] = result["revision"]
+            return result
+
+        def propose(
+            action: str,
+            payload: dict,
+            reason: str,
+            evidence_item_ids: list[str],
+            expected_revision: str | None = None,
+        ) -> dict:
+            """提出 Skill 创建或修改候选；必须给出轨迹 item_id 与理由，修改前先读取当前 Skill。"""
+            from server.skills.models import ChangeAction
+
+            parsed = ChangeAction(action)
+            if not reason.strip() or not evidence_item_ids:
+                raise ValueError("复盘变更必须说明原因并给出轨迹依据")
+            skill_id = payload.get("skill_id")
+            if parsed is not ChangeAction.CREATE and (
+                not skill_id or read_revisions.get(skill_id) != expected_revision
+            ):
+                raise ValueError("修改前必须在本次复盘中重新读取目标 Skill 的当前版本")
+            candidates.append(
+                {
+                    "action": action,
+                    "payload": payload,
+                    "reason": reason,
+                    "evidence_item_ids": evidence_item_ids,
+                    "expected_revision": expected_revision,
+                }
+            )
+            return {"status": "staged", "ordinal": len(candidates) - 1}
+
+        registry = ToolRegistry()
+        registry.register(
+            skill_list.func,
+            name="skill_list",
+            description=skill_list.description,
+            side_effect=SideEffect.READONLY,
+        )
+        registry.register(
+            view,
+            name="skill_view",
+            description=skill_view.description,
+            side_effect=SideEffect.READONLY,
+        )
+        registry.register(
+            propose,
+            name="skill_manage",
+            description=(
+                "仅提出后台复盘候选，不立即写入。action 为 create/patch/write_file/remove_file。"
+                "create 的 payload 含 skill_id、name、description、body；"
+                "patch 含 skill_id 与 body 或 old_string/new_string；附件操作含 skill_id、"
+                "relative_path 及可选 content。修改现有技能先用 skill_view 读取，"
+                "将返回的 revision 传给 expected_revision。reason 说明可复用的做法，"
+                "evidence_item_ids 填轨迹里对应的 item_id。"
+            ),
+            side_effect=SideEffect.LOCAL_WRITE,
+        )
+        tools = [
+            replace(definition, func=partial(definition.func, skills=self.skills_store))
+            if definition.name == "skill_list"
+            else definition
+            for definition in registry.list_tools()
+        ]
+        queued: asyncio.Queue = asyncio.Queue()
+        async with self.tool_server.serve(tools, task_id=anchor_task_id, queued=queued) as path:
+            options = self._oneshot_options(
+                instructions, path, tools, task_id=anchor_task_id, model=model
+            )
+            async with QoderSDKClient(options) as client:
+                await client.query(material)
+                async for reply in client.receive_response():
+                    if isinstance(reply, ResultMessage):
+                        if reply.is_error:
+                            raise AgentProtocolError(
+                                (reply.result or "").strip() or MODEL_ERROR_MESSAGE
+                            )
+                        return candidates
+        raise AgentProtocolError(NO_TERMINAL_MESSAGE)
 
     async def _memory_session(
         self, definitions: list[ToolDefinition], task_id: str, instructions: str, message: str

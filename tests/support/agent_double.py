@@ -31,10 +31,12 @@ class FakeAgentGateway:
         self.image_text: str | Exception = "替身图片说明"
         self.image_calls: list[dict[str, Any]] = []
         self.review_calls: list[dict[str, Any]] = []
+        self.skill_review_calls: list[dict[str, Any]] = []
         self.judge_calls: list[dict[str, Any]] = []
         self.interrupt_calls: list[str] = []
         # 可替换的一次性记忆回顾实现；缺省记录调用并返回空工具记录（无改动）。
         self.review_handler = None
+        self.skill_review_handler = None
         # 可替换的每轮记忆判断实现；缺省记录调用并返回空工具记录（无变化）。
         self.judge_handler = None
         self._handlers: dict[str, Handler] = {}
@@ -86,6 +88,23 @@ class FakeAgentGateway:
             )
         if self.judge_handler is not None:
             return await self.judge_handler(task_id, instructions, message)
+        return []
+
+    async def review_skills(
+        self, review_id: str, anchor_task_id: str, instructions: str, material: str, model: str
+    ) -> list[dict]:
+        with self._lock:
+            self.skill_review_calls.append(
+                {
+                    "review_id": review_id,
+                    "anchor_task_id": anchor_task_id,
+                    "instructions": instructions,
+                    "material": material,
+                    "model": model,
+                }
+            )
+        if self.skill_review_handler is not None:
+            return await self.skill_review_handler(review_id, material)
         return []
 
     async def stream_turn(self, turn: Turn) -> AsyncIterator[AgentEvent]:

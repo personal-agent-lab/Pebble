@@ -152,6 +152,7 @@ def delete_task(conn: sqlite3.Connection, task_id: str) -> None:
         (task_id,),
     )
     conn.execute("DELETE FROM skill_loads WHERE task_id = ?", (task_id,))
+    conn.execute("DELETE FROM skill_review_turns WHERE task_id = ?", (task_id,))
     conn.execute("DELETE FROM agent_runs WHERE task_id = ?", (task_id,))
     conn.execute("DELETE FROM mail_task_links WHERE task_id = ?", (task_id,))
     conn.execute("DELETE FROM task_operations WHERE task_id = ?", (task_id,))

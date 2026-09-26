@@ -27,6 +27,7 @@ from server.memory.review import MemoryReviewScheduler
 from server.memory.service import MemoryStore
 from server.sessions.history import HistoryStore
 from server.sessions.service import SessionStore
+from server.skills.review import SkillReviewScheduler
 from server.skills.service import SkillService
 from server.tools.calendar.service import CalendarEventStore
 from server.tools.gmail.service import MailDraftStore
@@ -82,6 +83,7 @@ def create_app(
         gateway,
         confirmations=confirmations,
         reviews=reviews,
+        skill_reviews=SkillReviewScheduler(skills, path=skills.db_path) if skills else None,
         memory_store=memory_store,
         attachments=attachments,
         model_catalog=model_catalog,

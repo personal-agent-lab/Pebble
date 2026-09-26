@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import default_model, get_settings
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -400,6 +400,29 @@ SCHEMA_V22 = (
     "WHERE kind='tool'",
 )
 
+# Skill 后台复盘：完成事件按提交顺序编号，避免并发任务的创建顺序冒充完成顺序。
+# 复盘候选先落库，再按序应用；中断后可从未处理的候选继续。
+SCHEMA_V23 = (
+    "CREATE TABLE skill_review_turns (seq INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "run_id TEXT NOT NULL UNIQUE, task_id TEXT NOT NULL, created_at TEXT NOT NULL)",
+    "CREATE TABLE skill_review_state (id INTEGER PRIMARY KEY CHECK(id=1), "
+    "cursor_seq INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 0)",
+    "INSERT INTO skill_review_state (id) VALUES (1)",
+    "CREATE TABLE skill_reviews (id TEXT PRIMARY KEY, from_seq INTEGER NOT NULL, "
+    "through_seq INTEGER NOT NULL, target_seq INTEGER NOT NULL, generation INTEGER NOT NULL, "
+    "anchor_task_id TEXT NOT NULL, status TEXT NOT NULL "
+    "CHECK(status IN ('pending','running','applying','completed','failed')), "
+    "result_summary TEXT, error TEXT, retry_after_seq INTEGER, "
+    "created_at TEXT NOT NULL, finished_at TEXT)",
+    "CREATE UNIQUE INDEX skill_reviews_open ON skill_reviews((1)) "
+    "WHERE status IN ('pending','running','applying')",
+    "CREATE TABLE skill_review_candidates (review_id TEXT NOT NULL REFERENCES skill_reviews(id), "
+    "ordinal INTEGER NOT NULL, action TEXT NOT NULL, payload TEXT NOT NULL, "
+    "skill_id TEXT, base_revision TEXT, reason TEXT NOT NULL, evidence_item_ids TEXT NOT NULL, "
+    "status TEXT NOT NULL CHECK(status IN ('pending','applied','proposed','conflict','failed')), "
+    "change_id TEXT, error TEXT, PRIMARY KEY(review_id, ordinal))",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -423,6 +446,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     20: SCHEMA_V20,
     21: SCHEMA_V21,
     22: SCHEMA_V22,
+    23: SCHEMA_V23,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000
