@@ -13,7 +13,7 @@
 
 轮次的触发类别、模型、状态与起止时间从 agent_runs 和 tasks 读取；邮件与日程结果从 operations、approval_executions 读取，不重复保存。item_id 只引用时间线工具条目，允许为空（例如权限拒绝或轨迹写入失败）。run_id 外键级联删除；观测层不修改业务状态。
 
-materials 只列每类实际装配材料的名称与字符数，以及明确跳过的类别和原因；不存正文或内容哈希。sdk_result 只存 SDK ResultMessage 给出的 duration_ms、duration_api_ms、num_turns、结束原因，以及本轮各次 AssistantMessage.usage 的请求级用量；不存会话累计值。context_before/after 只存 get_context_usage() 给出的已用比例与压缩阈值。字段缺失保留空值，不补零。
+materials 只列每类实际装配材料的名称与字符数，以及明确跳过的类别和原因；不存正文或内容哈希。sdk_result 只存 SDK ResultMessage 给出的 duration_ms、duration_api_ms、num_turns、结束原因、本轮各次 AssistantMessage.usage 的请求级用量、ResultMessage.usage 的末次请求读数（result_usage），以及轮末会话累计快照 session_totals（model_usage 汇总的 token 与 total_credits），读取面用快照差值推算本轮消耗。context_before/after 只存 get_context_usage() 给出的已用比例与压缩阈值。字段缺失保留空值，不补零。
 
 observation_steps.detail 按 kind 构造，禁止整包序列化：工具只存工具名、来源（mcp/builtin）和返回字符数；压缩只存前后占用；降级只存类别、原因码与必要计数。正文、工具参数与返回仍只在时间线保存一份。
 
@@ -29,7 +29,7 @@ observation_steps.detail 按 kind 构造，禁止整包序列化：工具只存�
 
 ## 3. 用量口径
 
-单次模型请求的 token 与 Credits 来自对应 AssistantMessage.usage；用 message_id 或 usage.request_id 去重。本轮合计只对实际收到且能唯一识别的请求求和，有请求缺字段或无法排除重复时，对应合计显示“未记录”。ResultMessage.total_credits 与 model_usage 是会话累计值，不用于本轮用量；ResultMessage.usage 也不用于读取请求级 Credits。SDK 报告的 duration_api_ms 直接标为“API 时长”，不与工具耗时相减。口径依据：[Qoder Cost and usage](https://docs.qoder.com/cli/sdk/cost-usage)。
+单次模型请求的 token 与 Credits 来自对应 AssistantMessage.usage；用 message_id 或 usage.request_id 去重。本轮合计优先由相邻轮会话累计快照（session_totals）的差值推算：任务首轮的 SDK 会话由该轮新建，累计快照即本轮消耗；其后任一轮缺快照无法划界、或差值回落（会话被重置）时，该轮退回请求级求和，有请求缺字段或无法排除重复时显示“未记录”。推算合计在界面上标注“按相邻轮累计差值推算”，不冒充逐次求和；result_usage 是末次请求的读数，单独一行显示，不并入逐次明细；会话累计值只在快照里出现，不作为单轮消耗展示。SDK 报告的 duration_api_ms 直接标为“API 时长”，不与工具耗时相减。口径依据：[Qoder Cost and usage](https://docs.qoder.com/cli/sdk/cost-usage)。
 
 ## 4. 读取与界面
 

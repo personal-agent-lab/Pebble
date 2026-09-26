@@ -382,6 +382,43 @@ async def scenario_tools(instance: Instance, runtime: GatewayRuntime) -> dict:
         "usage_entries": usage,
         "usage_totals": usage_totals(usage),
     }
+    # CN 运行时在 AssistantMessage 层报 0；末次请求读数与会话累计快照来自
+    # ResultMessage。request_id 是承重字段必须真实；累计层可能整体为 0
+    # （实测 CN CLI 1.1.38：model_usage 全 0、total_credits 为 0），全零快照
+    # 不是读数，读取面必须退回「未记录」，不允许推算出 0 消耗。
+    result_usage = sdk_result.get("result_usage")
+    check(isinstance(result_usage, dict), "ResultMessage 的末次请求读数缺失", sdk_result)
+    if isinstance(result_usage, dict):
+        check(
+            isinstance(result_usage.get("request_id"), str) and result_usage["request_id"],
+            "末次请求读数缺真实 request_id",
+            result_usage,
+        )
+    session_totals = sdk_result.get("session_totals")
+    check(isinstance(session_totals, dict), "轮末会话累计快照缺失", sdk_result)
+    totals_source = observed.get("usage_totals_source")
+    derived = observed.get("usage_totals") or {}
+    snapshot_positive = isinstance(session_totals, dict) and any(
+        isinstance(session_totals.get(key), (int, float)) and session_totals[key] > 0
+        for key in ("input_tokens", "output_tokens", "credits")
+    )
+    if snapshot_positive:
+        check(totals_source == "delta", "有真实快照却没有按差值推算", derived)
+        check(
+            isinstance(derived.get("input_tokens"), int) and derived["input_tokens"] > 0,
+            "推算出的本轮输入 token 不为正",
+            derived,
+        )
+    else:
+        check(totals_source != "delta", "全零快照被拿来推算本轮消耗", derived)
+        check(
+            all(
+                derived.get(key) is None
+                for key in ("input_tokens", "output_tokens", "credits")
+            ),
+            "没有真实读数时合计不是未记录",
+            derived,
+        )
     denied_report = denial_report(by_call, tools)
     return {
         "task_id": task_id,
@@ -405,8 +442,12 @@ async def scenario_tools(instance: Instance, runtime: GatewayRuntime) -> dict:
             "duration_ms": sdk_result["duration_ms"],
             "duration_api_ms": sdk_result["duration_api_ms"],
             "num_turns": sdk_result["num_turns"],
+            "result_usage": sdk_result.get("result_usage"),
+            "session_totals": sdk_result.get("session_totals"),
         },
         "usage": detected,
+        "usage_totals_source": totals_source,
+        "derived_totals": derived,
         "context_before": observed["context_before"],
         "context_after": observed["context_after"],
         "denial": denied_report,

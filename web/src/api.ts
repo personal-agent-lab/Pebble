@@ -155,8 +155,24 @@ export type RunObservation = {
     is_error: boolean;
     stop_reason?: string | null;
     usage: UsageEntry[];
+    /** ResultMessage 的末次请求读数；CN 运行时只在结果层有真实标识与 token。 */
+    result_usage?: {
+      request_id: string | null;
+      input_tokens: number | null;
+      output_tokens: number | null;
+      credits: number | null;
+      context_usage_ratio: number | null;
+    } | null;
+    /** 轮末会话累计快照；读取面按相邻轮差值推算本轮消耗。 */
+    session_totals?: {
+      input_tokens: number | null;
+      output_tokens: number | null;
+      credits: number | null;
+    } | null;
   } | null;
   usage_totals: { input_tokens: number | null; output_tokens: number | null; credits: number | null };
+  /** delta＝相邻轮会话累计快照的差值推算；requests＝请求级条目求和；缺省＝无合计。 */
+  usage_totals_source?: "delta" | "requests" | null;
   context_before: ContextReading | null;
   context_after: ContextReading | null;
   steps: ObservationStep[];

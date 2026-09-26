@@ -16,7 +16,7 @@ def client_for() -> TestClient:
     return TestClient(create_app(gateway=None))
 
 
-def seed_observed_run(task_id: str, run_id: str) -> None:
+def seed_observed_run(task_id: str, run_id: str, *, sdk_result: str | None = None) -> None:
     """直接落一条已结束的轮次与观测数据，读取接口不该关心写入来源。"""
     with session() as conn, write(conn):
         conn.execute(
@@ -25,10 +25,12 @@ def seed_observed_run(task_id: str, run_id: str) -> None:
             (run_id, task_id),
         )
         conn.execute(
-            "INSERT INTO run_observations (run_id, materials, updated_at) VALUES (?, ?, 't2')",
+            "INSERT INTO run_observations (run_id, materials, sdk_result, updated_at) "
+            "VALUES (?, ?, ?, 't2')",
             (
                 run_id,
                 json.dumps({"assembled": [{"title": "关于你", "chars": 10}], "skipped": []}),
+                sdk_result,
             ),
         )
         conn.execute(
@@ -56,6 +58,37 @@ def test_observations_endpoint_returns_runs_and_steps(settings: Any) -> None:
         step = observed["steps"][0]
         assert step["code"] == "gmail_search" and step["status"] == "ok"
         assert step["item_id"] == "i1" and step["detail"]["chars"] == 42
+
+
+def test_observations_endpoint_derives_and_labels_turn_totals(settings: Any) -> None:
+    with client_for() as client:
+        task_id = SessionStore().create_task("推算合计")["task_id"]
+        seed_observed_run(
+            task_id,
+            "run-1",
+            sdk_result=json.dumps(
+                {
+                    "duration_ms": 5,
+                    "usage": [{"message_id": "m1", "input_tokens": 0, "output_tokens": 0}],
+                    "session_totals": {
+                        "input_tokens": 100,
+                        "output_tokens": 20,
+                        "credits": 1.0,
+                    },
+                }
+            ),
+        )
+
+        runs = client.get(f"/api/tasks/{task_id}/observations").json()["runs"]
+
+        # 合计来自会话累计快照的差值，来源标注为 delta；逐次条目照原样返回。
+        assert runs[0]["usage_totals"] == {
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "credits": 1.0,
+        }
+        assert runs[0]["usage_totals_source"] == "delta"
+        assert runs[0]["sdk_result"]["session_totals"]["credits"] == 1.0
 
 
 def test_observations_endpoint_returns_unobserved_run_with_nulls(settings: Any) -> None:

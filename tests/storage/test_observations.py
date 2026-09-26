@@ -1,5 +1,6 @@
 """运行观测存储：迁移、级联删除、字段级摘要、步骤幂等与读取口径。"""
 
+import json
 import sqlite3
 
 from server import db
@@ -171,6 +172,79 @@ def test_turn_observer_collect_usage_dedupes(settings: Settings) -> None:
     assert [entry["request_id"] for entry in observer._usage] == ["req-1", "req-2"]
 
 
+def test_record_result_stores_result_usage_and_session_totals(settings: Settings) -> None:
+    init_db()
+    with session() as conn, write(conn):
+        seed_turn(conn)
+    observer = observations.TurnObserver("r1")
+
+    class Result:
+        duration_ms = 1200
+        duration_api_ms = 800
+        num_turns = 3
+        is_error = False
+        stop_reason = "end_turn"
+        usage = {
+            "request_id": "req-final",
+            "input_tokens": 120,
+            "output_tokens": 30,
+            "credits": 0.4,
+            "context_usage_ratio": 0.106,
+        }
+        total_credits = 1.5
+        model_usage = {
+            "qwen-max": {"inputTokens": 100, "outputTokens": 20},
+            "qwen-plus": {"inputTokens": 7, "outputTokens": 3},
+        }
+
+    observer.record_result(Result())
+    with session() as conn:
+        stored = conn.execute(
+            "SELECT sdk_result FROM run_observations WHERE run_id = 'r1'"
+        ).fetchone()["sdk_result"]
+    sdk_result = json.loads(stored)
+    assert sdk_result["result_usage"] == {
+        "request_id": "req-final",
+        "input_tokens": 120,
+        "output_tokens": 30,
+        "credits": 0.4,
+        "context_usage_ratio": 0.106,
+    }
+    # 会话累计快照按模型汇总 token，Credits 取 total_credits。
+    assert sdk_result["session_totals"] == {
+        "input_tokens": 107,
+        "output_tokens": 23,
+        "credits": 1.5,
+    }
+
+
+def test_record_result_leaves_snapshot_nulls_when_sdk_omits(settings: Settings) -> None:
+    init_db()
+    with session() as conn, write(conn):
+        seed_turn(conn)
+    observer = observations.TurnObserver("r1")
+
+    class Result:
+        is_error = False
+        usage = None
+        model_usage = None
+        total_credits = None
+
+    observer.record_result(Result())
+    with session() as conn:
+        stored = json.loads(
+            conn.execute(
+                "SELECT sdk_result FROM run_observations WHERE run_id = 'r1'"
+            ).fetchone()["sdk_result"]
+        )
+    assert stored["result_usage"] is None
+    assert stored["session_totals"] == {
+        "input_tokens": None,
+        "output_tokens": None,
+        "credits": None,
+    }
+
+
 def test_usage_totals_requires_identifiable_complete_entries() -> None:
     empty = {"input_tokens": None, "output_tokens": None, "credits": None}
     assert observations.usage_totals(None) == empty
@@ -228,3 +302,124 @@ def test_read_observations_returns_nulls_and_steps(settings: Settings) -> None:
         "output_tokens": None,
         "credits": None,
     }
+
+
+def test_read_observations_derives_turn_totals_from_snapshots(settings: Settings) -> None:
+    init_db()
+    with session() as conn, write(conn):
+        seed_turn(conn)
+        for run_id in ("r2", "r3", "r4"):
+            conn.execute(
+                "INSERT INTO agent_runs (run_id, task_id, kind, input, status, created_at, "
+                "finished_at) VALUES (?, 't1', 'message', '{}', 'done', 'now', 'later')",
+                (run_id,),
+            )
+        # 首轮累计快照即本轮消耗；CN 运行时的请求级条目全 0，不能求和。
+        observations.upsert_summary(
+            conn,
+            "r1",
+            sdk_result={
+                "usage": [{"message_id": "m1", "input_tokens": 0, "output_tokens": 0}],
+                "session_totals": {"input_tokens": 100, "output_tokens": 20, "credits": 1.0},
+            },
+        )
+        observations.upsert_summary(
+            conn,
+            "r2",
+            sdk_result={
+                "usage": [{"message_id": "m2", "input_tokens": 0, "output_tokens": 0}],
+                "session_totals": {"input_tokens": 150, "output_tokens": 32, "credits": None},
+            },
+        )
+        # r3 没有快照（如中断轮）：r4 与 r2 之间无法划界，退回请求级求和。
+        observations.upsert_summary(
+            conn, "r3", sdk_result={"usage": [{"message_id": "m3", "input_tokens": 0}]}
+        )
+        observations.upsert_summary(
+            conn,
+            "r4",
+            sdk_result={
+                "usage": [],
+                "session_totals": {"input_tokens": 200, "output_tokens": 40, "credits": 2.5},
+            },
+        )
+    runs = observations.read_observations("t1")
+    assert [run["run_id"] for run in runs] == ["r1", "r2", "r3", "r4"]
+    # 首轮：差值就是快照本身。
+    assert runs[0]["usage_totals"] == {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "credits": 1.0,
+    }
+    assert runs[0]["usage_totals_source"] == "delta"
+    # 次轮：相邻差值；快照缺 Credits 时该字段留空。
+    assert runs[1]["usage_totals"] == {
+        "input_tokens": 50,
+        "output_tokens": 12,
+        "credits": None,
+    }
+    assert runs[1]["usage_totals_source"] == "delta"
+    # r3 自己没有快照，退回请求级求和；条目缺字段，合计留空。
+    assert runs[2]["usage_totals_source"] == "requests"
+    assert runs[2]["usage_totals"]["input_tokens"] is None
+    # r4 的前一轮 r3 缺快照，无法划界，同样退回请求级求和（无条目则无来源）。
+    assert runs[3]["usage_totals_source"] is None
+    assert runs[3]["usage_totals"] == {
+        "input_tokens": None,
+        "output_tokens": None,
+        "credits": None,
+    }
+
+
+def test_read_observations_ignores_all_zero_snapshot(settings: Settings) -> None:
+    init_db()
+    with session() as conn, write(conn):
+        seed_turn(conn)
+        conn.execute(
+            "INSERT INTO agent_runs (run_id, task_id, kind, input, status, created_at, "
+            "finished_at) VALUES ('r2', 't1', 'message', '{}', 'done', 'now', 'later')"
+        )
+        # 实测 CN CLI 的累计层整体为 0：全零快照不是读数，不推算也不显示 0 消耗。
+        zero = {"input_tokens": 0, "output_tokens": 0, "credits": 0}
+        observations.upsert_summary(conn, "r1", sdk_result={"session_totals": zero})
+        observations.upsert_summary(conn, "r2", sdk_result={"session_totals": zero})
+    runs = observations.read_observations("t1")
+    for run in runs:
+        assert run["usage_totals_source"] is None
+        assert run["usage_totals"] == {
+            "input_tokens": None,
+            "output_tokens": None,
+            "credits": None,
+        }
+
+
+def test_read_observations_does_not_derive_across_session_reset(settings: Settings) -> None:
+    init_db()
+    with session() as conn, write(conn):
+        seed_turn(conn)
+        conn.execute(
+            "INSERT INTO agent_runs (run_id, task_id, kind, input, status, created_at, "
+            "finished_at) VALUES ('r2', 't1', 'message', '{}', 'done', 'now', 'later')"
+        )
+        observations.upsert_summary(
+            conn,
+            "r1",
+            sdk_result={
+                "session_totals": {"input_tokens": 300, "output_tokens": 60, "credits": 3.0}
+            },
+        )
+        # 会话被重置会让累计读数回落，差值为负时不推算。
+        observations.upsert_summary(
+            conn,
+            "r2",
+            sdk_result={
+                "session_totals": {"input_tokens": 120, "output_tokens": 25, "credits": 1.2}
+            },
+        )
+    runs = observations.read_observations("t1")
+    assert runs[1]["usage_totals"] == {
+        "input_tokens": None,
+        "output_tokens": None,
+        "credits": None,
+    }
+    assert runs[1]["usage_totals_source"] is None

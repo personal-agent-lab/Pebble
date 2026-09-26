@@ -73,7 +73,17 @@ def test_stream_records_materials_usage_and_result(settings, monkeypatch):
                 [TextBlock("结论")], "model", usage={"request_id": "req-2"}, message_id="msg-2"
             ),
             ResultMessage(
-                "success", 1200, 800, False, 3, "session-1", stop_reason="end_turn", result="完成"
+                "success",
+                1200,
+                800,
+                False,
+                3,
+                "session-1",
+                stop_reason="end_turn",
+                result="完成",
+                usage={"request_id": "req-2", "input_tokens": 9, "output_tokens": 4},
+                total_credits=0.9,
+                model_usage={"model": {"inputTokens": 20, "outputTokens": 11}},
             ),
         ],
     )
@@ -104,6 +114,15 @@ def test_stream_records_materials_usage_and_result(settings, monkeypatch):
     from server.sessions.observations import usage_totals
 
     assert usage_totals(sdk_result["usage"])["input_tokens"] is None
+
+    # ResultMessage 的末次请求读数与会话累计快照一并落库，供读取面推算。
+    assert sdk_result["result_usage"]["request_id"] == "req-2"
+    assert sdk_result["result_usage"]["input_tokens"] == 9
+    assert sdk_result["session_totals"] == {
+        "input_tokens": 20,
+        "output_tokens": 11,
+        "credits": 0.9,
+    }
 
 
 def test_resumed_turn_records_context_and_manual_compact(settings, monkeypatch):

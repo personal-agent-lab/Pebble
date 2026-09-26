@@ -212,6 +212,51 @@ def _field(source: Any, key: str) -> Any:
     return getattr(source, key, None)
 
 
+def _result_usage(message: Any) -> dict | None:
+    """ResultMessage.usage：本轮最后一次请求的规范用量，CN 运行时只在结果层有真实读数。"""
+    usage = getattr(message, "usage", None)
+    if usage is None:
+        return None
+    return {
+        "request_id": _field(usage, "request_id"),
+        "input_tokens": _field(usage, "input_tokens"),
+        "output_tokens": _field(usage, "output_tokens"),
+        "credits": _field(usage, "credits"),
+        "context_usage_ratio": _field(usage, "context_usage_ratio"),
+    }
+
+
+def _session_totals(message: Any) -> dict:
+    """轮末的会话累计快照：model_usage 汇总的 token 与 total_credits；缺失留空。"""
+    totals: dict[str, int | float | None] = {
+        "input_tokens": None,
+        "output_tokens": None,
+        "credits": None,
+    }
+    model_usage = getattr(message, "model_usage", None)
+    if isinstance(model_usage, dict) and model_usage:
+        sums = {"input_tokens": 0, "output_tokens": 0}
+        for usage in model_usage.values():
+            values = {
+                key: usage.get(field) if isinstance(usage, dict) else None
+                for key, field in (
+                    ("input_tokens", "inputTokens"),
+                    ("output_tokens", "outputTokens"),
+                )
+            }
+            if any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                   for value in values.values()):
+                sums = {}
+                break
+            for key, value in values.items():
+                sums[key] += value
+        totals.update(sums)
+    credits = getattr(message, "total_credits", None)
+    if isinstance(credits, (int, float)) and not isinstance(credits, bool):
+        totals["credits"] = credits
+    return totals
+
+
 class TurnObserver:
     """一轮的观测记录器：内存累计请求级用量，按事件分字段写入摘要。
 
@@ -274,6 +319,11 @@ class TurnObserver:
                 "stop_reason": getattr(message, "stop_reason", None)
                 or getattr(message, "terminal_reason", None),
                 "usage": list(self._usage),
+                # CN 运行时在 AssistantMessage.usage 层报 0 与空标识；ResultMessage
+                # 的末次请求读数与会话累计快照是仅有的真实来源，读取面据此推算
+                # 本轮消耗，这里只保存不推算。
+                "result_usage": _result_usage(message),
+                "session_totals": _session_totals(message),
             }
         )
 
@@ -332,6 +382,43 @@ def usage_totals(entries: list[dict] | None) -> dict:
     return totals
 
 
+def _numeric(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _turn_totals(
+    first: bool, previous: dict | None, snapshot: dict | None, usage: list[dict] | None
+) -> tuple[dict, str | None]:
+    """本轮合计：相邻轮会话累计快照的差值优先，退回请求级条目求和。
+
+    任务首轮的 SDK 会话由该轮新建，累计快照本身就是本轮消耗；其后任一轮缺
+    快照，下一轮就无法划界；差值出现回落（会话被重置）同样不推算。实测 CN
+    CLI 会把累计层整体填 0，全零快照不是读数，同样不推算。
+    """
+    keys = ("input_tokens", "output_tokens", "credits")
+
+    def positive(value: Any) -> bool:
+        return _numeric(value) and value > 0
+
+    if (
+        snapshot is not None
+        and any(positive(snapshot.get(key)) for key in keys)
+        and (first or previous is not None)
+    ):
+        delta: dict[str, int | float | None] = {}
+        for key in keys:
+            current = snapshot.get(key)
+            base = 0 if first else previous.get(key)
+            delta[key] = (
+                current - base
+                if positive(current) and _numeric(base) and current >= base
+                else None
+            )
+        if any(value is not None for value in delta.values()):
+            return delta, "delta"
+    return usage_totals(usage), ("requests" if usage else None)
+
+
 def read_observations(task_id: str, path: Path | None = None) -> list[dict]:
     """按 agent_runs 顺序返回轮次摘要与步骤；无观测数据的轮次各字段为空值。"""
     with session(path) as conn:
@@ -364,9 +451,20 @@ def read_observations(task_id: str, path: Path | None = None) -> list[dict]:
                 }
             )
     observations = []
-    for row in runs:
+    previous_snapshot: dict | None = None
+    for index, row in enumerate(runs):
         sdk_result = _load(row["sdk_result"])
         usage = sdk_result.get("usage") if isinstance(sdk_result, dict) else None
+        raw_snapshot = (
+            sdk_result.get("session_totals") if isinstance(sdk_result, dict) else None
+        )
+        snapshot = raw_snapshot if isinstance(raw_snapshot, dict) else None
+        totals, source = _turn_totals(
+            index == 0,
+            previous_snapshot,
+            snapshot,
+            usage if isinstance(usage, list) else None,
+        )
         observations.append(
             {
                 "run_id": row["run_id"],
@@ -378,10 +476,12 @@ def read_observations(task_id: str, path: Path | None = None) -> list[dict]:
                 "finished_at": row["finished_at"],
                 "materials": _load(row["materials"]),
                 "sdk_result": sdk_result,
-                "usage_totals": usage_totals(usage if isinstance(usage, list) else None),
+                "usage_totals": totals,
+                "usage_totals_source": source,
                 "context_before": _load(row["context_before"]),
                 "context_after": _load(row["context_after"]),
                 "steps": steps.get(row["run_id"], []),
             }
         )
+        previous_snapshot = snapshot
     return observations
