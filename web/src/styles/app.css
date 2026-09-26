@@ -324,19 +324,26 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .codex-composer > textarea:focus { outline: none; }
 .composer-toolbar { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
 .composer-spacer { flex: 1; }
-.composer-add, .composer-send, .composer-file button, .model-trigger {
+.composer-add, .composer-send, .composer-stop, .composer-file button, .model-trigger {
   border: none; font-family: var(--font-body); cursor: pointer;
 }
-.composer-add, .composer-send {
+.composer-add, .composer-send, .composer-stop {
   flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
   transition: background-color var(--duration-fast) ease-in-out, color var(--duration-fast) ease-in-out;
 }
 .composer-add { color: var(--color-muted); background: transparent; }
 .composer-add:hover:not(:disabled) { color: var(--color-fg); background: var(--color-border-subtle); }
-.composer-send { margin-left: 4px; color: var(--button-fg); background: var(--button-bg); }
-.composer-send:hover:not(:disabled) { background: var(--button-bg-hover); }
-.composer-add:disabled, .composer-send:disabled { opacity: 0.38; cursor: not-allowed; }
-.composer-add:focus-visible, .composer-send:focus-visible, .composer-file button:focus-visible,
+.composer-send, .composer-stop {
+  margin-left: 4px; color: var(--button-fg); background: var(--button-bg);
+}
+.composer-send:hover:not(:disabled), .composer-stop:hover:not(:disabled) {
+  background: var(--button-bg-hover);
+}
+.composer-add:disabled, .composer-send:disabled, .composer-stop:disabled {
+  opacity: 0.38; cursor: not-allowed;
+}
+.composer-add:focus-visible, .composer-send:focus-visible, .composer-stop:focus-visible,
+.composer-file button:focus-visible,
 .model-trigger:focus-visible {
   outline: none; box-shadow: 0 0 0 2px var(--color-ring);
 }
@@ -388,6 +395,54 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   color: var(--color-muted); background: var(--color-bg);
 }
 .model-option-check { flex: none; width: 14px; display: grid; place-items: center; color: var(--color-accent); }
+
+/* 上下文标记：发送按钮左侧的占用环，点开看按类别的分解（来自本地 CLI 的 /context 视图）。
+   环上没有文字，读数只在悬停提示与无障碍名称里。面板向上展开——输入框永远在视口底部，
+   面板比模型菜单高，向下没有空间。 */
+.context-meter { position: relative; flex: none; }
+.context-trigger {
+  display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 8px;
+  border: none; border-radius: 999px; background: transparent; cursor: pointer;
+  font-family: var(--font-body); font-size: var(--text-sm); color: var(--color-muted);
+  white-space: nowrap;
+  transition: background-color var(--duration-fast) ease-in-out, color var(--duration-fast) ease-in-out;
+}
+.context-trigger:hover, .context-trigger[aria-expanded="true"] {
+  color: var(--color-fg); background: var(--color-border-subtle);
+}
+.context-trigger:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
+/* 占用环：底圈是整圈窗口，走过的一段是已用；接近压缩阈值时转告警色。 */
+.context-ring { flex: none; overflow: visible; }
+.context-ring-track { stroke: color-mix(in oklch, var(--color-fg) 16%, transparent); }
+.context-ring-fill {
+  stroke: var(--color-accent);
+  transition: stroke-dashoffset var(--duration-fast) ease-in-out;
+}
+.context-ring-fill.near-limit { stroke: var(--color-danger); }
+.context-panel {
+  position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 30;
+  width: 280px; padding: 12px; display: flex; flex-direction: column; gap: 10px;
+  border: 1px solid var(--color-border-subtle); border-radius: 14px; background: var(--color-surface);
+  box-shadow: 0 12px 32px color-mix(in oklch, var(--color-fg) 12%, transparent);
+  font-size: var(--text-xs); color: var(--color-fg);
+}
+.context-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.context-panel-title { color: var(--color-muted); }
+.context-panel-head strong { font-size: var(--text-md); font-variant-numeric: tabular-nums; }
+.context-panel-head strong.near-limit { color: var(--color-danger); }
+.context-dot { flex: none; width: 8px; height: 8px; border-radius: 3px; }
+/* 分解配色只用来区分类别，不表达好坏；暖色为主，未知类别落回中性灰。 */
+.ctx-seg-system { background: #8f8578; }
+.ctx-seg-tools { background: #c96f4a; }
+.ctx-seg-skills { background: #d9a441; }
+.ctx-seg-messages { background: #3a95a8; }
+.ctx-seg-other { background: #9aa0a6; }
+.ctx-seg-free_space { background: #d6d2c9; }
+.context-legend { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.context-legend li { display: flex; align-items: center; gap: 8px; }
+.context-legend-label { flex: 1; min-width: 0; color: var(--color-muted); }
+.context-legend-value { flex: none; font-variant-numeric: tabular-nums; }
+.context-panel-note { margin: 0; color: var(--color-muted); line-height: var(--leading-ui); }
 
 .composer-files { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px; }
 .composer-file {
@@ -468,23 +523,21 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 /* 工具调用轨迹行：收起是与 notice 同级的系统细行（动作、对象、状态），
    展开是完整参数与返回内容的小面板；面板限高内部滚动，长返回不撑爆页面。 */
 .tool-call { display: flex; flex-direction: column; gap: 6px; }
+/* 连续工具行是同一段活动的一串记录：行距收到 small 档，与消息相邻处仍保持整档。 */
+.feed > .tool-item + .tool-item { margin-top: calc(var(--spacing-sm) - var(--spacing-lg)); }
 .tool-call-row {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 0;
   font: inherit; font-size: var(--text-xs); color: var(--color-muted);
   background: none; border: none; cursor: pointer; text-align: left;
 }
 .tool-call-row:hover .tool-call-name { text-decoration: underline; }
-.tool-call-icon { flex: none; color: var(--status-success); }
-.tool-call-icon.pending { color: var(--color-muted); }
-.tool-call-row.failed .tool-call-icon { color: var(--color-danger); }
-.tool-call-name { flex: none; font-family: var(--font-mono); font-weight: 510; }
+.tool-call-name { flex: none; font-family: var(--font-mono); }
 .tool-call-name.readable { font-family: inherit; }
 .tool-call-args {
   flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   opacity: 0.85;
 }
-.tool-call-failed { flex: none; color: var(--color-danger); font-weight: 510; }
-.tool-call-row .rule { flex: 1; height: 1px; background: var(--color-border-subtle); }
+.tool-call-failed { flex: none; color: var(--color-danger); }
 /* 面板是固定高的滚动区：子项必须保持自然高度，缩下去就会让 pre 溢出自己的盒子，
    压住底部元信息行并盖过卡片下边框（返回值一长就出现）。横向一并裁掉，
    免得不换行的长值（长 URL、长 ID）把面板撑宽、横向溢出卡片。 */
@@ -571,6 +624,25 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .send-failure-actions { display: flex; gap: var(--spacing-sm); }
 /* 同一角色连说几条时收紧间距，读起来是一段话而不是几条独立消息。 */
 .msg.cont { margin-top: calc(var(--spacing-md) * -0.5); }
+
+/* 过程叙述：折叠分组里与工具行同属一段经过的助手短句（「我来查一下……」）。
+   它和同一轮最后那段回答处在同一个折叠分组里，如果沿用回答的正文字号与颜色，
+   读起来就像正文的一部分。这里按工具行的口径降级——small 号、次要色（下一条
+   回答样式里的字号与字距随之让位），并去掉首尾块的额外留白，让它与旁边的工具行
+   贴成一段过程记录；正式回答仍是 --text-md 正文色，两者的差别就是有意的。 */
+.msg.process .bubble {
+  font-size: var(--text-sm); line-height: var(--leading-ui);
+  color: var(--color-muted);
+}
+.msg.process .bubble .md > :first-child { margin-top: 0; }
+.msg.process .bubble .md > :last-child { margin-bottom: 0; }
+/* 过程区内部一律用工具行的行距（连续工具行同样是 small 一档）：
+   叙述↔工具行、叙述↔叙述都收到这一档，分组头与最终回答仍按整档分开。
+   过程标记挂在外层条目包装上（工具行包装同样带 .process），所以这里直接按
+   兄弟条目匹配，不必穿透包装。 */
+.feed > .process + .process,
+.feed > .process + .tool-item,
+.feed > .run-details-head + .process { margin-top: calc(var(--spacing-sm) - var(--spacing-lg)); }
 
 /* ===== 思考占位 ===== */
 /* 一轮调用里模型可以长时间不吐字：开头在读上下文，中间在调工具。顶栏徽标离对话太远，
@@ -1510,62 +1582,19 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .kb-math-output { user-select: none; }
 .kb-math-hint { display: block; margin-top: 4px; font-size: 11px; line-height: var(--leading-ui); color: var(--color-muted); text-align: left; }
 
-/* 执行详情：每轮一个默认折叠的运行观测面板（contracts/observability.md §4）。
-   与工具行同属系统细行的视觉层级：小字号、弱色，展开后是分节只读数据。 */
-.run-details { display: flex; flex-direction: column; gap: 4px; }
+/* 已结束一轮的折叠头：一行「已思考 X」加通栏分隔线（contracts/observability.md §4）。
+   与工具行同属系统细行的视觉层级：小字号、弱色。 */
 .run-details-header {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 0;
   font: inherit; font-size: var(--text-xs); color: var(--color-muted);
   background: none; border: none; cursor: pointer; text-align: left;
 }
 .run-details-header:hover .run-details-title { text-decoration: underline; }
-.run-details-title { flex: none; font-weight: 510; }
-.run-details-summary { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85; }
-.run-details-header .rule { flex: 1; height: 1px; background: var(--color-border-subtle); }
+.run-details-title { flex: none; }
+/* 分组头：一行「已思考 …」加下方通栏分隔线，把过程区和结果隔开。
+   分隔线与下面的过程区贴得近一些：线是这块内容的开始，不是独立条目。 */
+.run-details-head { display: flex; flex-direction: column; gap: 8px; }
+.run-details-divider { height: 1px; background: var(--color-border-subtle); }
 .run-details-header svg { flex: none; }
-.run-details-body {
-  display: flex; flex-direction: column; gap: 12px;
-  border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
-  padding: 10px 12px; font-size: var(--text-xs);
-}
-.run-details-section { display: flex; flex-direction: column; gap: 6px; }
-.run-details-section h4 { margin: 0; font-size: var(--text-xs); font-weight: 510; color: var(--color-muted); }
-.run-details-empty { margin: 0; color: var(--color-muted); }
-.run-details-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, max-content)); gap: 4px 16px; margin: 0; }
-.run-details-field { display: flex; gap: 8px; }
-.run-details-field dt { color: var(--color-muted); flex: none; }
-.run-details-field dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-.run-details-materials { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
-.run-details-materials li { display: flex; gap: 8px; }
-.run-details-material-title { min-width: 0; overflow-wrap: anywhere; }
-.run-details-material-chars { color: var(--color-muted); flex: none; }
-.run-details-skipped { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; color: var(--color-muted); }
-.run-details-usage { border-collapse: collapse; }
-.run-details-usage th, .run-details-usage td { padding: 2px 12px 2px 0; text-align: left; }
-.run-details-usage th { color: var(--color-muted); font-weight: 470; }
-.run-details-usage td { font-variant-numeric: tabular-nums; }
-.run-details-totals { margin: 4px 0 0; }
-.run-details-note { color: var(--color-muted); margin-left: 4px; }
-.run-details-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
-.run-step { display: flex; align-items: center; gap: 8px; }
-/* 定位命中：从工具行跳过来时短暂标出对应步骤，与工具行高亮同一手法。 */
-.run-step.focused {
-  background: var(--bubble-bg); border-radius: var(--radius-sm); padding: 0 6px; margin: 0 -6px;
-}
-.run-step-icon { flex: none; color: var(--status-success); }
-.run-step-icon.pending { color: var(--color-muted); }
-.run-step-icon.failed { color: var(--color-danger); }
-/* 拒绝是授权层的结果，不是工具失败：弱色标出，与「失败」的红色区分。 */
-.run-step-icon.denied { color: var(--color-muted); }
-.run-step-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.run-step-detail { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; opacity: 0.85; }
-.run-step-state { flex: none; color: var(--color-muted); }
-.run-step-state.failed { color: var(--color-danger); }
-.run-step-duration { flex: 1; text-align: right; color: var(--color-muted); font-variant-numeric: tabular-nums; }
-.run-step-locate, .tool-call-locate {
-  flex: none; padding: 0; font: inherit; font-size: var(--text-xs);
-  color: var(--color-accent); background: none; border: none; cursor: pointer;
-}
-.run-step-locate:hover, .tool-call-locate:hover { text-decoration: underline; }
 .tool-call-line { display: flex; align-items: center; gap: 6px; }
 .tool-call-line .tool-call-row { flex: 1; min-width: 0; }

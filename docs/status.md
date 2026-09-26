@@ -16,7 +16,7 @@
 | 个人资料库 Phase 5：主题页与后台主题整理 | 未实现 | `kb-spec.md` §8、`contracts/personal-kb.md` §7 |
 | Skills：技能目录与 `SKILL.md` 正文、`references/` 与 `templates/` 附件、三种来源、按 `managed` 分流的变更与审批、目录常驻与正文按需加载、手动选择、Git 版本与恢复、管理页与输入框 `/` 技能选择；执行轨迹：任务内单调序号、Pebble MCP 与本轮内置工具调用入时间线、运行中实时显示工具行、按条目边界的轨迹视图、任务页可折叠工具行与依据定位 | 基础段与轨迹段已实现；后台复盘、使用统计与陈旧标记未实现 | `skill-spec.md`、`contracts/skill.md` |
 | 认证与 HTTPS 远程访问：Tailscale Serve、账号名单、写请求来源校验、前端同源托管、工具端点独立监听 | 已实现；真机外网验收未完成 | `v1-design.md` §6 |
-| 可观测性：任务页每轮执行详情，含材料装配与跳过、SDK 时长与调用次数、请求级用量与末次请求读数、按相邻轮累计差值推算的本轮消耗、上下文占用、压缩、权限拒绝与关键静默降级 | 已实现 | `observability-spec.md`、`contracts/observability.md` |
+| 可观测性：已结束一轮的折叠组头显示总时长；输入框发送按钮左侧的上下文标记用占用环显示最近一轮结束时的窗口占用（环上不写数字，读数在悬停提示里；没有读数时环是空的），点开只列总量与类别分解（系统提示词／工具定义／技能／对话消息等各占多少），达压缩阈值转告警色；材料、异常概览、用量与步骤清单仍采集入库但不在界面展示 | 已实现 | `observability-spec.md`、`contracts/observability.md` |
 
 SQLite schema 版本为 22：保留 main 的 1–16；Skills 旧设计的运行表在 17–18 建立，v19 一并删除并新建 `skill_changes`（变更记录）与 `skill_loads`（加载记录）；v20 给 `task_timeline_items` 补任务内单调 `sequence` 并新增 `tool` 条目；v21 允许工具 `running` 时结果为空，工具开始占位、结束更新；v22 新增 `run_observations`（每轮运行摘要）与 `observation_steps`（本轮的工具、压缩与降级步骤），都从属 `agent_runs` 并随任务删除级联。技能正文不在 SQLite。
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
@@ -25,6 +25,25 @@ const draft: Extract<TimelineItem, { kind: "mail_draft" }> = {
   },
   execution: { operation_id: "op-1", version: 1, status: "pending", confirmation: null, result: null },
 };
+
+type SdkResult = NonNullable<RunObservation["sdk_result"]>;
+
+/** 一轮的运行观测：折叠头只取时长，其余字段保留形状以便日后回填。 */
+const observation = (sdk: SdkResult | null = null): RunObservation => ({
+  run_id: "run-1",
+  kind: "message",
+  status: "done",
+  model: "auto",
+  created_at: "2026-09-24T10:00:00Z",
+  started_at: "2026-09-24T10:00:01Z",
+  finished_at: "2026-09-24T10:00:09Z",
+  materials: null,
+  sdk_result: sdk,
+  usage_totals: { input_tokens: null, output_tokens: null, credits: null },
+  context_before: null,
+  context_after: null,
+  steps: [],
+});
 
 test("按持久化顺序渲染 Agent 文字、完整邮件卡和后续文字", () => {
   const items: TimelineItem[] = [
@@ -234,7 +253,8 @@ test("工具分隔的一轮回答只在结束后出现一个复制按钮", async
   const buttons = screen.getAllByRole("button", { name: "复制回答" });
   expect(buttons).toHaveLength(1);
   await userEvent.click(buttons[0]);
-  expect(writeText).toHaveBeenCalledWith("先读取技能\n\n按技能完成周报");
+  // 复制的是收起后仍可见的回答，不把折叠起来的过程叙述混进正文。
+  expect(writeText).toHaveBeenCalledWith("按技能完成周报");
 });
 
 test("工具调用渲染为可折叠细行，展开显示完整参数与返回", async () => {
@@ -247,6 +267,8 @@ test("工具调用渲染为可折叠细行，展开显示完整参数与返回",
   render(<TimelineFeed taskId="task-1" items={items} running={false}
     sendMessage={vi.fn()} onChanged={vi.fn()} />);
 
+  // 已结束的轮默认折叠，先展开已思考再检查工具行。
+  await userEvent.click(screen.getByRole("button", { name: /^已思考/ }));
   // 已识别工具用动作与对象，未知工具回退原名和短参数。
   expect(screen.getByText("已读取技能")).toBeTruthy();
   expect(screen.getByText("「weekly-report」")).toBeTruthy();
@@ -276,13 +298,15 @@ test("未完成工具在运行中和中断后给出不同说明", async () => {
   expect(screen.getByText("工具仍在运行")).toBeTruthy();
 
   rerender(<TimelineFeed {...props} running={false} />);
+  // 中断后该轮折叠，展开分组才能看到中断语义。
+  await userEvent.click(screen.getByRole("button", { name: /^已思考/ }));
   expect(screen.queryByText("正在读取网页")).toBeNull();
   expect(screen.getByText("读取网页")).toBeTruthy();
   expect(screen.getByText("未记录结果")).toBeTruthy();
   expect(screen.getByText("中断时未记录结果")).toBeTruthy();
 });
 
-test("依据跳转定位到工具行时自动展开并短暂高亮", () => {
+test("依据跳转定位到工具行时自动展开并短暂高亮", async () => {
   const items: TimelineItem[] = [
     { item_id: "ask", kind: "text", role: "user", run_id: "run-1", text: "整理周报", created_at: "2026-09-24T14:31:00Z" },
     toolCall("tool-1", "skill_view", "ok"),
@@ -291,7 +315,9 @@ test("依据跳转定位到工具行时自动展开并短暂高亮", () => {
     focusItemId="tool-1" sendMessage={vi.fn()} onChanged={vi.fn()} />);
 
   expect(container.querySelector("#item-tool-1")?.getAttribute("data-focus")).toBe("true");
-  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  // 折叠条目要先展开分组再滚动，滚动排在下一帧。
+  await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+  expect(scrollIntoView.mock.contexts[0]).toBe(container.querySelector("#item-tool-1"));
   // 跳转落点自动展开，完整调用一眼可见。
   expect(screen.getByText("返回")).toBeTruthy();
 });
@@ -311,7 +337,33 @@ test("末条是工具行时贴底判断不崩溃，新增内容照常滚动", ()
   expect(scrollIntoView).toHaveBeenCalledTimes(2);
 });
 
-test("观测面板挂在该轮最后一个条目后，工具行与步骤互相定位", async () => {
+test("已结束的轮折叠为用时分组，展开还原过程行", async () => {
+  const observed = observation({
+    duration_ms: 8200, duration_api_ms: null, num_turns: 2, is_error: false, usage: [],
+  });
+  const items: TimelineItem[] = [
+    { item_id: "ask", kind: "text", role: "user", run_id: "run-1", text: "整理周报", created_at: "2026-09-24T10:00:00Z" },
+    toolCall("tool-1", "skill_view", "ok"),
+    answer("text-1", "按技能完成周报", "2026-09-24T14:33:00Z"),
+  ];
+  render(<TimelineFeed taskId="task-1" items={items} observations={[observed]}
+    running={false} sendMessage={vi.fn()} onChanged={vi.fn()} />);
+  // 默认折叠：回答可见，工具行收在分组里。
+  expect(screen.getByText("按技能完成周报")).toBeTruthy();
+  expect(screen.queryByText("已读取技能")).toBeNull();
+  // 折叠头只报用时，材料与用量不再单独成卡片。
+  const header = screen.getByRole("button", { name: "已思考 8.2 秒" });
+  expect(header).toBeTruthy();
+
+  await userEvent.click(header);
+  expect(screen.getByText("已读取技能")).toBeTruthy();
+  expect(screen.queryByText("材料")).toBeNull();
+  expect(screen.queryByText("用量")).toBeNull();
+  // 工具行本身仍可继续展开：骨架行给出动作，展开后能看到完整参数与返回。
+  expect(screen.getByRole("button", { name: "展开已读取技能 weekly-report" })).toBeTruthy();
+});
+
+test("进行中的轮实时显示过程，结束折叠为分组", async () => {
   const observed: RunObservation = {
     run_id: "run-1",
     kind: "message",
@@ -320,7 +372,46 @@ test("观测面板挂在该轮最后一个条目后，工具行与步骤互相�
     created_at: "2026-09-24T10:00:00Z",
     started_at: "2026-09-24T10:00:01Z",
     finished_at: "2026-09-24T10:00:09Z",
-    materials: { assembled: [{ title: "本轮材料", chars: 40 }], skipped: [] },
+    materials: { assembled: [], skipped: [] },
+    sdk_result: null,
+    usage_totals: { input_tokens: null, output_tokens: null, credits: null },
+    context_before: null,
+    context_after: null,
+    steps: [{
+      step_id: "s1", kind: "tool", code: "skill_view", status: "running",
+      started_at: "2026-09-24T10:00:02Z", ended_at: null,
+      item_id: "tool-1", tool_call_id: "c1", detail: { source: "mcp" },
+    }],
+  };
+  const items: TimelineItem[] = [
+    { item_id: "ask", kind: "text", role: "user", run_id: "run-1", text: "整理周报", created_at: "2026-09-24T10:00:00Z" },
+    toolCall("tool-1", "skill_view", "ok"),
+  ];
+  const props = { taskId: "task-1", items, observations: [observed], activeRunId: "run-1",
+    sendMessage: vi.fn(), onChanged: vi.fn() };
+  const { rerender } = render(<TimelineFeed {...props} running={true} />);
+  // 运行中：过程实时可见，没有折叠组头。
+  expect(screen.getByText("已读取技能")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^已思考/ })).toBeNull();
+
+  rerender(<TimelineFeed {...props} running={false} />);
+  // 结束后折叠：工具行收进分组，只留用户消息。
+  expect(screen.queryByText("已读取技能")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: /^已思考/ }));
+  // 展开后工具行按时间顺序还原。
+  expect(screen.getByText("已读取技能")).toBeTruthy();
+});
+
+test("收起时只留用户消息、卡片与最终回答，叙述与工具行都在分组里", async () => {
+  const observed: RunObservation = {
+    run_id: "run-1",
+    kind: "message",
+    status: "done",
+    model: "auto",
+    created_at: "2026-09-24T10:00:00Z",
+    started_at: "2026-09-24T10:00:01Z",
+    finished_at: "2026-09-24T10:00:09Z",
+    materials: { assembled: [], skipped: [] },
     sdk_result: {
       duration_ms: 8200, duration_api_ms: null, num_turns: 2, is_error: false,
       usage: [],
@@ -328,45 +419,66 @@ test("观测面板挂在该轮最后一个条目后，工具行与步骤互相�
     usage_totals: { input_tokens: null, output_tokens: null, credits: null },
     context_before: null,
     context_after: null,
-    steps: [{
-      step_id: "s1", kind: "tool", code: "skill_view", status: "ok",
-      started_at: "2026-09-24T10:00:02Z", ended_at: "2026-09-24T10:00:04Z",
-      item_id: "tool-1", tool_call_id: "c1", detail: { source: "mcp", chars: 900 },
-    }],
+    steps: [],
   };
   const items: TimelineItem[] = [
-    { item_id: "ask", kind: "text", role: "user", run_id: "run-1", text: "整理周报", created_at: "2026-09-24T10:00:00Z" },
+    { item_id: "ask", kind: "text", role: "user", run_id: "run-1", text: "整理周报并发邮件", created_at: "2026-09-24T10:00:00Z" },
+    answer("narr-1", "我先读取技能说明", "2026-09-24T10:00:01Z"),
     toolCall("tool-1", "skill_view", "ok"),
-    answer("text-1", "按技能完成周报", "2026-09-24T14:33:00Z"),
+    draft,
+    answer("final-1", "周报已起草好，等你确认", "2026-09-24T10:02:00Z"),
   ];
-  const { container } = render(<TimelineFeed taskId="task-1" items={items} observations={[observed]}
-    running={false} sendMessage={vi.fn()} onChanged={vi.fn()} />);
-  // 默认折叠，只有摘要行。
-  const header = screen.getByRole("button", { name: /^执行详情/ });
-  expect(screen.queryByText("材料")).toBeNull();
+  render(<TimelineFeed taskId="task-1" items={items} observations={[observed]} running={false}
+    sendMessage={vi.fn()} onChanged={vi.fn()} />);
+  expect(screen.getByText("整理周报并发邮件")).toBeTruthy();
+  expect(screen.getByText("周报已起草好，等你确认")).toBeTruthy();
+  expect(screen.getByText("证明文件")).toBeTruthy();
+  expect(screen.queryByText("我先读取技能说明")).toBeNull();
+  expect(screen.queryByText("已读取技能")).toBeNull();
 
-  // 工具行 → 执行详情：点击定位按钮展开面板。
-  await userEvent.click(screen.getByRole("button", { name: "在执行详情中定位这次调用" }));
-  expect(screen.getByText("材料")).toBeTruthy();
-  expect((header as HTMLElement).getAttribute("aria-expanded")).toBe("true");
-  expect(document.getElementById("run-details-run-1")).toBeTruthy();
-  // 同一次调用在工具行与步骤行各出现一次。
-  expect(screen.getAllByText("已读取技能")).toHaveLength(2);
-
-  // 执行详情 → 工具行：点击步骤的定位按钮，展开并滚动到对应工具行。
-  scrollIntoView.mockClear();
-  await userEvent.click(screen.getByRole("button", { name: "定位" }));
-  expect(document.querySelector('[data-step-id="s1"]')?.className).toContain("focused");
-  expect(container.querySelector("#item-tool-1")?.getAttribute("data-focus")).toBe("true");
-  expect(scrollIntoView).toHaveBeenCalled();
-  expect(screen.getByText("返回")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: /^已思考/ }));
+  expect(screen.getByText("我先读取技能说明")).toBeTruthy();
+  expect(screen.getAllByText("已读取技能").length).toBeGreaterThan(0);
 });
 
-test("没有观测数据的轮次不显示执行详情", () => {
+test("过程叙述与正式回答分开渲染：前者带过程标记，只有后者按回答样式", async () => {
   const items: TimelineItem[] = [
+    { item_id: "ask", kind: "text", role: "user", run_id: "run-1", text: "整理周报", created_at: "2026-09-24T14:31:00Z" },
+    answer("narr-1", "我来查一下最近一周的动态。", "2026-09-24T14:31:30Z"),
+    toolCall("tool-1", "skill_view", "ok"),
+    answer("narr-2", "我再抓几个具体来源核实。", "2026-09-24T14:32:00Z"),
+    toolCall("tool-2", "skill_view", "ok"),
+    answer("final-1", "本周有 3 个日程", "2026-09-24T14:33:00Z"),
+  ];
+  const { container } = render(<TimelineFeed taskId="task-1" items={items} running={false}
+    sendMessage={vi.fn()} onChanged={vi.fn()} />);
+
+  // 运行结束后叙述收进折叠分组，展开才回到过程区。过程标记挂在外层条目包装上，
+  // 消息本身也带 .process，两处都要能看出来。
+  await userEvent.click(screen.getByRole("button", { name: /^已思考/ }));
+  const narrationRow = container.querySelector("#item-narr-1");
+  expect(narrationRow?.classList.contains("process")).toBe(true);
+  const narration = screen.getByText("我来查一下最近一周的动态。").closest(".msg");
+  expect(narration?.classList.contains("process")).toBe(true);
+  expect(screen.getByText("我再抓几个具体来源核实。").closest(".msg")?.classList.contains("process"))
+    .toBe(true);
+  // 正式回答留在分组外，也不能带上过程样式：样式不同正是判断“哪段是答案”的依据。
+  const finalRow = container.querySelector("#item-final-1");
+  expect(finalRow?.classList.contains("process")).toBe(false);
+  const final = finalRow?.querySelector(".msg");
+  expect(final?.classList.contains("process")).toBe(false);
+  expect(within(final as HTMLElement).getByText("本周有 3 个日程")).toBeTruthy();
+});
+
+test("没有观测数据的轮次仍折叠过程，折叠头只显示「已思考」", async () => {
+  const items: TimelineItem[] = [
+    answer("narr-1", "我先查一下", "2026-09-24T14:31:00Z"),
+    toolCall("tool-1", "skill_view", "ok"),
     answer("text-1", "没有观测", "2026-09-24T14:33:00Z"),
   ];
   render(<TimelineFeed taskId="task-1" items={items} observations={[]} running={false}
     sendMessage={vi.fn()} onChanged={vi.fn()} />);
-  expect(screen.queryByRole("button", { name: /执行详情/ })).toBeNull();
+  expect(screen.queryByText("我先查一下")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "已思考 未记录" }));
+  expect(screen.getByText("我先查一下")).toBeTruthy();
 });
