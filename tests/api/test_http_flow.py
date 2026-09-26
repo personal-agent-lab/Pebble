@@ -1,5 +1,6 @@
 """真实 HTTP/SSE 与独立进程验收；外部 Agent/Gmail 仅使用测试替身。"""
 
+import asyncio
 import json
 import os
 import socket
@@ -487,3 +488,55 @@ def test_cancellation_stops_draft_without_sending(settings):
         sent = {"operation_id": sent_id, "version": 1}
         assert client.post(f"/api/tasks/{tid}/confirmations", json=sent).status_code == 202
         assert client.post(f"/api/tasks/{tid}/cancellations", json=sent).status_code == 409
+
+
+def test_interrupt_route_stops_running_turn(settings):
+    """用户终止进行中的调用：调用记为中断、已流出的回答保留且不补提示；空闲任务返回 409。"""
+    app = create_app(gateway=FakeAgentGateway())
+
+    def blocked(turn):
+        async def events():
+            yield {"type": "session", "sdk_session_id": "sdk-int"}
+            yield {"type": "text", "text": "先说到这里"}
+            await asyncio.Event().wait()
+            yield {"type": "done"}
+
+        return events()
+
+    app.state.agent.gateway.handle("message", blocked)
+    with TestClient(app) as client:
+        tid = client.post("/api/tasks", data={"model": "auto", "message": "慢慢跑"}).json()["task"][
+            "task_id"
+        ]
+        wait_for(
+            lambda: (
+                client.get(f"/api/tasks/{tid}").json()["latest_run"]["status"] == "running"
+                and len(client.get(f"/api/tasks/{tid}/timeline").json()["items"]) == 2
+            )
+        )
+
+        response = client.post(f"/api/tasks/{tid}/interrupt")
+        assert response.status_code == 202
+        assert response.json()["status"] == "interrupted"
+        assert response.json()["finished_at"]
+        # 终止是用户自己的动作：不写提示条目，用户消息与部分回答原样保留。
+        items = client.get(f"/api/tasks/{tid}/timeline").json()["items"]
+        assert [(item["kind"], item.get("text")) for item in items] == [
+            ("text", "慢慢跑"),
+            ("text", "先说到这里"),
+        ]
+        assert app.state.agent.latest_run(tid)["retryable"] is True
+
+        # 空闲任务用默认脚本跑完再看：没有进行中的调用时终止被拒。
+        app.state.agent.gateway.handle("message", None)
+        idle = client.post("/api/tasks", data={"model": "auto", "message": "空闲"}).json()["task"][
+            "task_id"
+        ]
+        wait_for(
+            lambda: (
+                client.get(f"/api/tasks/{idle}").json()["latest_run"]["status"] == "done"
+                and not app.state.agent._active
+            )
+        )
+        assert client.post(f"/api/tasks/{idle}/interrupt").status_code == 409
+        assert client.post("/api/tasks/missing/interrupt").status_code == 404

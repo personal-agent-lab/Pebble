@@ -10,8 +10,12 @@ import pytest
 
 from server.approval.service import ConfirmationService
 from server.db import init_db, session, write
-from server.errors import NotFoundError, RetryUnavailableError
-from server.gateway.runtime import INTERRUPTED_REASON, GatewayRuntime
+from server.errors import NotFoundError, RetryUnavailableError, TaskNotRunningError
+from server.gateway.runtime import (
+    INTERRUPTED_REASON,
+    USER_INTERRUPTED_MESSAGE,
+    GatewayRuntime,
+)
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
 from tests.support import confirm
@@ -455,6 +459,141 @@ async def test_malformed_event_stream_is_protocol_error(flow):
     second = flow.service.submit_message(task["task_id"], "坏事件")
     await drain(flow.service)
     assert "draft_saved" in flow.service.get_run(second["run_id"])["error"]
+
+
+async def test_user_interrupt_stops_the_running_turn_and_keeps_partial_output(flow):
+    task = flow.tasks.create_task("可终止")
+    entered = asyncio.Event()
+    proceed = asyncio.Event()
+
+    async def interrupt_turn(run_id: str) -> bool:
+        proceed.set()
+        return True
+
+    flow.gateway.interrupt_turn = interrupt_turn
+
+    def handler(turn):
+        async def events():
+            yield {"type": "text", "text": "先说结论，"}
+            entered.set()
+            await proceed.wait()
+            yield {"type": "done"}
+
+        return events()
+
+    flow.gateway.handle("message", handler)
+    run = flow.service.submit_message(task["task_id"], "详细展开讲讲")
+    await wait_for(lambda: flow.service.get_run(run["run_id"])["status"] == "running")
+
+    settled = await flow.service.interrupt_task(task["task_id"])
+
+    assert settled["status"] == "interrupted"
+    assert settled["error"] == USER_INTERRUPTED_MESSAGE
+    # 终止是用户自己的动作：只留已流出的部分回答，不再补程序提示。
+    items = flow.service.get_timeline(task["task_id"])["items"]
+    assert [item.get("text") for item in items] == ["详细展开讲讲", "先说结论，"]
+    assert [item["kind"] for item in items] == ["text", "text"]
+    # 终止后的这轮没有产生操作记录：可以在原位置整体重试。
+    latest = flow.service.latest_run(task["task_id"])
+    assert latest["retryable"] is True
+    flow.gateway.handle("message", None)
+    retried = flow.service.retry_last_message(task["task_id"])
+    assert retried["run_id"] == run["run_id"]
+    await drain(flow.service)
+    assert flow.service.get_run(run["run_id"])["status"] == "done"
+    assert [item.get("text") for item in flow.service.get_timeline(task["task_id"])["items"]] == [
+        "详细展开讲讲",
+        "收到：详细展开讲讲",
+    ]
+
+
+async def test_user_interrupt_without_session_handle_cancels_the_stream(flow):
+    task = flow.tasks.create_task("无响应")
+    entered = asyncio.Event()
+
+    def handler(turn):
+        async def events():
+            yield {"type": "text", "text": "开始处理"}
+            entered.set()
+            await asyncio.Event().wait()
+            yield {"type": "done"}
+
+        return events()
+
+    flow.gateway.handle("message", handler)
+    run = flow.service.submit_message(task["task_id"], "停不下来")
+    await wait_for(lambda: flow.service.get_run(run["run_id"])["status"] == "running")
+
+    settled = await flow.service.interrupt_task(task["task_id"])
+
+    assert settled["status"] == "interrupted"
+    assert settled["error"] == USER_INTERRUPTED_MESSAGE
+    assert flow.gateway.interrupt_calls == [run["run_id"]]
+    items = flow.service.get_timeline(task["task_id"])["items"]
+    assert [item.get("text") for item in items] == ["停不下来", "开始处理"]
+
+
+async def test_user_interrupt_when_session_handle_hangs(flow, monkeypatch):
+    monkeypatch.setattr("server.gateway.runtime.INTERRUPT_REQUEST_SECONDS", 0.01)
+    task = flow.tasks.create_task("终止句柄无响应")
+
+    async def stuck_interrupt(run_id: str) -> bool:
+        await asyncio.Event().wait()
+        return True
+
+    def handler(turn):
+        async def events():
+            yield {"type": "text", "text": "已有输出"}
+            await asyncio.Event().wait()
+
+        return events()
+
+    flow.gateway.interrupt_turn = stuck_interrupt
+    flow.gateway.handle("message", handler)
+    run = flow.service.submit_message(task["task_id"], "请终止")
+    await wait_for(lambda: flow.service.get_run(run["run_id"])["status"] == "running")
+
+    settled = await asyncio.wait_for(flow.service.interrupt_task(task["task_id"]), timeout=1)
+
+    assert settled["status"] == "interrupted"
+    assert flow.service._active == {}
+    assert [item.get("text") for item in flow.service.get_timeline(task["task_id"])["items"]] == [
+        "请终止",
+        "已有输出",
+    ]
+
+
+async def test_user_interrupt_before_the_call_starts_settles_the_pending_run(flow):
+    """终止可以赶在协程第一次执行之前到达：待处理的调用照样记为中断，不留下卡住的任务。"""
+    task = flow.tasks.create_task("还没开始")
+    flow.gateway.handle("message", None)
+
+    flow.service.submit_message(task["task_id"], "抢在开始之前终止")
+    settled = await flow.service.interrupt_task(task["task_id"])
+
+    assert settled["status"] == "interrupted"
+    assert settled["error"] == USER_INTERRUPTED_MESSAGE
+    assert settled["started_at"] is None
+    # 模型没有被调用，用户消息照旧留在时间线里，任务也不卡在待处理。
+    assert flow.gateway.calls_of("message") == []
+    assert flow.service._active == {} and flow.service._active_runs == {}
+    assert flow.service._pending_rows() == []
+    assert [item.get("text") for item in flow.service.get_timeline(task["task_id"])["items"]] == [
+        "抢在开始之前终止"
+    ]
+    assert flow.service.latest_run(task["task_id"])["retryable"] is True
+
+
+async def test_interrupt_requires_a_running_turn(flow):
+    task = flow.tasks.create_task("空闲任务")
+    with pytest.raises(TaskNotRunningError):
+        await flow.service.interrupt_task(task["task_id"])
+
+    flow.gateway.handle("message", None)
+    flow.service.submit_message(task["task_id"], "正常结束")
+    await drain(flow.service)
+    with pytest.raises(TaskNotRunningError):
+        await flow.service.interrupt_task(task["task_id"])
 
 
 async def test_events_are_published_with_run_id(flow):

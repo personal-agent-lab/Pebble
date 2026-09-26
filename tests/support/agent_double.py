@@ -32,6 +32,7 @@ class FakeAgentGateway:
         self.image_calls: list[dict[str, Any]] = []
         self.review_calls: list[dict[str, Any]] = []
         self.judge_calls: list[dict[str, Any]] = []
+        self.interrupt_calls: list[str] = []
         # 可替换的一次性记忆回顾实现；缺省记录调用并返回空工具记录（无改动）。
         self.review_handler = None
         # 可替换的每轮记忆判断实现；缺省记录调用并返回空工具记录（无变化）。
@@ -90,6 +91,15 @@ class FakeAgentGateway:
     async def stream_turn(self, turn: Turn) -> AsyncIterator[AgentEvent]:
         async for event in self._stream(turn):
             yield event
+
+    async def interrupt_turn(self, run_id: str) -> bool:
+        """替身没有真正的会话：只记录请求，返回False让调度层走直接取消的兜底。
+
+        测试要模拟协作式终止时，替换本方法并在脚本里响应 `interrupt_calls`。
+        """
+        with self._lock:
+            self.interrupt_calls.append(run_id)
+        return False
 
     async def _stream(self, turn: Turn) -> AsyncIterator[AgentEvent]:
         kind = str(turn.kind)

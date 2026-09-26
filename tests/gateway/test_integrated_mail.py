@@ -73,6 +73,9 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
                 "autoCompact": {"enabled": True, "thresholdPercentage": 80},
             }
 
+        async def interrupt(self):
+            raise AssertionError("测试脚本不应触发终止")
+
         async def call(self, name, fields):
             url = self.options.mcp_servers[TOOL_SERVER_NAME]["url"]
             async with mcp_session(tool_server, url) as session:

@@ -227,12 +227,23 @@ class QoderGateway:
             replace(deps, memory_store=self.memory_store), registry=judge_registry
         )
         self._check_model_config()
+        # 每个进行中调用的 SDK 中断句柄：调度层请求终止时按调用标识找到仍在
+        # 会话里的客户端；轮次结束即摘除，句柄只在本进程内存中。
+        self._interrupts: dict[str, Callable[[], Any]] = {}
 
     # ---------- 输入入口 ----------
 
     def stream_turn(self, turn: Turn) -> AsyncIterator[AgentEvent]:
         """执行一轮调用；消息与材料由调用方组装，网关不区分触发来源。"""
         return self._stream(turn)
+
+    async def interrupt_turn(self, run_id: str) -> bool:
+        """请求终止该调用轮正在进行中的 SDK 调用；没有可终止的调用时返回 False。"""
+        interrupt = self._interrupts.pop(run_id, None)
+        if interrupt is None:
+            return False
+        await interrupt()
+        return True
 
     async def generate_title(self, text: str) -> str:
         """一次性标题生成：无工具、不接续会话，也不进入任务的对话历史。"""
@@ -355,50 +366,56 @@ class QoderGateway:
         ) as path:
             options = self._options(turn, visible=visible, path=path, observer=observer)
             async with QoderSDKClient(options) as client:
-                context_before: dict | None = None
-                if turn.sdk_session_id is not None:
-                    context_before = await self._compact_if_needed(client, observer)
-                await client.query(self._query_input(turn))
-                async for message in client.receive_response():
-                    # 工具事件在产生它的那次调用之后、模型的下一条消息之前送出。
-                    while not queued.empty():
-                        yield queued.get_nowait()
-                    if isinstance(message, ResultMessage):
-                        observer.record_result(message)
-                        await self._record_context_after(client, observer)
-                        yield _result_event(message)
-                        return
-                    if isinstance(message, SystemMessage) and message.subtype == "init":
-                        session_id = message.data.get("session_id")
-                        # 同一会话一轮里会上报多次：只广播第一次，标识真的变化时照常上报。
-                        if session_id and session_id != announced:
-                            announced = session_id
-                            yield {"type": "session", "sdk_session_id": session_id}
-                    elif (
-                        isinstance(message, SystemMessage) and message.subtype == "compact_boundary"
-                    ):
-                        # SDK 自动压缩的真实边界信号；没有边界不声称发生过压缩。
-                        observer.record_compact(auto=True, before=context_before)
-                    elif isinstance(message, StreamEvent):
-                        text = _delta_text(message.event)
-                        if text:
-                            streamed = True
-                            yield {"type": "text", "text": text}
-                    elif isinstance(message, AssistantMessage):
-                        observer.collect_usage(message)
-                        # 去重只对本条消息生效：已转发它的增量输出就跳过整段文本，随后重置标志；
-                        # 整轮共用会让缺少增量的后续消息被误判为重复而整段丢失。
-                        if not streamed:
+                if turn.run_id is not None:
+                    self._interrupts[turn.run_id] = client.interrupt
+                try:
+                    context_before: dict | None = None
+                    if turn.sdk_session_id is not None:
+                        context_before = await self._compact_if_needed(client, observer)
+                    await client.query(self._query_input(turn))
+                    async for message in client.receive_response():
+                        # 工具事件在产生它的那次调用之后、模型的下一条消息之前送出。
+                        while not queued.empty():
+                            yield queued.get_nowait()
+                        if isinstance(message, ResultMessage):
+                            observer.record_result(message)
+                            await self._record_context_after(client, observer)
+                            yield _result_event(message)
+                            return
+                        if isinstance(message, SystemMessage) and message.subtype == "init":
+                            session_id = message.data.get("session_id")
+                            # 同一会话一轮里会上报多次：只广播第一次，标识真的变化时照常上报。
+                            if session_id and session_id != announced:
+                                announced = session_id
+                                yield {"type": "session", "sdk_session_id": session_id}
+                        elif (
+                            isinstance(message, SystemMessage)
+                            and message.subtype == "compact_boundary"
+                        ):
+                            # SDK 自动压缩的真实边界信号；没有边界不声称发生过压缩。
+                            observer.record_compact(auto=True, before=context_before)
+                        elif isinstance(message, StreamEvent):
+                            text = _delta_text(message.event)
+                            if text:
+                                streamed = True
+                                yield {"type": "text", "text": text}
+                        elif isinstance(message, AssistantMessage):
+                            observer.collect_usage(message)
+                            # 去重只对本条消息生效：已转发它的增量输出就跳过整段文本，随后重置标志；
+                            # 整轮共用会让缺少增量的后续消息被误判为重复而整段丢失。
+                            if not streamed:
+                                for block in message.content:
+                                    if isinstance(block, TextBlock) and block.text.strip():
+                                        yield {"type": "text", "text": block.text}
+                            streamed = False
+                            # 模型给出完整的工具调用时、执行开始之前告诉页面这一步在做什么。
                             for block in message.content:
-                                if isinstance(block, TextBlock) and block.text.strip():
-                                    yield {"type": "text", "text": block.text}
-                        streamed = False
-                        # 模型给出完整的工具调用时、执行开始之前告诉页面这一步在做什么。
-                        for block in message.content:
-                            if isinstance(block, ToolUseBlock):
-                                text = self._activity_text(block, visible)
-                                if text:
-                                    yield {"type": "activity", "text": text}
+                                if isinstance(block, ToolUseBlock):
+                                    text = self._activity_text(block, visible)
+                                    if text:
+                                        yield {"type": "activity", "text": text}
+                finally:
+                    self._interrupts.pop(turn.run_id, None)
         while not queued.empty():
             yield queued.get_nowait()
         yield {"type": "error", "message": NO_TERMINAL_MESSAGE}
@@ -616,10 +633,11 @@ class QoderGateway:
         kb_materials = self._catalog_materials(observer)
         ctx = context.assemble(materials=(*memory_materials, *kb_materials, *materials))
         if observer is not None:
-            # 只记 Pebble 提交给 SDK 的材料：名称与字符数，不存正文。
+            # 只记 Pebble 提交给 SDK 的材料：名称与渲染后的字符数，不存正文。
+            # dict 内容必须按渲染文本量（len(dict) 数的是键的个数，会记成 2）。
             observer.record_materials(
                 [
-                    {"title": material.title, "chars": len(material.content)}
+                    {"title": material.title, "chars": len(context.render_material(material))}
                     for material in (*memory_materials, *kb_materials, *materials)
                 ]
             )
@@ -764,15 +782,26 @@ class QoderGateway:
 
 
 def _context_reading(usage: dict | None) -> dict | None:
-    """把 get_context_usage() 的读数压成观测存储的形状；读不到的字段留空。"""
+    """把 get_context_usage() 的读数压成观测存储的形状；读不到的字段留空。
+
+    类别分解就是 CLI `/context` 视图的同款数据：每类一个占窗口百分比，运行时
+    不给绝对 token 数（分词在服务端），所以这里也只存百分比。类别名与顺序照抄，
+    界面按自己的措辞显示。
+    """
     if not isinstance(usage, dict):
         return None
     context_window = usage.get("contextWindow") or {}
     automatic = usage.get("autoCompact") or {}
+    categories = [
+        {"kind": entry.get("type"), "percentage": entry.get("percentage")}
+        for entry in usage.get("categories") or []
+        if isinstance(entry, dict) and isinstance(entry.get("type"), str)
+    ]
     return {
         "used_percentage": context_window.get("usedPercentage"),
         "threshold_percentage": automatic.get("thresholdPercentage"),
         "auto_compact_enabled": bool(automatic.get("enabled")),
+        "categories": categories,
     }
 
 

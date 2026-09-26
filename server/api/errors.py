@@ -31,6 +31,7 @@ from server.errors import (
     SkillValidationError,
     TaskActiveError,
     TaskIdConflictError,
+    TaskNotRunningError,
     VersionConflictError,
     error_details,
 )
@@ -43,6 +44,7 @@ STATUS_CODES: tuple[tuple[type[Exception], int], ...] = (
     (SessionConflictError, 409),
     (TaskActiveError, 409),
     (TaskIdConflictError, 409),
+    (TaskNotRunningError, 409),
     (RetryUnavailableError, 409),
     (ModelValidationError, 422),
     (AttachmentValidationError, 422),

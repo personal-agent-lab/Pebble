@@ -57,6 +57,14 @@ class TaskIdConflictError(Exception):
         super().__init__(f"任务标识已被占用：{task_id}")
 
 
+class TaskNotRunningError(Exception):
+    """任务当前没有进行中的调用，终止无可执行。"""
+
+    def __init__(self, task_id: str):
+        self.task_id = task_id
+        super().__init__(f"任务没有进行中的调用：{task_id}")
+
+
 class RetryUnavailableError(Exception):
     """最后一轮不是可重试的已中断用户消息。"""
 
@@ -184,6 +192,8 @@ def error_details(error: Exception) -> dict | None:
         return {"error": "task_active", "message": "任务正在运行，结束后才能删除"}
     if isinstance(error, TaskIdConflictError):
         return {"error": "task_id_conflict", "message": str(error)}
+    if isinstance(error, TaskNotRunningError):
+        return {"error": "task_not_running", "message": "任务当前没有进行中的调用"}
     if isinstance(error, RetryUnavailableError):
         return {"error": "retry_unavailable", "message": str(error)}
     if isinstance(error, DraftValidationError):

@@ -107,6 +107,19 @@ def finish(conn: sqlite3.Connection, run_id: str, status: str, error: str | None
     )
 
 
+def interrupt(conn: sqlite3.Connection, run_id: str, reason: str, now: str) -> bool:
+    """把指定调用记为中断；待处理与运行中都适用，已结束的调用不受影响。
+
+    用户终止可以赶在调用取得运行权之前到达，所以这里不要求 `running`。
+    """
+    cursor = conn.execute(
+        "UPDATE agent_runs SET status = 'interrupted', error = ?, finished_at = ? "
+        "WHERE run_id = ? AND status IN ('pending', 'running')",
+        (reason, now, run_id),
+    )
+    return cursor.rowcount == 1
+
+
 def interrupt_running(conn: sqlite3.Connection, now: str, reason: str) -> list[str]:
     """把上次进程遗留的运行中调用记为中断，返回被处理的调用。"""
     run_ids = [

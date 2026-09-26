@@ -19,7 +19,12 @@ from server.approval.service import ConfirmationService
 from server.attachments import AttachmentStore, PreparedAttachment
 from server.config import default_model, get_settings
 from server.db import session, write
-from server.errors import DependencyUnavailableError, NotFoundError, TaskIdConflictError
+from server.errors import (
+    DependencyUnavailableError,
+    NotFoundError,
+    TaskIdConflictError,
+    TaskNotRunningError,
+)
 from server.gateway.agent_contract import (
     AgentEvent,
     AgentGateway,
@@ -82,6 +87,10 @@ def insert_task_link(
 
 
 INTERRUPTED_REASON = "上次进程退出时调用尚未结束，已记录中断"
+USER_INTERRUPTED_MESSAGE = "你已终止这一轮执行"
+# 终止请求给出后等会话自己收尾的时间；超时说明调用已无响应，转为直接取消。
+INTERRUPT_GRACE_SECONDS = 10.0
+INTERRUPT_REQUEST_SECONDS = 2.0
 
 EXECUTION_RESULT_MESSAGE = "系统已完成你此前请求的操作，执行结果见系统提示。请向用户简要汇报。"
 EXECUTION_RESULT_MATERIAL_TITLE = "执行结果（外部操作已结束，请据此向用户汇报）"
@@ -132,6 +141,10 @@ class GatewayRuntime:
         self._drafts = MailDraftStore(path)
         self._timeline = TimelineStore(path)
         self._active: dict[str, asyncio.Task] = {}
+        # 任务当前正在执行的调用：终止入口据此找到要停的调用记录。
+        self._active_runs: dict[str, str] = {}
+        # 用户已请求终止、等待调用收尾的记录：结束事件到达时按中断落库。
+        self._user_interrupts: set[str] = set()
         self._review_tasks: dict[str, asyncio.Task] = {}
         self._sends: dict[str, asyncio.Task] = {}
         self._titles: set[asyncio.Task] = set()
@@ -292,6 +305,48 @@ class GatewayRuntime:
         self.kick()
         return repo.run_response(row)
 
+    async def interrupt_task(self, task_id: str) -> dict:
+        """用户终止：停掉任务当前进行中的调用，调用按中断落库。
+
+        先请求会话协作式终止，已流出的部分输出保留；没有可终止的会话调用时，
+        已取得运行权的调用直接取消，尚未执行到取得运行权的落库后由它自己退回。
+        返回终止后读到的调用记录。
+        """
+        self.require_gateway()
+        active = self._active.get(task_id)
+        run_id = self._active_runs.get(task_id)
+        if active is None or run_id is None:
+            raise TaskNotRunningError(task_id)
+        self._user_interrupts.add(run_id)
+        interrupted = False
+        try:
+            async with asyncio.timeout(INTERRUPT_REQUEST_SECONDS):
+                interrupted = await self.gateway.interrupt_turn(run_id)
+        except TimeoutError:
+            logging.getLogger(__name__).warning("请求终止调用超时，转为直接取消：%s", run_id)
+        except Exception:
+            logging.getLogger(__name__).exception("请求终止调用失败，转为直接取消")
+        if not interrupted and not active.done():
+            if self.get_run(run_id)["started_at"] is not None:
+                active.cancel()
+            else:
+                # 调度已接手但协程还没执行到取运行权：取消会让它一行都不跑，槽位与
+                # 状态都收不了尾。只落库记为中断，它稍后 claim 时读到中断便自行退回。
+                self.events.publish(task_id, self._settle_interrupted(run_id))
+        try:
+            async with asyncio.timeout(INTERRUPT_GRACE_SECONDS):
+                while not active.done():
+                    await asyncio.sleep(0.05)
+        except TimeoutError:
+            active.cancel()
+            try:
+                async with asyncio.timeout(2.0):
+                    while not active.done():
+                        await asyncio.sleep(0.05)
+            except TimeoutError:
+                pass
+        return self.get_run(run_id)
+
     def _insert_message(
         self,
         conn: sqlite3.Connection,
@@ -407,7 +462,9 @@ class GatewayRuntime:
             if not self._ready(row):
                 continue  # 尚无会话的回传需等待后续用户输入建立会话。
             seen.add(task_id)
-            self._active[task_id] = asyncio.create_task(self._execute(row["run_id"]))
+            # 调用标识在调度时就登记：终止请求可能赶在协程第一次执行之前到达。
+            self._active_runs[task_id] = row["run_id"]
+            self._active[task_id] = asyncio.create_task(self._execute(task_id, row["run_id"]))
         self._kick_reviews()
 
     def _kick_reviews(self) -> None:
@@ -477,19 +534,31 @@ class GatewayRuntime:
         operation_id = json.loads(row["input"])["operation_id"]
         return self.confirmations.get_agent_result(operation_id) is not None
 
-    async def _execute(self, run_id: str) -> None:
-        row = self._row(run_id)
+    async def _execute(self, task_id: str, run_id: str) -> None:
+        # 整个方法体都在 try 里：读取记录失败也要走收尾，槽位不能留在这里。
+        row: dict | None = None
         try:
+            row = self._row(run_id)
             if not self._claim(run_id):
                 return
             self._schedule_memory_judgment(row)
-            try:
-                await self._stream(row)
-            except Exception as error:
+            await self._stream(row)
+        except asyncio.CancelledError:
+            # 协作式终止拿不到句柄或调用无响应时的直接取消：按用户中断落库。
+            # 应用关闭的取消不在这里处理，留给下次启动的恢复流程记录。
+            if run_id in self._user_interrupts:
+                self.events.publish(task_id, self._settle_interrupted(run_id))
+            raise
+        except Exception as error:
+            if row is None:
+                logging.getLogger(__name__).exception("调用记录不可读，无法登记失败：%s", run_id)
+            else:
                 self._fail(row, f"Agent 调用失败：{error}")
         finally:
             self._activities.pop(run_id, None)
-            self._active.pop(row["task_id"], None)
+            self._active.pop(task_id, None)
+            self._active_runs.pop(task_id, None)
+            self._user_interrupts.discard(run_id)
             self.kick()
 
     def _claim(self, run_id: str) -> bool:
@@ -633,20 +702,34 @@ class GatewayRuntime:
                 )
         elif kind == "activity":
             self._activities[row["run_id"]] = event["text"]
-        elif kind == "done":
-            self._activities.pop(row["run_id"], None)
-            self._finish(row["run_id"], "done", None)
-            self._schedule_retitle(row)
-            self._schedule_memory_review(row)
-        elif kind == "error":
-            message = self._with_last_step(row["run_id"], event["message"])
-            published["message"] = message
-            with session(self.path) as conn, write(conn):
-                repo.finish(conn, row["run_id"], "error", message, timestamp())
-                published["item_id"] = timeline.insert_error(
-                    conn, row["task_id"], row["run_id"], message
-                )
+        elif kind in FINISHED_KINDS:
+            if row["run_id"] in self._user_interrupts:
+                # 终止后的结束事件只是会话收尾：调用按用户中断落库，不按 done/error。
+                self._activities.pop(row["run_id"], None)
+                published = self._settle_interrupted(row["run_id"])
+            elif kind == "done":
+                self._activities.pop(row["run_id"], None)
+                self._finish(row["run_id"], "done", None)
+                self._schedule_retitle(row)
+                self._schedule_memory_review(row)
+            else:
+                message = self._with_last_step(row["run_id"], event["message"])
+                published["message"] = message
+                with session(self.path) as conn, write(conn):
+                    repo.finish(conn, row["run_id"], "error", message, timestamp())
+                    published["item_id"] = timeline.insert_error(
+                        conn, row["task_id"], row["run_id"], message
+                    )
         self.events.publish(row["task_id"], {"run_id": row["run_id"], **published})
+
+    def _settle_interrupted(self, run_id: str) -> dict:
+        """用户终止的收尾：调用记为中断，已流出的回答与工具记录留在时间线里。
+
+        终止是用户自己的动作，不再补一条程序提示；轮次状态与徽标已说明结果。
+        """
+        with session(self.path) as conn, write(conn):
+            repo.interrupt(conn, run_id, USER_INTERRUPTED_MESSAGE, timestamp())
+        return {"run_id": run_id, "type": "interrupted"}
 
     def _bind_session(self, task_id: str, sdk_session_id: str) -> None:
         self._sessions.bind_sdk_session(task_id, sdk_session_id)

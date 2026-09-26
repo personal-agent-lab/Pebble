@@ -634,6 +634,21 @@ def install_sdk(monkeypatch, gateway: QoderGateway, script):
         async def query(self, message):
             captured["message"] = message
 
+        async def interrupt(self):
+            captured["results"].append("interrupted")
+
+        async def get_context_usage(self):
+            # 与本地 CN CLI 同形状：占用比例、压缩阈值与类别分解（只有百分比）。
+            captured["context_queries"] = captured.get("context_queries", 0) + 1
+            return {
+                "contextWindow": {"usedPercentage": 42.0},
+                "autoCompact": {"enabled": False, "thresholdPercentage": 83.5},
+                "categories": [
+                    {"type": "system_prompt", "percentage": 1.2},
+                    {"type": "messages", "percentage": 40.8},
+                ],
+            }
+
         async def tool_call(self, item: ToolCall):
             url = captured["options"].mcp_servers[TOOL_SERVER_NAME]["url"]
             async with mcp_session(gateway.tool_server, url) as session:
@@ -905,6 +920,66 @@ def test_abnormal_end_becomes_error_event(settings, monkeypatch, script, reason)
 
     assert [event["type"] for event in events] == ["session", "error"]
     assert events[-1]["message"] == reason
+
+
+def test_interrupt_turn_reaches_the_active_client(settings, monkeypatch):
+    """终止请求送到本轮仍在会话中的客户端；轮次结束句柄摘除，再请求返回 False。"""
+    gateway = make_gateway(settings)
+    interrupted = asyncio.Event()
+    calls: list[str] = []
+
+    class InterruptibleClient:
+        def __init__(self, options):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def query(self, message):
+            pass
+
+        async def interrupt(self):
+            calls.append("interrupt")
+            interrupted.set()
+
+        async def receive_response(self):
+            yield SystemMessage("init", {"session_id": "session-1"})
+            await interrupted.wait()
+            yield result()
+
+    monkeypatch.setattr(agent_client, "QoderSDKClient", InterruptibleClient)
+
+    async def scenario():
+        turn = Turn(
+            kind=TurnKind.MESSAGE,
+            task_id="task-1",
+            sdk_session_id=None,
+            message="测试输入",
+            run_id="run-1",
+        )
+        events = []
+
+        async def consume():
+            async for event in gateway.stream_turn(turn):
+                events.append(event)
+
+        consumer = asyncio.create_task(consume())
+        async with asyncio.timeout(5):
+            while not gateway._interrupts:
+                await asyncio.sleep(0.01)
+            assert await gateway.interrupt_turn("run-1") is True
+            await consumer
+        return events
+
+    events = asyncio.run(scenario())
+
+    assert calls == ["interrupt"]
+    assert gateway._interrupts == {}
+    assert asyncio.run(gateway.interrupt_turn("run-1")) is False
+    assert [event["type"] for event in events] == ["session", "done"]
 
 
 # ---------- 工具边界 ----------

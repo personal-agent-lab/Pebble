@@ -284,6 +284,13 @@ async def retry_last_message(task_id: str, agent: Agent) -> dict:
     return agent.retry_last_message(task_id)
 
 
+@router.post("/tasks/{task_id}/interrupt", status_code=202, tags=["chat"])
+async def interrupt_task(task_id: str, tasks: Tasks, agent: Agent) -> dict:
+    """终止任务当前进行中的调用：调用记为中断，已流出的部分输出保留在时间线。"""
+    tasks.get_task(task_id)
+    return await agent.interrupt_task(task_id)
+
+
 @router.get("/tasks/{task_id}/attachments/{file_id}", tags=["chat"])
 def read_attachment(task_id: str, file_id: str, attachments: Attachments) -> FileResponse:
     with session() as conn:

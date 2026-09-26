@@ -71,6 +71,15 @@ class AgentProtocolError(Exception):
 class AgentGateway(Protocol):
     def stream_turn(self, turn: Turn) -> AsyncIterator[AgentEvent]: ...
 
+    async def interrupt_turn(self, run_id: str) -> bool:
+        """请求终止指定调用轮正在进行中的会话调用；返回是否有调用被终止。
+
+        终止是协作式的：会话收到请求后尽快收尾并给出结束事件，已流出的部分
+        输出保留。没有正在进行的调用（尚未建立或已结束）时返回 False，由调用
+        方决定兜底手段。
+        """
+        ...
+
     async def generate_title(self, text: str) -> str: ...
 
     async def generate_text(self, instructions: str, text: str) -> str: ...

@@ -94,7 +94,11 @@ def test_stream_records_materials_usage_and_result(settings, monkeypatch):
                 observed_turn(
                     task["task_id"],
                     "run-obs",
-                    materials=(Material("本轮材料", "照常进行"),),
+                    materials=(
+                        Material("本轮材料", "照常进行"),
+                        # dict 材料按渲染文本量计：len(dict) 数的是键的个数，会记成 2。
+                        Material("本轮触发", {"thread_id": "t-1", "message_id": "m-1"}),
+                    ),
                 )
             )
         )
@@ -103,7 +107,12 @@ def test_stream_records_materials_usage_and_result(settings, monkeypatch):
 
     row = summary("run-obs")
     materials = json.loads(row["materials"])
-    assert {"title": "本轮材料", "chars": 4} in materials["assembled"]
+    # 字符数是渲染后的文本长度（含标题行）：字符串与 dict 材料同一把尺子。
+    assert {"title": "本轮材料", "chars": len("## 本轮材料\n照常进行")} in materials["assembled"]
+    rendered = "## 本轮触发\n" + json.dumps(
+        {"thread_id": "t-1", "message_id": "m-1"}, ensure_ascii=False, indent=2
+    )
+    assert {"title": "本轮触发", "chars": len(rendered)} in materials["assembled"]
     sdk_result = json.loads(row["sdk_result"])
     assert sdk_result["duration_ms"] == 1200
     assert sdk_result["duration_api_ms"] == 800
@@ -145,6 +154,9 @@ def test_resumed_turn_records_context_and_manual_compact(settings, monkeypatch):
                 "contextWindow": {"usedPercentage": 85},
                 "autoCompact": {"enabled": False, "thresholdPercentage": 80},
             }
+
+        async def interrupt(self):
+            raise AssertionError("测试脚本不应触发终止")
 
         async def query(self, message):
             if message == "/compact":

@@ -117,7 +117,7 @@ SDK 内置工具同样只在用户对话轮开放：联网查询（`WebSearch`�
 | `not_editable` | 409 | `status` | 当前状态不允许修改 |
 | `unavailable` | 503 | — | 所需依赖未装配或不可用 |
 
-校验失败统一为 422，附 `errors[]`（`field`、`message`），不保存数据；存储或索引不可用统一为 503。各域的具体名称见对应契约；任务与对话接口另有 `task_active`、`task_id_conflict`、`retry_unavailable`、`session_conflict`（409）与 `invalid_model`、`invalid_attachment`、`invalid_history`（422）。调用当轮不可见的工具按不存在处理。
+校验失败统一为 422，附 `errors[]`（`field`、`message`），不保存数据；存储或索引不可用统一为 503。各域的具体名称见对应契约；任务与对话接口另有 `task_active`、`task_id_conflict`、`retry_unavailable`、`task_not_running`、`session_conflict`（409）与 `invalid_model`、`invalid_attachment`、`invalid_history`（422）。调用当轮不可见的工具按不存在处理。
 
 ## 4. 运行机制
 
@@ -126,6 +126,7 @@ SDK 内置工具同样只在用户对话轮开放：联网查询（`WebSearch`�
 - 任务在开始、等待用户、准备操作与取得结果时保存状态；等待用户时结束当前运行，回应或结果到达后继续，等待中的任务不阻塞其他任务。
 - 每个任务关联自己的 SDK 会话，同一会话的调用串行。任务创建时固定模型，主回答、恢复轮、记忆判断与回顾都用它；标题、资料说明与图片说明用轻量模型（第 6 节）。
 - 时间线按顺序保存：连续文字合并为一项，草稿工具成功时在当前位置插入卡片。卡片只存 `operation_id`，读取时物化最新版本与执行状态；卡片上的直接编辑与修改要求只新增版本，不移动卡片、不新增第二张；对话框里发出消息时，任务里待确认的草稿立即取消，Agent 再修改时另起一份新草稿并在当前位置插入新卡片。SSE 只传实时变化，断开不取消执行，结束后前端重读时间线对账。
+- 执行中的一轮可以由用户终止：调度先请会话协作式停下，会话没有可停的调用（这一轮还没建立句柄或调用已无响应）时取消该轮的协程；两种情况都按中断落库，已流出的文字与工具记录保留，时间线不补提示。终止只作用于这一轮，不撤销已确认执行的外部写，也不影响任务与其他轮次。
 - 附件整批校验，任一失败则整条消息不登记；按内部 ID 存在任务工作目录（`agent/workspaces/{task_id}/attachments/`）。图片同时作为 SDK 图片块传入，其他文件由 `Read` 读取，路径限制在该任务目录内。附件标为不可信输入；删除任务时一并删除。
 
 ### Approval / Confirmation
@@ -234,6 +235,7 @@ HTTP 提交操作、SSE 推送进度；Agent 用 `qodercn-agent-sdk` 的 `QoderS
 - 调度在 FastAPI lifespan 的事件循环里运行，每个任务按 `agent_runs` 插入顺序处理。正常关闭先等发送落盘，再取消 Agent 调用；重启时运行中的调用记为 interrupted，不自动重放。
 - `POST /api/tasks` 接受前端生成的 `task_id` 作为幂等键：重复提交返回已创建的任务（200）；该标识已被非用户任务占用时返回 409 `task_id_conflict`。
 - `POST /api/tasks/{id}/retry` 只接受最后一条 interrupted、且期间没有产生操作记录的用户消息轮：恢复为 pending，复用原输入与附件，清掉未完成的助手文字；只由用户点击触发。
+- `POST /api/tasks/{id}/interrupt` 终止该任务当前进行中的一轮：没有进行中的调用返回 409 `task_not_running`。调度给每个任务记住当前调用标识，终止请求据此找到这一轮；终止赶在协程取得运行权之前到达时只落库记中断，由协程读到状态后自行退出，避免取消一个还没开始执行的协程而留下卡住的槽位。
 - 首个调用成功后，用一次无工具的轻量模型调用生成不超过 12 字的标题，失败时保留原目标。
 - 表结构与迁移在 `server/db.py`，每个 schema 版本前的注释说明了当时的变化。
 - 触发源插孔（`create_app(mail_source=...)`）在恢复中断调用之后启动、关闭前停止。
@@ -243,6 +245,7 @@ HTTP 提交操作、SSE 推送进度；Agent 用 `qodercn-agent-sdk` 的 `QoderS
 ### Agent 装配
 
 - 每轮独立启动一次 qodercli 子进程，工作目录为该任务的 workspace；新会话标识经 init 事件交回并绑定到任务，之后用 `resume` 接续。
+- 会话句柄在该轮建立 SDK 客户端时登记、轮次结束即摘除；终止请求经它请会话协作式收尾，拿不到句柄说明这一轮不在会话里，由调度层兜底。
 - 工具经本进程 MCP 端点（server 名 `pebble`）暴露；本机设置一律关闭（`setting_sources=[]`、`strict_mcp_config`）。技能名单逐轮组装，当前为空。
 - 基础提示是域中立的助手定位，领域语义写在各工具的 description 里；本轮材料经 `SessionStart.additionalContext` 注入，不伪造用户消息。触发轮的消息与材料由触发域组装（邮件见 `tools/gmail/trigger.py`）。
 - 运行时未启用自动压缩：恢复轮前读取上下文使用率，达到阈值时先完成 `/compact` 再提交输入。
@@ -262,4 +265,5 @@ HTTP 提交操作、SSE 推送进度；Agent 用 `qodercn-agent-sdk` 的 `QoderS
 - 路由：`/tasks`、`/tasks/:taskId`、`/search`、`/kb`、`/kb/doc`、`/kb/new`、`/memory`、`/skills`。断点 900px，以上为侧栏布局，以下为底部 tab；设计 token 见 `src/styles/tokens.css`。
 - 新建任务不等服务端：前端生成任务标识后立即进入任务页（`src/pendingTasks.ts`）；失败时连接问题可原样重试（服务端按标识去重），输入被拒只能编辑后重发，消息不静默丢失。
 - 任务列表每 5 秒轮询（页面不可见时暂停）；任务页用 SSE，有操作处于 `sending` 时每 1.5 秒轮询执行结果，重连后重读时间线。
+- 任务页在服务端这一轮还在进行时，输入框右下角的发送按钮换成终止按钮（回车也不再发送，已写的内容留着）；请求未回来前按钮不可重复点，失败在输入框内说明，回不来的“没有可终止的调用”按最新状态对齐而不报错。
 - 草稿卡有未保存修改时不能确认，确认绑定卡片当前展示的版本；日程不渲染卡片；Skills 入口进入管理页。
