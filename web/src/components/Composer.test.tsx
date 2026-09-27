@@ -123,6 +123,76 @@ test("输入 / 列出技能，回车选中后挂成胶囊并随消息提交", as
   });
 });
 
+test("正文中间输入 / 也唤起列表，选中只移除 / 到光标的文本", async () => {
+  const onSubmit = vi.fn(async () => null);
+  render(<Composer placeholder="随心输入" sending={false} model="model-a"
+    skills={skills} onSubmit={onSubmit} />);
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+
+  await userEvent.type(textbox, "帮我 整理周报");
+  // 光标移回“帮我 ”之后，再输入 / 过滤词。
+  await userEvent.keyboard("{ArrowLeft}{ArrowLeft}{ArrowLeft}{ArrowLeft}");
+  await userEvent.keyboard("/周");
+  expect(screen.getByRole("listbox", { name: "技能列表" })).toBeTruthy();
+  expect(screen.queryByRole("option", { name: /会议纪要/ })).toBeNull();
+  await userEvent.keyboard("{Enter}");
+
+  expect(textbox.value).toBe("帮我 整理周报");
+  expect(screen.getByLabelText("移除技能 周报整理")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "发送" }));
+  expect(onSubmit).toHaveBeenCalledWith("帮我 整理周报", [], {
+    skills: [{ id: "weekly-report" }], excluded_skill_ids: [], auto_match: true,
+  });
+});
+
+test("`/` 紧跟在文字后面不唤起列表，网址、路径不受影响", async () => {
+  const onSubmit = vi.fn(async () => null);
+  render(<Composer placeholder="随心输入" sending={false} model="model-a"
+    skills={skills} onSubmit={onSubmit} />);
+  const textbox = screen.getByRole("textbox", { name: "消息" });
+
+  await userEvent.type(textbox, "see https://example.com/a");
+  expect(screen.queryByRole("listbox", { name: "技能列表" })).toBeNull();
+});
+
+test("列表跟随光标：移出 / 词收起，移回词尾恢复", async () => {
+  const onSubmit = vi.fn(async () => null);
+  render(<Composer placeholder="随心输入" sending={false} model="model-a"
+    skills={skills} onSubmit={onSubmit} />);
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+
+  await userEvent.type(textbox, "/周报");
+  expect(screen.getByRole("listbox", { name: "技能列表" })).toBeTruthy();
+
+  textbox.selectionStart = 0;
+  textbox.selectionEnd = 0;
+  fireEvent.keyUp(textbox);
+  expect(screen.queryByRole("listbox", { name: "技能列表" })).toBeNull();
+
+  textbox.selectionStart = 3;
+  textbox.selectionEnd = 3;
+  fireEvent.keyUp(textbox);
+  expect(screen.getByRole("listbox", { name: "技能列表" })).toBeTruthy();
+});
+
+test("输入法组合中的回车不选中也不发送，组合结束后恢复", async () => {
+  const onSubmit = vi.fn(async () => null);
+  render(<Composer placeholder="随心输入" sending={false} model="model-a"
+    skills={skills} onSubmit={onSubmit} />);
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+
+  await userEvent.type(textbox, "/周");
+  fireEvent.compositionStart(textbox);
+  await userEvent.keyboard("{Enter}");
+  expect(onSubmit).not.toHaveBeenCalled();
+  expect(screen.queryByLabelText("移除技能 周报整理")).toBeNull();
+
+  fireEvent.compositionEnd(textbox);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await userEvent.keyboard("{Enter}");
+  expect(onSubmit).toHaveBeenCalledWith("/周", [], DEFAULT_SKILL_SELECTION);
+});
+
 test("方向键移动高亮，Esc 收起列表", async () => {
   const onSubmit = vi.fn(async () => null);
   render(<Composer placeholder="随心输入" sending={false} model="model-a"

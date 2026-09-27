@@ -39,6 +39,12 @@ const formatSize = (size: number) => size >= 1024 * 1024
   ? `${(size / 1024 / 1024).toFixed(1)} MB`
   : `${Math.max(1, Math.round(size / 1024))} KB`;
 
+/** 取光标前文本里正在输入的 `/` 词：`/` 须在开头或空白之后（网址、路径不受影响），词一直延伸到光标。 */
+const matchSlashWord = (before: string) => {
+  const match = /(^|\s)\/([^\s]*)$/.exec(before);
+  return match === null ? null : { start: match.index + match[1].length, query: match[2] };
+};
+
 export default function Composer({
   placeholder, sending, running = false, stopping = false, onStop, model, models = [], modelLocked = false,
   modelsPending = false, catalogNotice = null, onModelChange,
@@ -50,13 +56,22 @@ export default function Composer({
     skills: [], excluded_skill_ids: [], auto_match: true,
   });
   const [error, setError] = useState<string | null>(null);
-  // `/` 列表用 Esc 收起后，同一条 `/` 文本不再自动弹出，继续输入才重新出现。
+  // `/` 列表用 Esc 收起后，同一个 `/` 词不再自动弹出；光标离开该词再回来才恢复。
   const [dismissed, setDismissed] = useState(false);
   const [highlight, setHighlight] = useState(0);
+  // 列表跟随光标：caret 记光标位置，拖选了多字（ranged）不算正在输入。
+  const [caret, setCaret] = useState(initialMessage.length);
+  const [ranged, setRanged] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const previews = useRef(new Map<File, string>());
+  // 输入法组合标志：Safari 提交组合的回车发出时 isComposing 已复位，
+  // 所以组合结束的复位推迟一个宏任务，让那一次回车仍被认成组合按键。
+  const composing = useRef(false);
+  const composingReset = useRef<number | null>(null);
+  // 选中技能后要把光标放回原词起点，等新文本写进 DOM 再设置。
+  const pendingCaret = useRef<number | null>(null);
 
   useEffect(() => () => {
     for (const url of previews.current.values()) URL.revokeObjectURL(url);
@@ -65,10 +80,16 @@ export default function Composer({
   // 预填的多行文字要撑开输入框，与手动输入时一致。
   useEffect(() => { if (initialMessage) resize(); }, []);
 
-  // `/` 后的文本就是过滤词，词变了高亮从头开始。
-  const slashQuery = /^\/(\S*)$/.exec(message)?.[1] ?? null;
+  const syncSelection = (node: HTMLTextAreaElement) => {
+    setCaret(node.selectionStart ?? node.value.length);
+    setRanged(node.selectionStart !== node.selectionEnd);
+  };
+
+  // 光标处的 `/` 词就是过滤词，词变了高亮从头开始。
+  const slashMatch = ranged ? null : matchSlashWord(message.slice(0, caret));
+  const slashQuery = slashMatch?.query ?? null;
   useEffect(() => { setHighlight(0); }, [slashQuery]);
-  // 收起是粘性的：点外面或 Esc 之后，同一段 `/` 文本继续输入不再弹出；清掉 `/` 重打才恢复。
+  // 收起是粘性的：点外面或 Esc 之后，同一个 `/` 词继续输入不再弹出；光标离开该词（或删掉它）再回来才恢复。
   useEffect(() => { if (slashQuery === null) setDismissed(false); }, [slashQuery]);
 
   const imageUrl = (file: File) => {
@@ -85,6 +106,20 @@ export default function Composer({
     node.style.height = "auto";
     node.style.height = `${Math.min(node.scrollHeight, 180)}px`;
   };
+
+  // 选中技能后按剩余文本重算高度，并把光标落到原词起点。
+  useEffect(() => {
+    const target = pendingCaret.current;
+    if (target === null) return;
+    pendingCaret.current = null;
+    const node = textarea.current;
+    if (node === null) return;
+    node.selectionStart = target;
+    node.selectionEnd = target;
+    setCaret(target);
+    setRanged(false);
+    resize();
+  });
 
   const addFiles = (selected: File[]) => {
     setError(null);
@@ -127,12 +162,13 @@ export default function Composer({
     return () => document.removeEventListener("mousedown", onPointerDown);
   }, [slashOpen]);
 
-  /** 选中即从输入框拿掉 `/` 文本，挂成胶囊；列表随文本清空自然收起。 */
+  /** 选中即从输入框拿掉光标处的 `/` 词（其余正文原样保留），挂成胶囊，光标落回原词起点。 */
   const pickSkill = (skill: SkillSummary) => {
+    if (slashMatch === null) return;
     setSelection((current) => ({ ...current, skills: [...current.skills, { id: skill.skill_id }] }));
-    setMessage("");
+    setMessage(message.slice(0, slashMatch.start) + message.slice(caret));
+    pendingCaret.current = slashMatch.start;
     setDismissed(false);
-    if (textarea.current !== null) textarea.current.style.height = "auto";
   };
 
   const removeSkill = (id: string) => setSelection((current) => ({
@@ -163,7 +199,23 @@ export default function Composer({
     if (failure != null) setError(failure.message);
   };
 
+  const onCompositionStart = () => {
+    // 新组合开始时取消上一次结束的延迟复位，连续组合不会把标志提前清掉。
+    if (composingReset.current !== null) window.clearTimeout(composingReset.current);
+    composingReset.current = null;
+    composing.current = true;
+  };
+
+  const onCompositionEnd = () => {
+    composingReset.current = window.setTimeout(() => {
+      composing.current = false;
+      composingReset.current = null;
+    }, 0);
+  };
+
   const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // 输入法组合中的按键（选词、提交组合用的回车）不拦截，避免误当列表导航或发送。
+    if (composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
     if (slashOpen) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -244,7 +296,11 @@ export default function Composer({
     </div>}
 
     <textarea ref={textarea} value={message} rows={1} placeholder={placeholder} aria-label="消息"
-      disabled={sending} onChange={(event) => { setMessage(event.target.value); resize(); }}
+      disabled={sending}
+      onChange={(event) => { setMessage(event.target.value); resize(); syncSelection(event.target); }}
+      onSelect={(event) => syncSelection(event.currentTarget)}
+      onKeyUp={(event) => syncSelection(event.currentTarget)}
+      onCompositionStart={onCompositionStart} onCompositionEnd={onCompositionEnd}
       onKeyDown={onComposerKeyDown} />
 
     {error !== null && <div className="composer-error" role="alert">{error}</div>}
