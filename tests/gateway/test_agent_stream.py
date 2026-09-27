@@ -798,7 +798,7 @@ def test_skill_review_bad_ref_without_retry_fails_window(settings, monkeypatch):
             "review-1", task_id, "复盘指令", "[E1] user: 纠正", "auto", {"E1": "item-1"},
         ))
     assert any(
-        isinstance(item, AgentProtocolError) and "无效轨迹依据" in str(item)
+        isinstance(item, AgentProtocolError) and "依据或用户可见理由无效，尚未纠正" in str(item)
         for item in error.value.exceptions
     )
 
