@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
+import AppShell from "./components/AppShell";
 import KbPage from "./pages/KbPage";
 import SearchPage from "./pages/SearchPage";
 import TaskListPage from "./pages/TaskListPage";
@@ -13,6 +14,8 @@ const KbDocumentPage = lazy(() => import("./pages/KbDocumentPage"));
 const MemoryPage = lazy(() => import("./pages/MemoryPage"));
 const SkillsPage = lazy(() => import("./pages/SkillsPage"));
 const loading = <div className="loading">读取中…</div>;
+// 懒加载页面尚未下载完时也保留侧栏与底部导航，避免整页短暂消失。
+const loadingPage = <AppShell>{loading}</AppShell>;
 
 /** PC 与手机共用同一套页面组件与路由，按屏幕尺寸调整布局。 */
 export default function App() {
@@ -25,10 +28,10 @@ export default function App() {
           <Route path="/tasks/:taskId" element={<TaskPage />} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/kb" element={<KbPage />} />
-          <Route path="/memory" element={<Suspense fallback={loading}><MemoryPage /></Suspense>} />
-          <Route path="/skills" element={<Suspense fallback={loading}><SkillsPage /></Suspense>} />
-          <Route path="/kb/doc" element={<Suspense fallback={loading}><KbDocumentPage /></Suspense>} />
-          <Route path="/kb/new" element={<Suspense fallback={loading}><KbDocumentPage creating /></Suspense>} />
+          <Route path="/memory" element={<Suspense fallback={loadingPage}><MemoryPage /></Suspense>} />
+          <Route path="/skills" element={<Suspense fallback={loadingPage}><SkillsPage /></Suspense>} />
+          <Route path="/kb/doc" element={<Suspense fallback={loadingPage}><KbDocumentPage /></Suspense>} />
+          <Route path="/kb/new" element={<Suspense fallback={loadingPage}><KbDocumentPage creating /></Suspense>} />
           <Route path="*" element={<Navigate to="/tasks" replace />} />
         </Routes>
       </SeenProvider>

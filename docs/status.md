@@ -10,6 +10,7 @@
 | Gmail：搜索与读取、入站附件、回复与新邮件草稿、确认发送与核实、新邮件增量检测 | 已实现 | `contracts/mail.md` |
 | iCloud Calendar：查询、冲突检查、直连创建与核实 | 已实现 | `contracts/calendar.md` |
 | 长期记忆：两份记忆文件、静默的每轮记忆判断、后台记忆回顾、管理页面 `/memory` | 已实现 | `memory-spec.md` §3、§5，`contracts/memory.md` |
+| Web 导航：资料正文、记忆与技能页面首次按需加载时保留侧栏和底部导航，加载提示只占内容区 | 已实现 | `v1-design.md` §10 |
 | 历史对话检索：`history_search`、`history_read`、搜索页 `/search` | 已实现 | `memory-spec.md` §4、§5.4，`contracts/memory.md` §3 |
 | 个人资料库 Phase 1–4：保存、读取、更新、历史，分节检索与按引用读取，删除、移动、恢复与用户改动跟随，资料目录，管理界面，任务归档 | 已实现 | `kb-spec.md`、`contracts/personal-kb.md` |
 | 个人资料库 Phase 6：正文图片与图片说明 | 已实现 | `contracts/personal-kb.md` §10 |
