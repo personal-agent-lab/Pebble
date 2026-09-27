@@ -27,7 +27,7 @@ type Props = {
   skills?: SkillSummary[];
   /** 模型目录读不到最新版本时的提示；沿用旧目录，不阻止发送。 */
   catalogNotice?: { message: string; retrying: boolean; onRetry: () => void } | null;
-  /** 最近一轮结束时的上下文读数；发送按钮左侧的标记按它显示。 */
+  /** 最近一轮结束时的上下文读数；未传入时不显示标记。 */
   context?: ContextReading | null;
   onSubmit: (message: string, files: File[], selection: SkillSelection) => Promise<ApiError | null>;
   /** 未发出的消息退回时预填的文字与附件。 */
@@ -48,7 +48,7 @@ const matchSlashWord = (before: string) => {
 export default function Composer({
   placeholder, sending, running = false, stopping = false, onStop, model, models = [], modelLocked = false,
   modelsPending = false, catalogNotice = null, onModelChange,
-  skills, context = null, onSubmit, initialMessage = "", initialFiles = [],
+  skills, context, onSubmit, initialMessage = "", initialFiles = [],
 }: Props) {
   const [message, setMessage] = useState(initialMessage);
   const [files, setFiles] = useState<File[]>(initialFiles);
@@ -327,7 +327,7 @@ export default function Composer({
         </span>
         : <ModelPicker value={model} models={models} disabled={sending}
           onChange={(value) => onModelChange?.(value)} />}
-      <ContextMeter reading={context} />
+      {context !== undefined && <ContextMeter reading={context} />}
       {running
         ? <button type="button" className="composer-stop" onClick={() => void stop()}
           disabled={stopping} aria-label={stopping ? "正在终止" : "终止"} title="终止这一轮">

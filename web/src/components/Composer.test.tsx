@@ -40,6 +40,7 @@ test("新任务可选模型并支持附件单独发送", async () => {
   const onSubmit = vi.fn(async () => null);
   const { container } = render(<Composer placeholder="随心输入" sending={false}
     model="model-a" models={models} onModelChange={onModelChange} onSubmit={onSubmit} />);
+  expect(container.querySelector(".context-meter")).toBeNull();
 
   await userEvent.click(screen.getByRole("button", { name: "选择模型" }));
   await userEvent.click(screen.getByRole("option", { name: /我的模型/ }));
