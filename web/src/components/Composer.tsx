@@ -23,7 +23,7 @@ type Props = {
   /** 目录尚未读到时不显示固定型号，免得先闪出型号标识。 */
   modelsPending?: boolean;
   onModelChange?: (model: string) => void;
-  /** 可选的技能目录；提供时输入 `/` 唤起技能列表，行内选中项随消息提交。 */
+  /** 可选的技能目录；提供时输入 `/` 或从「＋」菜单唤起同一列表。 */
   skills?: SkillSummary[];
   /** 模型目录读不到最新版本时的提示；沿用旧目录，不阻止发送。 */
   catalogNotice?: { message: string; retrying: boolean; onRetry: () => void } | null;
@@ -112,9 +112,13 @@ export default function Composer({
   // `/` 列表用 Esc 收起后，同一个 `/` 词不再自动弹出；光标离开该词再回来才恢复。
   const [dismissed, setDismissed] = useState(false);
   const [highlight, setHighlight] = useState(0);
+  const [addOpen, setAddOpen] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const editor = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
+  const addArea = useRef<HTMLDivElement>(null);
+  const addButton = useRef<HTMLButtonElement>(null);
+  const lastCaret = useRef<Range | null>(null);
   const previews = useRef(new Map<File, string>());
   // 输入法组合标志：Safari 提交组合的回车发出时 isComposing 已复位，
   // 所以组合结束的复位推迟一个宏任务，让那一次回车仍被认成组合按键。
@@ -129,6 +133,10 @@ export default function Composer({
   const syncEditor = () => {
     const node = editor.current;
     if (!node) return;
+    const selection = window.getSelection();
+    if (selection?.isCollapsed && node.contains(selection.anchorNode) && selection.rangeCount > 0) {
+      lastCaret.current = selection.getRangeAt(0).cloneRange();
+    }
     setMessage(editorText(node));
     setPickedIds(selectedSkillIds(node));
     setSlashQuery(caretWord(node)?.query ?? null);
@@ -186,6 +194,51 @@ export default function Composer({
     return () => document.removeEventListener("mousedown", onPointerDown);
   }, [slashOpen]);
 
+  useEffect(() => {
+    if (!addOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!addArea.current?.contains(event.target as Node)) setAddOpen(false);
+    };
+    const onEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setAddOpen(false);
+      addButton.current?.focus();
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onEscape);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onEscape);
+    };
+  }, [addOpen]);
+
+  /** 从「＋」入口在原光标处插入 `/`，交给现有技能列表处理。 */
+  const openSkillsFromAdd = () => {
+    setAddOpen(false);
+    const root = editor.current;
+    if (!root) return;
+    const saved = lastCaret.current;
+    const range = saved && root.contains(saved.startContainer) ? saved.cloneRange() : document.createRange();
+    if (!saved || !root.contains(saved.startContainer)) {
+      range.selectNodeContents(root);
+      range.collapse(false);
+    }
+    const before = range.cloneRange();
+    before.selectNodeContents(root);
+    before.setEnd(range.startContainer, range.startOffset);
+    const separator = before.toString() && !/\s$/.test(before.toString()) ? " " : "";
+    const slash = document.createTextNode(`${separator}/`);
+    range.insertNode(slash);
+    range.setStart(slash, slash.length);
+    range.collapse(true);
+    root.focus();
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    setDismissed(false);
+    syncEditor();
+  };
+
   /** 用行内不可编辑节点替换光标前的 `/` 词，光标继续留在它后面。 */
   const pickSkill = (skill: SkillSummary) => {
     const root = editor.current;
@@ -235,6 +288,8 @@ export default function Composer({
     setFiles([]);
     setPickedIds([]);
     if (editor.current) editor.current.replaceChildren();
+    lastCaret.current = null;
+    setAddOpen(false);
     setSlashQuery(null);
     setError(null);
   };
@@ -361,8 +416,21 @@ export default function Composer({
           addFiles(Array.from(event.target.files ?? []));
           event.target.value = "";
         }} />
-      <button type="button" className="composer-add" onClick={() => input.current?.click()}
-        disabled={sending} aria-label="添加图片或文件"><Plus size={18} weight="bold" /></button>
+      <div ref={addArea} className="composer-add-area">
+        <button ref={addButton} type="button" className="composer-add"
+          onClick={() => { setDismissed(true); setAddOpen((open) => !open); }}
+          disabled={sending} aria-label="添加内容" aria-haspopup="menu" aria-expanded={addOpen}>
+          <Plus size={18} weight="bold" />
+        </button>
+        {addOpen && <div className="composer-add-menu" role="menu" aria-label="添加内容">
+          {skills !== undefined && <button type="button" role="menuitem" className="composer-add-option"
+            onClick={openSkillsFromAdd}><Cube size={16} weight="duotone" />技能</button>}
+          <button type="button" role="menuitem" className="composer-add-option"
+            onClick={() => { setAddOpen(false); input.current?.click(); }}>
+            <FileText size={16} weight="regular" />文件
+          </button>
+        </div>}
+      </div>
 
       <div className="composer-spacer" />
       {catalogNotice !== null && !modelLocked && <span className="composer-catalog-notice">

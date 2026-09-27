@@ -135,6 +135,45 @@ test("输入 / 列出技能，回车选中后挂成胶囊并随消息提交", as
   });
 });
 
+test("加号菜单在原光标处打开同一技能列表，选中后保留正文并提交", async () => {
+  const onSubmit = vi.fn(async () => null);
+  render(<Composer placeholder="随心输入" sending={false} model="model-a"
+    skills={skills} onSubmit={onSubmit} />);
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLDivElement;
+  await userEvent.type(textbox, "帮我 整理周报");
+  setCursor(textbox, 3);
+
+  await userEvent.click(screen.getByRole("button", { name: "添加内容" }));
+  expect(screen.getByRole("menu", { name: "添加内容" })).toBeTruthy();
+  await userEvent.click(screen.getByRole("menuitem", { name: "技能" }));
+  expect(screen.getByRole("listbox", { name: "技能列表" })).toBeTruthy();
+  expect(textbox.textContent).toBe("帮我 /整理周报");
+
+  await userEvent.click(screen.getByRole("option", { name: /周报整理/ }));
+  expect(textbox.textContent).toContain("整理周报");
+  await userEvent.click(screen.getByRole("button", { name: "发送" }));
+  expect(onSubmit).toHaveBeenCalledWith("帮我 整理周报", [], {
+    skills: [{ id: "weekly-report" }], excluded_skill_ids: [], auto_match: true,
+  });
+});
+
+test("加号菜单保留文件上传入口，Esc 可关闭", async () => {
+  const onSubmit = vi.fn(async () => null);
+  const { container } = render(<Composer placeholder="随心输入" sending={false} model="model-a"
+    skills={skills} onSubmit={onSubmit} />);
+  const fileInput = container.querySelector("input[type=file]") as HTMLInputElement;
+  const openFile = vi.spyOn(fileInput, "click").mockImplementation(() => undefined);
+
+  await userEvent.click(screen.getByRole("button", { name: "添加内容" }));
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("menu", { name: "添加内容" })).toBeNull();
+
+  await userEvent.click(screen.getByRole("button", { name: "添加内容" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "文件" }));
+  expect(openFile).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("menu", { name: "添加内容" })).toBeNull();
+});
+
 test("行内 Skill 删除后不再随正文提交", async () => {
   const onSubmit = vi.fn(async () => null);
   render(<Composer placeholder="随心输入" sending={false} model="model-a"
