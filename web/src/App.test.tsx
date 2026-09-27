@@ -33,3 +33,29 @@ test("首次加载记忆页时保留导航外框", async () => {
   memoryModule.release();
   expect(await screen.findByRole("heading", { name: "记忆内容" })).toBeTruthy();
 });
+
+test("各滚动区独立显示滚动条并在停止后隐藏", () => {
+  render(<MemoryRouter initialEntries={["/tasks"]}><App /></MemoryRouter>);
+  const outer = document.createElement("div");
+  const inner = document.createElement("div");
+  outer.append(inner);
+  document.body.append(outer);
+  vi.useFakeTimers();
+  try {
+    outer.dispatchEvent(new Event("scroll"));
+    expect(outer.classList.contains("is-scrolling")).toBe(true);
+    expect(inner.classList.contains("is-scrolling")).toBe(false);
+
+    vi.advanceTimersByTime(400);
+    inner.dispatchEvent(new Event("scroll"));
+    vi.advanceTimersByTime(400);
+    expect(outer.classList.contains("is-scrolling")).toBe(false);
+    expect(inner.classList.contains("is-scrolling")).toBe(true);
+
+    vi.advanceTimersByTime(400);
+    expect(inner.classList.contains("is-scrolling")).toBe(false);
+  } finally {
+    vi.useRealTimers();
+    outer.remove();
+  }
+});

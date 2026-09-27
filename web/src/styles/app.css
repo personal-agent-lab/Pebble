@@ -5,6 +5,21 @@
 
 * { box-sizing: border-box; }
 
+/* 所有滚动区使用同一根细滚动条：滚动时显现，停下后隐藏。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+*.is-scrolling {
+  scrollbar-color: color-mix(in oklch, var(--color-fg) 30%, transparent) transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
+*.is-scrolling::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--color-fg) 30%, transparent);
+}
+
 /* 两块底色：侧栏是浅灰导航区，主区（顶栏、内容、输入区）是一整块白面。
    顶栏与输入区不再各自铺底，交界靠滚动区边缘的渐隐过渡，而不是色块拼接。 */
 body {
@@ -139,17 +154,7 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 /* 固定入口在上，任务区占满剩余高度；任务多了只在列表内滚动，品牌区、固定入口与连接状态始终留在原位。 */
 .sidebar-nav { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .nav-group { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-top: 16px; }
-/* 滚动条平时隐藏，悬停列表时才显现（不支持 scrollbar-color 的浏览器退回系统滚动条，
-   macOS 上本来就是悬浮式）。宽度始终保留，出现/消失不会挤压列表内容。 */
-.nav-group .nav-list {
-  flex: 1; min-height: 0; overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-}
-.nav-group .nav-list:hover,
-.nav-group .nav-list:focus-within {
-  scrollbar-color: color-mix(in oklch, var(--color-fg) 25%, transparent) transparent;
-}
+.nav-group .nav-list { flex: 1; min-height: 0; overflow-y: auto; }
 
 /* 分区标题：字号与资料、记忆等入口一致，颜色浅、不带图标，读起来是一组列表的标题而不是页面入口。
    它不可点，也就没有悬停与选中底色；右侧是待确认计数、搜索与发起新任务。 */
@@ -272,6 +277,8 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 @media (min-width: 900px) {
   .app { height: 100vh; height: 100dvh; overflow: hidden; }
   .content { overflow-y: auto; }
+  /* 对称滚动槽避免技能目录的内容栏左右跳动。 */
+  .skills-content { scrollbar-gutter: stable both-edges; }
   /* 滚动区上下边缘渐隐：内容滚进顶栏或输入框时淡出，不在同色面上切出一道硬边。
      渐隐落在内边距里，滚到顶或底时正文不受影响。 */
   .content, .feed {
@@ -1389,7 +1396,12 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 
 /* 管理页 */
 /* 技能目录与资料列表同栏同宽；一行的高度、内边距与时间列都由 .list 提供。 */
-.skills-content { display: flex; flex-direction: column; gap: var(--spacing-md); }
+/* 滚动容器铺满主区；每块内容单独居中，页头与列表仍沿同一条 800px 栏。 */
+.skills-content {
+  display: flex; flex-direction: column; align-items: center; gap: var(--spacing-md);
+  max-width: none;
+}
+.skills-content > * { width: 100%; max-width: var(--page-col); }
 .skills-tabs { display: flex; gap: var(--spacing-sm); }
 .skills-tab {
   border: 1px solid var(--color-border); border-radius: 999px; background: transparent;
