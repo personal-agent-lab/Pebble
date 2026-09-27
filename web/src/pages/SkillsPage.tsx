@@ -106,13 +106,6 @@ function actionLabel(change: SkillChangeView): string {
   return typeof change.payload.body === "string" ? "替换正文" : "修改正文";
 }
 
-/** 理由的第一句摆出来，其余折叠：审批先看结论，细节想看再展开。 */
-function splitReason(reason: string): { lead: string; rest: string } {
-  const end = reason.search(/[。！？]/);
-  if (end === -1) return { lead: reason, rest: "" };
-  return { lead: reason.slice(0, end + 1), rest: reason.slice(end + 1).trim() };
-}
-
 type DiffLine = { kind: "add" | "del" | "same"; text: string };
 
 /** 行级 LCS diff：变更载荷最多几百行，O(n·m) 的表够用。 */
@@ -213,7 +206,7 @@ export default function SkillsPage() {
         <div className="topbar-text">
           <h2>技能</h2>
         </div>
-        <button type="button" className="btn" onClick={() => setParams({ new: "1" })}>新建技能</button>
+        <button type="button" className="btn-secondary" onClick={() => setParams({ new: "1" })}>新建技能</button>
       </div>
       <div className="content skills-content">
         {error !== null && (
@@ -849,9 +842,7 @@ function SkillVersions({ skillId, revision, usage, busy, onFailure, onRestore }:
   );
 }
 
-/** 待审变更：复盘对用户手写技能（managed=false）只能提出建议，批准后才落盘。
-    卡片按“看变化”排版：标题一行说清对象与增删规模，理由只摆第一句，
-    正文用 diff 只亮增删——批准的是改动，不是校对一整份文档。 */
+/** 待审变更：复盘对用户手写技能（managed=false）只能提出建议，批准后才落盘。 */
 function ChangesPane({ changes, onChanged }: { changes: SkillChangeView[]; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [failure, setFailure] = useState<{ id: string; error: ApiError } | null>(null);
@@ -966,31 +957,31 @@ function ChangeCard({ change, known, failure, busy, onApprove, onReject }: {
   const adds = lines?.filter((line) => line.kind === "add").length ?? 0;
   const dels = lines?.filter((line) => line.kind === "del").length ?? 0;
 
-  const { lead, rest } = splitReason(change.reason);
-
   return (
     <div className="skill-change">
       <div className="skill-change-head">
         <strong>{name}</strong>
         <span className="skill-origin">{ACTOR_LABELS[change.actor] ?? change.actor}</span>
         <span className="skill-change-action">{actionLabel(change)}</span>
-        {(adds > 0 || dels > 0) && (
-          <span className="skill-change-stat" title={`新增 ${adds} 行，删除 ${dels} 行`}>
-            {adds > 0 && <span className="stat-add">+{adds}</span>}
-            {dels > 0 && <span className="stat-del">−{dels}</span>}
-          </span>
-        )}
       </div>
-      <p className="skill-change-reason">{lead}</p>
-      {rest !== "" && (
-        <details className="skill-change-more">
-          <summary>完整说明</summary>
-          <p>{rest}</p>
-        </details>
-      )}
+      <p className="skill-change-reason">{change.reason}</p>
       {change.action !== "remove_file" && (lines === null || lines.length > 0) && (lines === null
-        ? <pre className="skill-change-body">{newText}</pre>
-        : <DiffView lines={lines} />)}
+        ? <details className="skill-change-details">
+            <summary>查看建议正文</summary>
+            <pre className="skill-change-body">{newText}</pre>
+          </details>
+        : <details className="skill-change-details">
+            <summary>
+              查看完整差异
+              {(adds > 0 || dels > 0) && (
+                <span className="skill-change-stat" aria-label={`新增 ${adds} 行，删除 ${dels} 行`}>
+                  {adds > 0 && <span className="stat-add">+{adds}</span>}
+                  {dels > 0 && <span className="stat-del">−{dels}</span>}
+                </span>
+              )}
+            </summary>
+            <DiffView lines={lines} />
+          </details>)}
       {change.evidence_item_ids.length > 0 && (
         <div className="skill-change-evidence" title={change.evidence_item_ids.join("、")}>
           依据 {change.evidence_item_ids.length} 条任务记录

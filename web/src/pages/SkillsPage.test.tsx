@@ -342,7 +342,7 @@ test("待审变更可批准：带建议时的版本提交，驳回只传标识",
     action: "patch",
     payload: { body: "复盘建议的正文\n" },
     base_revision: "rev-1",
-    reason: "复盘发现步骤可以更稳",
+    reason: "复盘发现步骤可以更稳。后续验证有效。",
     evidence_item_ids: [],
     actor: "review",
     status: "proposed",
@@ -353,8 +353,14 @@ test("待审变更可批准：带建议时的版本提交，驳回只传标识",
   open();
 
   expect(await screen.findByText("待确认的技能变更")).toBeTruthy();
-  expect(screen.getByText("复盘发现步骤可以更稳")).toBeTruthy();
-  expect(screen.getByText("复盘建议的正文")).toBeTruthy();
+  expect(screen.getByText("复盘发现步骤可以更稳。后续验证有效。")).toBeTruthy();
+  expect(screen.queryByText("新增内容摘录")).toBeNull();
+  expect(screen.queryByText("完整说明")).toBeNull();
+  const diffToggle = await screen.findByText("查看完整差异");
+  const diff = diffToggle.closest("details") as HTMLDetailsElement;
+  expect(diff?.open).toBe(false);
+  await user.click(diffToggle);
+  expect(diff?.open).toBe(true);
 
   await user.click(screen.getByRole("button", { name: "批准" }));
   await waitFor(() => expect(approve).toHaveBeenCalledWith("chg_1", "rev-1"));
