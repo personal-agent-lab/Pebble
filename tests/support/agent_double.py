@@ -91,7 +91,8 @@ class FakeAgentGateway:
         return []
 
     async def review_skills(
-        self, review_id: str, anchor_task_id: str, instructions: str, material: str, model: str
+        self, review_id: str, anchor_task_id: str, instructions: str, material: str,
+        model: str, evidence_refs: dict[str, str],
     ) -> list[dict]:
         with self._lock:
             self.skill_review_calls.append(
@@ -101,6 +102,7 @@ class FakeAgentGateway:
                     "instructions": instructions,
                     "material": material,
                     "model": model,
+                    "evidence_refs": evidence_refs,
                 }
             )
         if self.skill_review_handler is not None:

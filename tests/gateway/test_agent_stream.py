@@ -29,7 +29,7 @@ from server.agent.toolset import ALLOWED_EFFECTS, ToolDeps, TurnKind, exposed_to
 from server.config import Settings
 from server.db import init_db
 from server.errors import DependencyUnavailableError
-from server.gateway.agent_contract import Turn, TurnAttachment
+from server.gateway.agent_contract import AgentProtocolError, Turn, TurnAttachment
 from server.gateway.runtime import execution_result_content
 from server.sessions.service import SessionStore
 from server.skills.service import SkillService
@@ -714,7 +714,7 @@ def test_skill_review_uses_only_staged_skill_tools(settings, monkeypatch):
                         "body": "步骤",
                     },
                     "reason": "用户纠正后成功",
-                    "evidence_item_ids": ["item-1"],
+                    "evidence_refs_to_use": ["E1"],
                 },
             ),
             ToolCall("gmail_send_message", {"to": ["someone@example.com"]}),
@@ -722,7 +722,9 @@ def test_skill_review_uses_only_staged_skill_tools(settings, monkeypatch):
         ],
     )
     candidates = asyncio.run(
-        gateway.review_skills("review-1", task_id, "复盘指令", "轨迹材料", "auto")
+        gateway.review_skills(
+            "review-1", task_id, "复盘指令", "轨迹材料", "auto", {"E1": "item-1"}
+        )
     )
     assert {name.rsplit("__", 1)[-1] for name in captured["options"].allowed_tools} == {
         "skill_list",
@@ -730,8 +732,75 @@ def test_skill_review_uses_only_staged_skill_tools(settings, monkeypatch):
         "skill_manage",
     }
     assert len(candidates) == 1
+    assert candidates[0]["evidence_item_ids"] == ["item-1"]
     assert skills.catalog() == []  # 会话只暂存候选；调度器在正常结束后应用。
     assert captured["results"][1].isError
+
+
+def test_skill_review_rejects_bad_ref_then_accepts_corrected_ref(settings, monkeypatch):
+    init_db()
+    skills = SkillService(settings.data_dir, settings.db_path)
+    gateway = QoderGateway(
+        ToolDeps(
+            drafts=MailDraftStore(), tasks=SessionStore(), gmail=MockGmailClient(),
+            skills=skills,
+        ),
+        ToolServer(), settings=configured(settings),
+    )
+    task_id = gateway.tasks_store.create_task("复盘")["task_id"]
+    base = {
+        "action": "create",
+        "payload": {
+            "skill_id": "learned", "name": "方法", "description": "可复用方法", "body": "步骤",
+        },
+        "reason": "用户纠正后成功",
+    }
+    captured = install_sdk(
+        monkeypatch, gateway,
+        [
+            ToolCall("skill_manage", {**base, "evidence_refs_to_use": ["E99"]}),
+            ToolCall("skill_manage", {**base, "evidence_refs_to_use": ["E1"]}),
+            result(),
+        ],
+    )
+    candidates = asyncio.run(gateway.review_skills(
+        "review-1", task_id, "复盘指令", "[E1] user: 纠正", "auto", {"E1": "item-1"},
+    ))
+    assert captured["results"][0].isError
+    assert not captured["results"][1].isError
+    assert len(candidates) == 1
+    assert candidates[0]["evidence_item_ids"] == ["item-1"]
+
+
+def test_skill_review_bad_ref_without_retry_fails_window(settings, monkeypatch):
+    init_db()
+    skills = SkillService(settings.data_dir, settings.db_path)
+    gateway = QoderGateway(
+        ToolDeps(
+            drafts=MailDraftStore(), tasks=SessionStore(), gmail=MockGmailClient(),
+            skills=skills,
+        ),
+        ToolServer(), settings=configured(settings),
+    )
+    task_id = gateway.tasks_store.create_task("复盘")["task_id"]
+    install_sdk(monkeypatch, gateway, [
+        ToolCall("skill_manage", {
+            "action": "create",
+            "payload": {
+                "skill_id": "learned", "name": "方法", "description": "可复用方法", "body": "步骤",
+            },
+            "reason": "用户纠正后成功", "evidence_refs_to_use": ["E99"],
+        }),
+        result(),
+    ])
+    with pytest.raises(ExceptionGroup, match="unhandled errors in a TaskGroup") as error:
+        asyncio.run(gateway.review_skills(
+            "review-1", task_id, "复盘指令", "[E1] user: 纠正", "auto", {"E1": "item-1"},
+        ))
+    assert any(
+        isinstance(item, AgentProtocolError) and "无效轨迹依据" in str(item)
+        for item in error.value.exceptions
+    )
 
 
 ADD_CHINESE = {"action": "append", "target": "user", "text": "默认使用中文"}

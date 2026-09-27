@@ -23,7 +23,7 @@ REVIEW_INSTRUCTIONS = (
     "优先修改本窗口实际加载且相关的技能，其次修改其他相关技能，再考虑补充参考资料；"
     "仅当没有相关技能时创建覆盖一类任务的新技能。修改前用 skill_view 重新读取当前正文及版本。"
     "不要保存暂时性故障、未解决的失败、一次性经过、消息原文或具体参数。"
-    "每条修改调用 skill_manage，说明原因并提供轨迹中的 item_id；"
+    "每条修改调用 skill_manage，说明原因并提供轨迹条目前的短编号；"
     "没有可靠经验时不调用工具，直接回答‘无’。"
     "只能使用本会话提供的技能工具，不能执行外部操作。"
 )
@@ -32,8 +32,19 @@ MAX_REVIEW_CHARS = 100_000
 
 class SkillReviewGateway(Protocol):
     async def review_skills(
-        self, review_id: str, anchor_task_id: str, instructions: str, material: str, model: str
+        self, review_id: str, anchor_task_id: str, instructions: str, material: str,
+        model: str, evidence_refs: dict[str, str],
     ) -> list[dict]: ...
+
+
+def resolve_evidence_refs(refs: list[str], available: dict[str, str]) -> list[str]:
+    """只把本次复盘窗口的短编号转换为真实轨迹 ID。"""
+    if not refs:
+        raise ValueError("复盘变更必须提供轨迹依据编号")
+    unknown = [ref for ref in refs if ref not in available]
+    if unknown:
+        raise ValueError(f"无效轨迹依据编号：{', '.join(unknown)}；请使用轨迹条目前的编号")
+    return list(dict.fromkeys(available[ref] for ref in refs))
 
 
 def record_completed_turn(conn, run_id: str, task_id: str) -> None:
@@ -183,7 +194,7 @@ class SkillReviewScheduler:
                 (error, maximum, timestamp(), review_id),
             )
 
-    def _material(self, row: dict) -> tuple[str, int]:
+    def _material(self, row: dict) -> tuple[str, int, dict[str, str]]:
         with session(self.path) as conn:
             turns = conn.execute(
                 "SELECT t.seq,t.run_id,t.task_id,r.status,r.started_at,r.finished_at,"
@@ -192,6 +203,7 @@ class SkillReviewScheduler:
                 (row["from_seq"], row["through_seq"]),
             ).fetchall()
             blocks: list[str] = []
+            evidence_refs: dict[str, str] = {}
             through = row["from_seq"]
             for turn in turns:
                 items = conn.execute(
@@ -199,21 +211,26 @@ class SkillReviewScheduler:
                     (turn["run_id"],),
                 ).fetchall()
                 lines = [f"轮次 {turn['seq']} task={turn['task_id']} status={turn['status']}"]
+                block_refs: dict[str, str] = {}
                 for item in items:
+                    ref = f"E{len(evidence_refs) + len(block_refs) + 1}"
                     if item["kind"] == "tool":
                         lines.append(
-                            f"[{item['item_id']}] tool={item['tool_name']} "
+                            f"[{ref}] tool={item['tool_name']} "
                             f"status={item['tool_status']} "
                             f"arguments={item['tool_arguments']} result={item['tool_result']}"
                         )
+                        block_refs[ref] = item["item_id"]
                     elif item["kind"] in ("text", "notice"):
                         lines.append(
-                            f"[{item['item_id']}] {item['role'] or item['kind']}: {item['text']}"
+                            f"[{ref}] {item['role'] or item['kind']}: {item['text']}"
                         )
+                        block_refs[ref] = item["item_id"]
                 block = "\n".join(lines)
                 if blocks and len("\n".join(blocks)) + len(block) > MAX_REVIEW_CHARS:
                     break
                 blocks.append(block)
+                evidence_refs.update(block_refs)
                 through = turn["seq"]
             loads = conn.execute(
                 "SELECT l.skill_id,l.revision,l.source FROM skill_loads l "
@@ -232,14 +249,14 @@ class SkillReviewScheduler:
             + "\n执行轨迹：\n"
             + "\n\n".join(blocks)
         )
-        return material, through
+        return material, through, evidence_refs
 
     async def run(self, review_id: str, gateway: SkillReviewGateway) -> None:
         row = self.get(review_id)
         if row["status"] == "applying":
             self._apply_candidates(review_id)
             return
-        material, through = self._material(row)
+        material, through, evidence_refs = self._material(row)
         if through == row["from_seq"]:
             self._finish(review_id, through, "没有可审阅的轨迹")
             return
@@ -249,7 +266,8 @@ class SkillReviewScheduler:
             ).fetchone()
         model = task["model"] if task else "auto"
         candidates = await gateway.review_skills(
-            review_id, row["anchor_task_id"], REVIEW_INSTRUCTIONS, material, model
+            review_id, row["anchor_task_id"], REVIEW_INSTRUCTIONS, material, model,
+            evidence_refs,
         )
         with session(self.path) as conn, write(conn):
             for ordinal, candidate in enumerate(candidates):
@@ -327,10 +345,17 @@ class SkillReviewScheduler:
                     (status, error, change_id, review_id, item["ordinal"]),
                 )
         with session(self.path) as conn:
-            count = conn.execute(
-                "SELECT COUNT(*) FROM skill_review_candidates WHERE review_id=?", (review_id,)
-            ).fetchone()[0]
-        self._finish(review_id, row["through_seq"], "复盘完成" if count else "无值得保存的经验")
+            statuses = [
+                item[0] for item in conn.execute(
+                    "SELECT status FROM skill_review_candidates WHERE review_id=?", (review_id,)
+                )
+            ]
+        failed = sum(status in ("failed", "conflict") for status in statuses)
+        summary = (
+            f"复盘完成，{failed} 条候选未应用" if failed else
+            "复盘完成" if statuses else "无值得保存的经验"
+        )
+        self._finish(review_id, row["through_seq"], summary)
 
     def _finish(self, review_id: str, through: int, summary: str) -> None:
         with session(self.path) as conn, write(conn):

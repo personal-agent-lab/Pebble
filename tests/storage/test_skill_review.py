@@ -7,7 +7,7 @@ import pytest
 
 from server.db import init_db, session, write
 from server.skills.models import ChangeAction, ChangeActor
-from server.skills.review import SkillReviewScheduler, record_completed_turn
+from server.skills.review import SkillReviewScheduler, record_completed_turn, resolve_evidence_refs
 from server.skills.service import ChangeRequest, SkillService
 
 pytestmark = pytest.mark.anyio
@@ -55,8 +55,10 @@ class FakeReview:
         self.error = error
         self.calls = []
 
-    async def review_skills(self, review_id, anchor_task_id, instructions, material, model):
-        self.calls.append((review_id, material))
+    async def review_skills(
+        self, review_id, anchor_task_id, instructions, material, model, evidence_refs
+    ):
+        self.calls.append((review_id, material, evidence_refs))
         if self.error:
             raise self.error
         return self.candidates
@@ -73,8 +75,14 @@ async def test_cross_task_trigger_and_empty_review_advances(pair, settings):
     scheduler.claim(job["id"])
     gateway = FakeReview()
     await scheduler.run(job["id"], gateway)
-    assert "item-1" in gateway.calls[0][1]
-    assert "item-2" in gateway.calls[0][1]
+    assert "[E1]" in gateway.calls[0][1]
+    assert "[E2]" in gateway.calls[0][1]
+    assert gateway.calls[0][2] == {"E1": "item-1", "E2": "item-2"}
+    assert resolve_evidence_refs(["E2", "E1", "E2"], gateway.calls[0][2]) == [
+        "item-2", "item-1"
+    ]
+    with pytest.raises(ValueError, match="无效轨迹依据编号"):
+        resolve_evidence_refs(["E3"], gateway.calls[0][2])
     assert scheduler.get(job["id"])["status"] == "completed"
     add_done(settings.db_path, 3)
     assert scheduler.enqueue_if_due() is None
@@ -179,6 +187,7 @@ async def test_user_skill_gets_proposal_and_out_of_window_evidence_is_rejected(p
             "SELECT status FROM skill_review_candidates WHERE review_id=?", (next_job["id"],)
         ).fetchone()[0]
     assert status == "failed"
+    assert scheduler.get(next_job["id"])["result_summary"] == "复盘完成，1 条候选未应用"
 
 
 async def test_applying_resume_does_not_duplicate_change(pair, settings):
