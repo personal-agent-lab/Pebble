@@ -139,7 +139,17 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 /* 固定入口在上，任务区占满剩余高度；任务多了只在列表内滚动，品牌区、固定入口与连接状态始终留在原位。 */
 .sidebar-nav { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .nav-group { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-top: 16px; }
-.nav-group .nav-list { flex: 1; min-height: 0; overflow-y: auto; }
+/* 滚动条平时隐藏，悬停列表时才显现（不支持 scrollbar-color 的浏览器退回系统滚动条，
+   macOS 上本来就是悬浮式）。宽度始终保留，出现/消失不会挤压列表内容。 */
+.nav-group .nav-list {
+  flex: 1; min-height: 0; overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.nav-group .nav-list:hover,
+.nav-group .nav-list:focus-within {
+  scrollbar-color: color-mix(in oklch, var(--color-fg) 25%, transparent) transparent;
+}
 
 /* 分区标题：字号与资料、记忆等入口一致，颜色浅、不带图标，读起来是一组列表的标题而不是页面入口。
    它不可点，也就没有悬停与选中底色；右侧是待确认计数、搜索与发起新任务。 */
