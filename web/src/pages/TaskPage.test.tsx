@@ -140,7 +140,7 @@ test("输入被拒绝不提供重试，编辑后重发把文字放回首页输�
   await user.click(screen.getByRole("button", { name: "编辑后重发" }));
 
   await waitFor(() => expect(
-    (screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement).value,
+    screen.getByRole("textbox", { name: "消息" }).textContent,
   ).toBe("解释 JIT"));
   expect(getTask).not.toHaveBeenCalled();
 });
@@ -152,15 +152,15 @@ test("离开后才失败的消息不冲掉首页正在写的内容，由用户�
   const user = await send("解释 JIT");
   await screen.findByText("正在发送…");
   await user.click(screen.getByRole("button", { name: "返回任务列表" }));
-  const input = await screen.findByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+  const input = await screen.findByRole("textbox", { name: "消息" }) as HTMLDivElement;
   await user.type(input, "新的问题");
 
   pending.reject(new ApiError("offline", "无法连接 Pebble 服务", 0));
   expect(await screen.findByText("上一条消息没有发出")).toBeTruthy();
-  expect(input.value).toBe("新的问题");
+  expect(input.textContent).toBe("新的问题");
 
   await user.click(screen.getByRole("button", { name: "放回输入框" }));
   await waitFor(() => expect(
-    (screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement).value,
+    screen.getByRole("textbox", { name: "消息" }).textContent,
   ).toBe("解释 JIT"));
 });

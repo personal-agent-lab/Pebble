@@ -25,6 +25,17 @@ const skills: SkillSummary[] = [
   },
 ];
 
+const setCursor = (textbox: HTMLElement, offset: number) => {
+  const text = Array.from(textbox.childNodes).find((node) => node.nodeType === Node.TEXT_NODE);
+  if (!text) throw new Error("没有正文文本节点");
+  const range = document.createRange();
+  range.setStart(text, offset);
+  range.collapse(true);
+  window.getSelection()?.removeAllRanges();
+  window.getSelection()?.addRange(range);
+  fireEvent.keyUp(textbox);
+};
+
 beforeEach(() => {
   vi.stubGlobal("URL", {
     createObjectURL: vi.fn(() => "blob:preview"),
@@ -108,14 +119,14 @@ test("输入 / 列出技能，回车选中后挂成胶囊并随消息提交", as
   const onSubmit = vi.fn(async () => null);
   render(<Composer placeholder="随心输入" sending={false} model="model-a"
     skills={skills} onSubmit={onSubmit} />);
-  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLDivElement;
 
   await userEvent.type(textbox, "/周");
   expect(screen.getByRole("listbox", { name: "技能列表" })).toBeTruthy();
   expect(screen.queryByRole("option", { name: /会议纪要/ })).toBeNull();
   await userEvent.keyboard("{Enter}");
 
-  expect(textbox.value).toBe("");
+  expect(textbox.querySelector("[data-skill-id]")?.getAttribute("data-skill-id")).toBe("weekly-report");
   expect(screen.getByLabelText("移除技能 周报整理")).toBeTruthy();
   await userEvent.type(textbox, "按技能整理");
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
@@ -124,11 +135,26 @@ test("输入 / 列出技能，回车选中后挂成胶囊并随消息提交", as
   });
 });
 
+test("行内 Skill 删除后不再随正文提交", async () => {
+  const onSubmit = vi.fn(async () => null);
+  render(<Composer placeholder="随心输入" sending={false} model="model-a"
+    skills={skills} onSubmit={onSubmit} />);
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLDivElement;
+  await userEvent.type(textbox, "/周{Enter}写一段话");
+  const mention = textbox.querySelector<HTMLElement>("[data-skill-id]");
+  expect(mention?.nextSibling?.textContent).toBe("写一段话");
+
+  mention?.remove();
+  fireEvent.input(textbox);
+  await userEvent.click(screen.getByRole("button", { name: "发送" }));
+  expect(onSubmit).toHaveBeenCalledWith("写一段话", [], DEFAULT_SKILL_SELECTION);
+});
+
 test("正文中间输入 / 也唤起列表，选中只移除 / 到光标的文本", async () => {
   const onSubmit = vi.fn(async () => null);
   render(<Composer placeholder="随心输入" sending={false} model="model-a"
     skills={skills} onSubmit={onSubmit} />);
-  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLDivElement;
 
   await userEvent.type(textbox, "帮我 整理周报");
   // 光标移回“帮我 ”之后，再输入 / 过滤词。
@@ -138,7 +164,9 @@ test("正文中间输入 / 也唤起列表，选中只移除 / 到光标的文�
   expect(screen.queryByRole("option", { name: /会议纪要/ })).toBeNull();
   await userEvent.keyboard("{Enter}");
 
-  expect(textbox.value).toBe("帮我 整理周报");
+  expect(textbox.querySelector("[data-skill-id]")?.getAttribute("data-skill-id")).toBe("weekly-report");
+  expect(textbox.firstChild?.textContent).toBe("帮我 ");
+  expect(textbox.lastChild?.textContent).toBe("整理周报");
   expect(screen.getByLabelText("移除技能 周报整理")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
   expect(onSubmit).toHaveBeenCalledWith("帮我 整理周报", [], {
@@ -160,19 +188,15 @@ test("列表跟随光标：移出 / 词收起，移回词尾恢复", async () =>
   const onSubmit = vi.fn(async () => null);
   render(<Composer placeholder="随心输入" sending={false} model="model-a"
     skills={skills} onSubmit={onSubmit} />);
-  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLDivElement;
 
   await userEvent.type(textbox, "/周报");
   expect(screen.getByRole("listbox", { name: "技能列表" })).toBeTruthy();
 
-  textbox.selectionStart = 0;
-  textbox.selectionEnd = 0;
-  fireEvent.keyUp(textbox);
+  setCursor(textbox, 0);
   expect(screen.queryByRole("listbox", { name: "技能列表" })).toBeNull();
 
-  textbox.selectionStart = 3;
-  textbox.selectionEnd = 3;
-  fireEvent.keyUp(textbox);
+  setCursor(textbox, 3);
   expect(screen.getByRole("listbox", { name: "技能列表" })).toBeTruthy();
 });
 
@@ -180,7 +204,7 @@ test("输入法组合中的回车不选中也不发送，组合结束后恢复",
   const onSubmit = vi.fn(async () => null);
   render(<Composer placeholder="随心输入" sending={false} model="model-a"
     skills={skills} onSubmit={onSubmit} />);
-  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLDivElement;
 
   await userEvent.type(textbox, "/周");
   fireEvent.compositionStart(textbox);
@@ -198,7 +222,7 @@ test("方向键移动高亮，Esc 收起列表", async () => {
   const onSubmit = vi.fn(async () => null);
   render(<Composer placeholder="随心输入" sending={false} model="model-a"
     skills={skills} onSubmit={onSubmit} />);
-  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLDivElement;
 
   await userEvent.type(textbox, "/");
   expect(screen.getByRole("option", { selected: true }).textContent).toContain("周报整理");
@@ -206,7 +230,7 @@ test("方向键移动高亮，Esc 收起列表", async () => {
   expect(screen.getByRole("option", { selected: true }).textContent).toContain("会议纪要");
   await userEvent.keyboard("{Escape}");
   expect(screen.queryByRole("listbox", { name: "技能列表" })).toBeNull();
-  expect(textbox.value).toBe("/");
+  expect(textbox.textContent).toBe("/");
 });
 
 test("鼠标悬停把高亮带到悬停项，回车选中的就是它", async () => {
@@ -226,21 +250,21 @@ test("无匹配时回车只收起列表，不当正文发出", async () => {
   const onSubmit = vi.fn(async () => null);
   render(<Composer placeholder="随心输入" sending={false} model="model-a"
     skills={skills} onSubmit={onSubmit} />);
-  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLDivElement;
 
   await userEvent.type(textbox, "/zzz");
   expect(screen.getByText("无匹配技能")).toBeTruthy();
   await userEvent.keyboard("{Enter}");
   expect(screen.queryByRole("listbox", { name: "技能列表" })).toBeNull();
   expect(onSubmit).not.toHaveBeenCalled();
-  expect(textbox.value).toBe("/zzz");
+  expect(textbox.textContent).toBe("/zzz");
 });
 
 test("点击列表以外收起后，同一段 / 文本继续输入不再弹出；清掉重打才恢复", async () => {
   const onSubmit = vi.fn(async () => null);
   render(<Composer placeholder="随心输入" sending={false} model="model-a"
     skills={skills} onSubmit={onSubmit} />);
-  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLDivElement;
 
   await userEvent.type(textbox, "/");
   expect(screen.getByRole("listbox", { name: "技能列表" })).toBeTruthy();
@@ -262,11 +286,11 @@ test("点击选项选中；已选技能不再进列表，胶囊可移除", async
   const onSubmit = vi.fn(async () => null);
   render(<Composer placeholder="随心输入" sending={false} model="model-a"
     skills={skills} onSubmit={onSubmit} />);
-  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLDivElement;
 
   await userEvent.type(textbox, "/");
   await userEvent.click(screen.getByRole("option", { name: /周报整理/ }));
-  expect(textbox.value).toBe("");
+  expect(textbox.querySelector("[data-skill-id]")?.getAttribute("data-skill-id")).toBe("weekly-report");
 
   await userEvent.type(textbox, "/");
   expect(screen.queryByRole("option", { name: /周报整理/ })).toBeNull();
@@ -286,9 +310,9 @@ test("目录为空时提示去技能页创建；未提供目录时 / 按普通�
   expect(screen.getByText(/还没有启用中的技能/)).toBeTruthy();
 
   rerender(<Composer placeholder="随心输入" sending={false} model="model-a" onSubmit={onSubmit} />);
-  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLDivElement;
   await userEvent.type(textbox, "{Backspace}/abc");
-  expect(textbox.value).toBe("/abc");
+  expect(textbox.textContent).toBe("/abc");
   expect(screen.queryByRole("listbox", { name: "技能列表" })).toBeNull();
 });
 
@@ -299,14 +323,14 @@ test("执行中的轮次把发送按钮换成终止：可点、回车不发送�
   const { rerender } = render(<Composer {...props} running />);
 
   expect(screen.queryByRole("button", { name: "发送" })).toBeNull();
-  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement;
+  const textbox = screen.getByRole("textbox", { name: "消息" }) as HTMLDivElement;
   await userEvent.type(textbox, "接着说");
   await userEvent.keyboard("{Enter}");
   expect(onSubmit).not.toHaveBeenCalled();
 
   await userEvent.click(screen.getByRole("button", { name: "终止" }));
   expect(onStop).toHaveBeenCalledTimes(1);
-  expect(textbox.value).toBe("接着说");
+  expect(textbox.textContent).toBe("接着说");
 
   // 终止请求还在收尾：按钮不可再点，避免重复请求。
   rerender(<Composer {...props} running stopping />);

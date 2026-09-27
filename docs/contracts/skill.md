@@ -164,7 +164,7 @@ archive_skill(skill_id) / restore_skill(skill_id)
 | `GET /api/tasks/{task_id}/skill-usage` | — | 本任务加载记录：`skill_id`、`revision`、`source`、轮次 |
 | `GET/PUT /api/skills/settings`（维护阶段） | `review_interval`、`review_enabled`、`stale_days` | 复盘与陈旧配置 |
 
-管理页 `/skills`：目录浏览、按 `SKILL.md` 与 `references/`、`templates/` 的层次浏览，正文与附件都可直接编辑、附件可增删、保存时一次提交（同属一个 `revision`）、创建、启停归档恢复、`managed` 切换、历史版本与恢复、待审变更（差异对比、依据条目跳转原对话）、使用统计。发起与续聊的输入框在光标处输入 `/` 唤起技能列表（`/` 须在开头或空白之后，过滤词取 `/` 到光标，按名称与标识过滤、键盘可选），选中项以胶囊展示并随消息提交 `selection`，正文只移除 `/` 到光标的一段；界面只设置手动项，`excluded_skill_ids` 与 `auto_match` 恒为默认值。字段错误 422；版本冲突 409 附 `current_revision`；不存在 404。
+管理页 `/skills`：目录浏览、按 `SKILL.md` 与 `references/`、`templates/` 的层次浏览，正文与附件都可直接编辑、附件可增删、保存时一次提交（同属一个 `revision`）、创建、启停归档恢复、`managed` 切换、历史版本与恢复、待审变更（差异对比、依据条目跳转原对话）、使用统计。发起与续聊的输入框在光标处输入 `/` 唤起技能列表（`/` 须在开头或空白之后，过滤词取 `/` 到光标，按名称与标识过滤、键盘可选），选中项作为不可编辑的行内 Skill 节点插在原词位置，并随消息提交 `selection`；提交的正文只移除 `/` 到光标的一段，节点本身不作为正文发送；界面只设置手动项，`excluded_skill_ids` 与 `auto_match` 恒为默认值。字段错误 422；版本冲突 409 附 `current_revision`；不存在 404。
 
 ## 11. 错误
 

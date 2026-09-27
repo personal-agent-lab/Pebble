@@ -23,7 +23,7 @@ type Props = {
   /** 目录尚未读到时不显示固定型号，免得先闪出型号标识。 */
   modelsPending?: boolean;
   onModelChange?: (model: string) => void;
-  /** 可选的技能目录；提供时输入 `/` 唤起技能列表，选中项随每条消息提交并重置。 */
+  /** 可选的技能目录；提供时输入 `/` 唤起技能列表，行内选中项随消息提交。 */
   skills?: SkillSummary[];
   /** 模型目录读不到最新版本时的提示；沿用旧目录，不阻止发送。 */
   catalogNotice?: { message: string; retrying: boolean; onRetry: () => void } | null;
@@ -45,6 +45,61 @@ const matchSlashWord = (before: string) => {
   return match === null ? null : { start: match.index + match[1].length, query: match[2] };
 };
 
+/** 编辑区只接受纯文本与不可编辑的 Skill 节点；提交的正文不包含节点标签。 */
+const editorText = (root: HTMLElement): string => {
+  let text = "";
+  for (const child of root.childNodes) {
+    if (child.nodeType === Node.TEXT_NODE) text += child.textContent ?? "";
+    else if (child instanceof HTMLElement && child.dataset.skillId) continue;
+    else if (child instanceof HTMLBRElement) text += "\n";
+    else if (child instanceof HTMLElement) {
+      text += editorText(child);
+      if (child.tagName === "DIV" && child.nextSibling) text += "\n";
+    }
+  }
+  return text;
+};
+
+const selectedSkillIds = (root: HTMLElement): string[] =>
+  Array.from(root.querySelectorAll<HTMLElement>("[data-skill-id]"), (node) => node.dataset.skillId!);
+
+const caretWord = (root: HTMLElement) => {
+  const selection = window.getSelection();
+  if (!selection || !selection.isCollapsed || !root.contains(selection.anchorNode)) return null;
+  const node = selection.anchorNode;
+  if (node?.nodeType !== Node.TEXT_NODE || node.parentElement?.closest("[data-skill-id]")) return null;
+  const offset = selection.anchorOffset;
+  const match = matchSlashWord((node.textContent ?? "").slice(0, offset));
+  return match === null ? null : { node, start: match.start, end: offset, query: match.query };
+};
+
+const makeSkillNode = (skill: SkillSummary) => {
+  const node = document.createElement("span");
+  node.className = "composer-inline-skill";
+  node.contentEditable = "false";
+  node.dataset.skillId = skill.skill_id;
+  node.setAttribute("aria-label", `技能 ${skill.name}`);
+  node.title = skill.description;
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.setAttribute("viewBox", "0 0 256 256");
+  icon.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "currentColor");
+  path.setAttribute("d", "M248 152a8 8 0 0 1-8 8h-16v16a8 8 0 0 1-16 0v-16h-16a8 8 0 0 1 0-16h16v-16a8 8 0 0 1 16 0v16h16a8 8 0 0 1 8 8ZM56 72h16v16a8 8 0 0 0 16 0V72h16a8 8 0 0 0 0-16H88V40a8 8 0 0 0-16 0v16H56a8 8 0 0 0 0 16Zm128 120h-8v-8a8 8 0 0 0-16 0v8h-8a8 8 0 0 0 0 16h8v8a8 8 0 0 0 16 0v-8h8a8 8 0 0 0 0-16ZM219.31 80 80 219.31a16 16 0 0 1-22.62 0l-20.7-20.68a16 16 0 0 1 0-22.63L176 36.69a16 16 0 0 1 22.63 0l20.68 20.68A16 16 0 0 1 219.31 80Zm-54.63 32L144 91.31l-96 96L68.68 208ZM208 68.69 187.31 48l-32 32L176 100.69Z");
+  icon.append(path);
+  node.append(icon);
+  const name = document.createElement("span");
+  name.textContent = skill.name;
+  node.append(name);
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.tabIndex = -1;
+  remove.setAttribute("aria-label", `移除技能 ${skill.name}`);
+  remove.textContent = "×";
+  node.append(remove);
+  return node;
+};
+
 export default function Composer({
   placeholder, sending, running = false, stopping = false, onStop, model, models = [], modelLocked = false,
   modelsPending = false, catalogNotice = null, onModelChange,
@@ -52,42 +107,34 @@ export default function Composer({
 }: Props) {
   const [message, setMessage] = useState(initialMessage);
   const [files, setFiles] = useState<File[]>(initialFiles);
-  const [selection, setSelection] = useState<SkillSelection>({
-    skills: [], excluded_skill_ids: [], auto_match: true,
-  });
+  const [pickedIds, setPickedIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   // `/` 列表用 Esc 收起后，同一个 `/` 词不再自动弹出；光标离开该词再回来才恢复。
   const [dismissed, setDismissed] = useState(false);
   const [highlight, setHighlight] = useState(0);
-  // 列表跟随光标：caret 记光标位置，拖选了多字（ranged）不算正在输入。
-  const [caret, setCaret] = useState(initialMessage.length);
-  const [ranged, setRanged] = useState(false);
   const input = useRef<HTMLInputElement>(null);
-  const textarea = useRef<HTMLTextAreaElement>(null);
+  const editor = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const previews = useRef(new Map<File, string>());
   // 输入法组合标志：Safari 提交组合的回车发出时 isComposing 已复位，
   // 所以组合结束的复位推迟一个宏任务，让那一次回车仍被认成组合按键。
   const composing = useRef(false);
   const composingReset = useRef<number | null>(null);
-  // 选中技能后要把光标放回原词起点，等新文本写进 DOM 再设置。
-  const pendingCaret = useRef<number | null>(null);
 
   useEffect(() => () => {
     for (const url of previews.current.values()) URL.revokeObjectURL(url);
   }, []);
 
-  // 预填的多行文字要撑开输入框，与手动输入时一致。
-  useEffect(() => { if (initialMessage) resize(); }, []);
-
-  const syncSelection = (node: HTMLTextAreaElement) => {
-    setCaret(node.selectionStart ?? node.value.length);
-    setRanged(node.selectionStart !== node.selectionEnd);
+  const [slashQuery, setSlashQuery] = useState<string | null>(null);
+  const syncEditor = () => {
+    const node = editor.current;
+    if (!node) return;
+    setMessage(editorText(node));
+    setPickedIds(selectedSkillIds(node));
+    setSlashQuery(caretWord(node)?.query ?? null);
   };
 
   // 光标处的 `/` 词就是过滤词，词变了高亮从头开始。
-  const slashMatch = ranged ? null : matchSlashWord(message.slice(0, caret));
-  const slashQuery = slashMatch?.query ?? null;
   useEffect(() => { setHighlight(0); }, [slashQuery]);
   // 收起是粘性的：点外面或 Esc 之后，同一个 `/` 词继续输入不再弹出；光标离开该词（或删掉它）再回来才恢复。
   useEffect(() => { if (slashQuery === null) setDismissed(false); }, [slashQuery]);
@@ -99,27 +146,6 @@ export default function Composer({
     previews.current.set(file, url);
     return url;
   };
-
-  const resize = () => {
-    const node = textarea.current;
-    if (node === null) return;
-    node.style.height = "auto";
-    node.style.height = `${Math.min(node.scrollHeight, 180)}px`;
-  };
-
-  // 选中技能后按剩余文本重算高度，并把光标落到原词起点。
-  useEffect(() => {
-    const target = pendingCaret.current;
-    if (target === null) return;
-    pendingCaret.current = null;
-    const node = textarea.current;
-    if (node === null) return;
-    node.selectionStart = target;
-    node.selectionEnd = target;
-    setCaret(target);
-    setRanged(false);
-    resize();
-  });
 
   const addFiles = (selected: File[]) => {
     setError(null);
@@ -143,14 +169,12 @@ export default function Composer({
   };
 
   const slashOpen = skills !== undefined && slashQuery !== null && !dismissed;
-  const pickedIds = selection.skills.map((pick) => pick.id);
-  // 已选中的不再进列表（移除走胶囊上的 ×），按名称或标识不区分大小写过滤。
+  // 已选中的不再进列表（可从行内节点移除），按名称或标识不区分大小写过滤。
   const candidates = slashOpen && skills !== undefined ? skills.filter((skill) =>
     !pickedIds.includes(skill.skill_id)
     && [skill.name, skill.skill_id].some((text) => text.toLowerCase().includes(slashQuery!.toLowerCase())),
   ) : [];
   const active = Math.min(highlight, candidates.length - 1);
-  const pickedSkills = (skills ?? []).filter((skill) => pickedIds.includes(skill.skill_id));
 
   // 列表开着时，点它以外的任何地方都收起（点选项本身不收，走选中流程）。
   useEffect(() => {
@@ -162,23 +186,44 @@ export default function Composer({
     return () => document.removeEventListener("mousedown", onPointerDown);
   }, [slashOpen]);
 
-  /** 选中即从输入框拿掉光标处的 `/` 词（其余正文原样保留），挂成胶囊，光标落回原词起点。 */
+  /** 用行内不可编辑节点替换光标前的 `/` 词，光标继续留在它后面。 */
   const pickSkill = (skill: SkillSummary) => {
-    if (slashMatch === null) return;
-    setSelection((current) => ({ ...current, skills: [...current.skills, { id: skill.skill_id }] }));
-    setMessage(message.slice(0, slashMatch.start) + message.slice(caret));
-    pendingCaret.current = slashMatch.start;
+    const root = editor.current;
+    const word = root && caretWord(root);
+    if (!root || !word) return;
+    const range = document.createRange();
+    range.setStart(word.node, word.start);
+    range.setEnd(word.node, word.end);
+    range.deleteContents();
+    const mention = makeSkillNode(skill);
+    range.insertNode(mention);
+    // 浏览器需要一个可编辑的文本节点，才能把光标放在 Skill 后继续输入。
+    const after = document.createTextNode("");
+    mention.after(after);
+    const selection = window.getSelection();
+    range.setStart(after, 0);
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    root.focus();
+    syncEditor();
     setDismissed(false);
   };
 
-  const removeSkill = (id: string) => setSelection((current) => ({
-    ...current, skills: current.skills.filter((pick) => pick.id !== id),
-  }));
+  const removeSkill = (id: string) => {
+    Array.from(editor.current?.querySelectorAll<HTMLElement>("[data-skill-id]") ?? [])
+      .find((node) => node.dataset.skillId === id)?.remove();
+    syncEditor();
+    editor.current?.focus();
+  };
 
   const submit = async () => {
     const text = message.trim();
     // 执行中不发送新消息：右下角那个位置是终止按钮，回车与它保持一致。
     if ((!text && files.length === 0) || sending || running || !model) return;
+    const selection: SkillSelection = {
+      skills: pickedIds.map((id) => ({ id })), excluded_skill_ids: [], auto_match: true,
+    };
     const failure = await onSubmit(text, files, selection);
     if (failure !== null) {
       setError(failure.message);
@@ -188,9 +233,10 @@ export default function Composer({
     previews.current.clear();
     setMessage("");
     setFiles([]);
-    setSelection({ skills: [], excluded_skill_ids: [], auto_match: true });
+    setPickedIds([]);
+    if (editor.current) editor.current.replaceChildren();
+    setSlashQuery(null);
     setError(null);
-    if (textarea.current !== null) textarea.current.style.height = "auto";
   };
 
   const stop = async () => {
@@ -213,7 +259,7 @@ export default function Composer({
     }, 0);
   };
 
-  const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onComposerKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // 输入法组合中的按键（选词、提交组合用的回车）不拦截，避免误当列表导航或发送。
     if (composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
     if (slashOpen) {
@@ -268,17 +314,6 @@ export default function Composer({
       ))}
     </div>}
 
-    {pickedSkills.length > 0 && <div className="composer-skills" aria-label="待发送技能">
-      {pickedSkills.map((skill) => (
-        <div className="composer-skill" key={skill.skill_id}>
-          <Cube size={13} weight="fill" />
-          <strong title={skill.description}>{skill.name}</strong>
-          <button type="button" onClick={() => removeSkill(skill.skill_id)} disabled={sending}
-            aria-label={`移除技能 ${skill.name}`}><X size={12} weight="bold" /></button>
-        </div>
-      ))}
-    </div>}
-
     {files.length > 0 && <div className="composer-files" aria-label="待发送附件">
       {files.map((file, index) => {
         const image = file.type.startsWith("image/");
@@ -295,13 +330,28 @@ export default function Composer({
       })}
     </div>}
 
-    <textarea ref={textarea} value={message} rows={1} placeholder={placeholder} aria-label="消息"
-      disabled={sending}
-      onChange={(event) => { setMessage(event.target.value); resize(); syncSelection(event.target); }}
-      onSelect={(event) => syncSelection(event.currentTarget)}
-      onKeyUp={(event) => syncSelection(event.currentTarget)}
+    <div ref={editor} contentEditable={!sending} role="textbox" aria-label="消息" aria-multiline="true"
+      data-placeholder={placeholder} className="composer-editor" suppressContentEditableWarning
+      onInput={syncEditor}
+      onMouseUp={syncEditor}
+      onClick={(event) => {
+        const target = event.target as HTMLElement;
+        const remove = target.closest<HTMLButtonElement>(".composer-inline-skill button");
+        if (remove && !sending) removeSkill(remove.parentElement!.dataset.skillId!);
+        else syncEditor();
+      }}
+      onKeyUp={syncEditor}
+      onPaste={(event) => {
+        event.preventDefault();
+        document.execCommand("insertText", false, event.clipboardData.getData("text/plain"));
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        const text = event.dataTransfer.getData("text/plain");
+        if (text) document.execCommand("insertText", false, text);
+      }}
       onCompositionStart={onCompositionStart} onCompositionEnd={onCompositionEnd}
-      onKeyDown={onComposerKeyDown} />
+      onKeyDown={onComposerKeyDown}>{initialMessage}</div>
 
     {error !== null && <div className="composer-error" role="alert">{error}</div>}
 
