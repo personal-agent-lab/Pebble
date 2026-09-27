@@ -6,8 +6,13 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from server.db import init_db, session, write
-from server.skills.models import ChangeAction, ChangeActor
-from server.skills.review import SkillReviewScheduler, record_completed_turn, resolve_evidence_refs
+from server.skills.models import ChangeAction, ChangeActor, public_change_reason
+from server.skills.review import (
+    SkillReviewScheduler,
+    record_completed_turn,
+    resolve_evidence_refs,
+    validate_review_reason,
+)
 from server.skills.service import ChangeRequest, SkillService
 
 pytestmark = pytest.mark.anyio
@@ -62,6 +67,26 @@ class FakeReview:
         if self.error:
             raise self.error
         return self.candidates
+
+
+def test_review_reason_keeps_internal_refs_out_of_user_text():
+    refs = {"E4": "123e4567-e89b-12d3-a456-426614174000", "E6": "item-6"}
+    for reason in (
+        "用户在 E4 明确纠正，做法在 E6 的新记录上直接适用。",
+        "用户在E4明确纠正，做法在E6的新记录上直接适用。",
+        "依据 123e4567-e89b-12d3-a456-426614174000 修改。",
+        "依据 item-6 修改。",
+    ):
+        with pytest.raises(ValueError, match="直接展示给用户"):
+            validate_review_reason(reason, refs)
+    validate_review_reason(
+        "用户纠正后，只列已确认事项；后续任务采用此做法并获得认可。", refs
+    )
+    historical = "用户在 E4 明确纠正；做法在 E6 的新记录上适用并被接受（E7）。"
+    displayed = public_change_reason(historical, "review")
+    assert "E4" not in displayed and "E6" not in displayed and "E7" not in displayed
+    assert "明确纠正" in displayed and "适用并被接受" in displayed
+    assert public_change_reason(historical, "user") == historical
 
 
 async def test_cross_task_trigger_and_empty_review_advances(pair, settings):
@@ -144,6 +169,38 @@ async def test_review_creates_skill_with_window_evidence(pair, settings):
     assert skills.get("report-order").managed is True
     assert skills.changes()[0]["evidence_item_ids"] == ["item-2"]
     assert skills.repository.versions("report-order")[0].change_id == skills.changes()[0]["id"]
+    with session(settings.db_path) as conn, write(conn):
+        conn.execute(
+            "UPDATE skill_changes SET reason=? WHERE id=?",
+            ("用户在 E2 纠正后成功完成", skills.changes()[0]["id"]),
+        )
+    assert "E2" not in skills.changes()[0]["reason"]
+
+
+async def test_review_does_not_persist_candidate_with_internal_reason(pair, settings):
+    skills, scheduler = pair
+    add_done(settings.db_path, 1)
+    add_done(settings.db_path, 2)
+    job = scheduler.enqueue_if_due()
+    scheduler.claim(job["id"])
+    candidate = {
+        "action": "create",
+        "payload": {
+            "skill_id": "report-order",
+            "name": "报表顺序",
+            "description": "按稳定顺序整理报表",
+            "body": "先检查输入，再生成结果。",
+        },
+        "reason": "用户在 E2 纠正后成功完成",
+        "evidence_item_ids": ["item-2"],
+    }
+    with pytest.raises(ValueError, match="直接展示给用户"):
+        await scheduler.run(job["id"], FakeReview([candidate]))
+    assert skills.changes() == []
+    with session(settings.db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM skill_review_candidates WHERE review_id=?", (job["id"],)
+        ).fetchone()[0] == 0
 
 
 async def test_user_skill_gets_proposal_and_out_of_window_evidence_is_rejected(pair, settings):

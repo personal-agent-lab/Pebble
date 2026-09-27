@@ -24,6 +24,7 @@ from server.skills.models import (
     Skill,
     SkillOrigin,
     SkillState,
+    public_change_reason,
 )
 from server.skills.repository import (
     SkillRepository,
@@ -117,7 +118,7 @@ class SkillService:
                 "created_at": version.created_at,
                 "change_id": version.change_id,
                 "actor": version.actor,
-                "reason": version.reason,
+                "reason": public_change_reason(version.reason, version.actor),
                 "skill": version.skill,
             }
             for version in self.repository.versions(skill_id)
@@ -680,6 +681,7 @@ def _row_to_request(row) -> ChangeRequest:
 
 def _change_view(row) -> dict:
     view = dict(row)
+    view["reason"] = public_change_reason(row["reason"], row["actor"])
     view["payload"] = json.loads(row["payload"])
     view["evidence_item_ids"] = json.loads(row["evidence_item_ids"])
     return view

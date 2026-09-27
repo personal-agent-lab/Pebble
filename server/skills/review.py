@@ -12,7 +12,7 @@ from server.config import get_settings
 from server.db import session, write
 from server.errors import SkillConflictError, SkillUnknownError, SkillValidationError
 from server.sessions.service import timestamp
-from server.skills.models import ChangeAction, ChangeActor
+from server.skills.models import REVIEW_REASON_REF, ChangeAction, ChangeActor
 from server.skills.service import ChangeRequest, SkillService
 
 logger = logging.getLogger(__name__)
@@ -24,10 +24,26 @@ REVIEW_INSTRUCTIONS = (
     "仅当没有相关技能时创建覆盖一类任务的新技能。修改前用 skill_view 重新读取当前正文及版本。"
     "不要保存暂时性故障、未解决的失败、一次性经过、消息原文或具体参数。"
     "每条修改调用 skill_manage，说明原因并提供轨迹条目前的短编号；"
+    "reason 会直接展示给用户：用自然语言说明纠正、验证结果和可复用做法，"
+    "不要在 reason 中写 E1 等轨迹短编号、任务 ID 或其他内部标识；"
+    "短编号只放在 evidence_refs_to_use。"
     "没有可靠经验时不调用工具，直接回答‘无’。"
     "只能使用本会话提供的技能工具，不能执行外部操作。"
 )
 MAX_REVIEW_CHARS = 100_000
+
+
+def validate_review_reason(reason: str, evidence_refs: dict[str, str]) -> None:
+    """复盘理由直接面向用户；内部轨迹标识只能进入结构化依据字段。"""
+    if not reason.strip():
+        raise ValueError("复盘变更必须说明原因")
+    if REVIEW_REASON_REF.search(reason) or any(
+        item_id in reason for item_id in evidence_refs.values()
+    ):
+        raise ValueError(
+            "reason 会直接展示给用户，请用自然语言说明依据和做法；"
+            "轨迹短编号只填在 evidence_refs_to_use，不能写进 reason"
+        )
 
 
 class SkillReviewGateway(Protocol):
@@ -269,6 +285,8 @@ class SkillReviewScheduler:
             review_id, row["anchor_task_id"], REVIEW_INSTRUCTIONS, material, model,
             evidence_refs,
         )
+        for candidate in candidates:
+            validate_review_reason(candidate["reason"], evidence_refs)
         with session(self.path) as conn, write(conn):
             for ordinal, candidate in enumerate(candidates):
                 conn.execute(

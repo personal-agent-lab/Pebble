@@ -83,7 +83,7 @@
 | `action` | `create/patch/write_file/remove_file` | |
 | `payload` | dict | create：`skill_id`、frontmatter、正文；patch：`old_string`/`new_string` 或整份正文；write_file：`relative_path`、`content`；remove_file：`relative_path` |
 | `base_revision` | str \| null | 基于的当前版本；create 为空 |
-| `reason` | str | 为什么改，给审批页看 |
+| `reason` | str | 面向用户的自然语言修改理由，说明纠正、验证结果与可复用做法；不得包含复盘轨迹短编号或内部条目 ID |
 | `evidence_item_ids` | list[str] | 经验依据的时间线条目，复盘变更至少一条；程序校验属于本次完成轮窗口，不校验语义 |
 | `actor` | `user/foreground/review` | 管理页 / 用户当轮要求的前台 Agent / 后台复盘 |
 | `status` | `proposed/applied/rejected/conflict` | |

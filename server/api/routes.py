@@ -27,7 +27,7 @@ from server.memory.service import MemoryStore
 from server.sessions.history import HistoryStore
 from server.sessions.observations import read_observations
 from server.sessions.service import SessionStore
-from server.skills.models import ChangeAction, ChangeActor, SkillState
+from server.skills.models import ChangeAction, ChangeActor, SkillState, public_change_reason
 from server.skills.service import ChangeRequest, SkillService
 from server.tools.gmail.service import MailDraftStore
 from server.tools.personal_kb.assets import ASSETS_DIR, MAX_ASSET_SIZE, describe, sniff
@@ -576,7 +576,7 @@ def skill_versions(skill_id: str, skills: Skills) -> list[dict]:
             "created_at": version.created_at,
             "change_id": version.change_id,
             "actor": version.actor,
-            "reason": version.reason,
+            "reason": public_change_reason(version.reason, version.actor),
         }
         for version in skills.repository.versions(skill_id)
     ]

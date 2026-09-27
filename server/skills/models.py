@@ -13,6 +13,18 @@ SKILL_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 # 目录里一句描述的截断长度，与契约 §6 的目录装配一致。
 DESCRIPTION_LIMIT = 160
+REVIEW_REASON_REF = re.compile(
+    r"(?<![A-Za-z0-9_])E[1-9]\d*(?![A-Za-z0-9_])|"
+    r"(?<![A-Za-z0-9])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def public_change_reason(reason: str | None, actor: str | None) -> str | None:
+    """历史复盘理由可能含短编号；读取时隐藏编号，保留原始审计记录。"""
+    if reason is None or actor != "review":
+        return reason
+    return REVIEW_REASON_REF.sub("相关任务记录", reason)
 
 
 class SkillOrigin(StrEnum):

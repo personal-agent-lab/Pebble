@@ -319,14 +319,14 @@ class QoderGateway:
         model: str, evidence_refs: dict[str, str],
     ) -> list[dict]:
         """一次性 Skill 复盘：只收集候选，模型正常结束后由调度器落库并应用。"""
-        from server.skills.review import resolve_evidence_refs
+        from server.skills.review import resolve_evidence_refs, validate_review_reason
         from server.skills.tools import skill_list, skill_view
 
         if self.skills_store is None:
             raise DependencyUnavailableError("Skill 服务未接入")
         candidates: list[dict] = []
         read_revisions: dict[str, str] = {}
-        invalid_evidence_since_last_candidate = False
+        invalid_candidate_since_last_candidate = False
 
         def view(skill_id: str, file_path: str | None = None) -> dict:
             result = skill_view.func(skill_id, file_path, skills=self.skills_store)
@@ -344,13 +344,12 @@ class QoderGateway:
             from server.skills.models import ChangeAction
 
             parsed = ChangeAction(action)
-            nonlocal invalid_evidence_since_last_candidate
-            if not reason.strip():
-                raise ValueError("复盘变更必须说明原因")
+            nonlocal invalid_candidate_since_last_candidate
             try:
+                validate_review_reason(reason, evidence_refs)
                 evidence_item_ids = resolve_evidence_refs(evidence_refs_to_use, evidence_refs)
             except ValueError:
-                invalid_evidence_since_last_candidate = True
+                invalid_candidate_since_last_candidate = True
                 raise
             skill_id = payload.get("skill_id")
             if parsed is not ChangeAction.CREATE and (
@@ -366,7 +365,7 @@ class QoderGateway:
                     "expected_revision": expected_revision,
                 }
             )
-            invalid_evidence_since_last_candidate = False
+            invalid_candidate_since_last_candidate = False
             return {"status": "staged", "ordinal": len(candidates) - 1}
 
         registry = ToolRegistry()
@@ -390,8 +389,9 @@ class QoderGateway:
                 "create 的 payload 含 skill_id、name、description、body；"
                 "patch 含 skill_id 与 body 或 old_string/new_string；附件操作含 skill_id、"
                 "relative_path 及可选 content。修改现有技能先用 skill_view 读取，"
-                "将返回的 revision 传给 expected_revision。reason 说明可复用的做法，"
-                "evidence_refs_to_use 填轨迹条目前的短编号（如 E1），不要填写长 ID。"
+                "将返回的 revision 传给 expected_revision。reason 是直接展示给用户的修改理由，"
+                "用自然语言说明纠正、验证结果和可复用做法，不写 E1 等内部编号或 ID。"
+                "evidence_refs_to_use 单独填写轨迹条目前的短编号（如 E1），不要填写长 ID。"
             ),
             side_effect=SideEffect.LOCAL_WRITE,
         )
@@ -414,8 +414,8 @@ class QoderGateway:
                             raise AgentProtocolError(
                                 (reply.result or "").strip() or MODEL_ERROR_MESSAGE
                             )
-                        if invalid_evidence_since_last_candidate:
-                            raise AgentProtocolError("复盘候选引用了无效轨迹依据，尚未纠正")
+                        if invalid_candidate_since_last_candidate:
+                            raise AgentProtocolError("复盘候选的依据或用户可见理由无效，尚未纠正")
                         return candidates
         raise AgentProtocolError(NO_TERMINAL_MESSAGE)
 
