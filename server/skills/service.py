@@ -286,7 +286,7 @@ class SkillService:
                 name=payload["name"],
                 description=payload["description"],
                 origin=origin,
-                # 用户手写的技能一律受保护：后台复盘只能提出待确认建议（契约 §2/§5）。
+                # 手写技能默认受保护；用户可在管理页明确开启后台直接修改。
                 managed=(
                     False
                     if origin is SkillOrigin.USER
@@ -379,15 +379,6 @@ class SkillService:
 
     def set_managed(self, skill_id: str, value: bool) -> Skill:
         skill = self.get(skill_id)
-        if value and skill.origin is SkillOrigin.USER:
-            raise SkillValidationError(
-                [
-                    {
-                        "field": "managed",
-                        "message": "用户手写的技能始终需要确认后才能修改",
-                    }
-                ]
-            )
         updated = Skill(**{**_asdict(skill), "managed": value, "updated_at": now()})
         self.repository.commit_skill(updated, f"[Skills] managed {skill_id} -> {value}")
         with session(self.db_path) as conn, write(conn):

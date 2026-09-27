@@ -24,11 +24,11 @@
 | `name` | str | 显示名，必填，非空 |
 | `description` | str | 给模型判断相关性的一句话，必填，≤160 字符 |
 | `origin` | `user` / `explicit` / `review` | 谁创建：管理页手写 / 用户当轮明确要求学习 / 后台复盘沉淀 |
-| `managed` | bool | 后台复盘是否可直接修改；`origin=user` 恒为 false，其余默认 true，用户可在管理页改 |
+| `managed` | bool | 后台复盘是否可直接修改；`origin=user` 默认 false，其余默认 true，用户可在管理页改 |
 | `state` | `active` / `stale` / `archived` | 运行状态，见下 |
 | `created_at`、`updated_at` | datetime | 程序维护 |
 
-`origin` 与 `managed` 是两个问题：前者记录来源事实，后者是管理策略，不互相推导（除 user 恒 false）。
+`origin` 与 `managed` 是两个问题：前者记录来源事实，后者是管理策略；创建时按来源设定默认值，之后用户可在管理页切换管理策略。
 
 正文建议按适用场景 / 前置条件 / 操作步骤 / 验证方法 / 常见问题组织，写法不限。正文与附件内容不进 SQLite，完整哈希即版本：
 
@@ -91,8 +91,8 @@
 
 写入规则按目标技能的 `managed` 决定：
 
-- **`managed=true`**（含复盘自建技能与前台明确学习）：变更直接应用，`status=applied`，写入文件并提交 Git，记录留档审计；出错靠 Git 历史回滚（§8 恢复）。
-- **`managed=false`（用户技能）**：后台复盘只能产生 `proposed` 变更，正文不动；用户在管理页批准后应用。`actor=foreground` 的修改例外——用户当轮明确要求改某个技能时直接应用，靠 `skill_manage` 只在用户发起轮可见保证。
+- **`managed=true`**（含用户明确开放的手写技能、复盘自建技能与前台明确学习）：变更直接应用，`status=applied`，写入文件并提交 Git，记录留档审计；出错靠 Git 历史回滚（§8 恢复）。
+- **`managed=false`（包括默认受保护的用户技能）**：后台复盘只能产生 `proposed` 变更，正文不动；用户在管理页批准后应用。`actor=foreground` 的修改例外——用户当轮明确要求改某个技能时直接应用，靠 `skill_manage` 只在用户发起轮可见保证。
 - 应用的并发检查：`base_revision` 与磁盘当前 `revision` 不一致时不应用，记 `conflict`；批准接口要求传 `expected_revision`，过期返回 409。
 - 复盘的处理优先级（补正使用中的、其次修既有、最后才新建）与“不沉淀什么”写在复盘提示词中（`skill-spec.md` §7），程序不强制排序，只留记录。
 

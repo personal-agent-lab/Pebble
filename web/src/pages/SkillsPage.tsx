@@ -713,20 +713,16 @@ function SkillDocument({ skillId, creating, onBack, onChanged }: DocumentProps) 
                 <span>{recentLoads(detail.usage) > 0
                   ? `最近 7 天被使用 ${recentLoads(detail.usage)} 次`
                   : "最近 7 天未被使用"}</span>
-                {detail.origin === "user" ? (
-                  <span title="你手写的技能不会被自动改写">后台复盘只能提建议</span>
-                ) : (
-                  <label className="skill-managed"
-                    title="勾选后后台复盘可以直接改写它；取消勾选则改为提出修改建议，等你确认">
-                    <input type="checkbox" checked={detail.managed} disabled={busy}
-                      onChange={(event) => void act(
-                        () => setSkillManaged(detail.skill_id, event.target.checked),
-                        event.target.checked ? "已允许复盘直接修改" : "已改为复盘需确认",
-                        { managed: event.target.checked },
-                      )} />
-                    后台复盘可直接修改
-                  </label>
-                )}
+                <label className="skill-managed"
+                  title="勾选后后台复盘可以直接改写它；取消勾选则改为提出修改建议，等你确认">
+                  <input type="checkbox" checked={detail.managed} disabled={busy}
+                    onChange={(event) => void act(
+                      () => setSkillManaged(detail.skill_id, event.target.checked),
+                      event.target.checked ? "已允许复盘直接修改" : "已改为复盘需确认",
+                      { managed: event.target.checked },
+                    )} />
+                  后台复盘可直接修改
+                </label>
               </div>
 
               <details className="skill-advanced">

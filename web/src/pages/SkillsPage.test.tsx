@@ -164,7 +164,22 @@ test("目录只列名称、说明与时间，点击进入详情", async () => {
 
   // 运行里的事实跟在正文后面，不在读的路上。
   expect(screen.getByText(/最近 7 天未被使用/)).toBeTruthy();
-  expect(screen.getByText("后台复盘只能提建议")).toBeTruthy();
+  expect((screen.getByRole("checkbox", { name: "后台复盘可直接修改" }) as HTMLInputElement).checked).toBe(false);
+});
+
+test("手写技能可开启或关闭后台直接修改", async () => {
+  const user = userEvent.setup();
+  open("/skills?id=weekly-report");
+
+  const toggle = await screen.findByRole("checkbox", { name: "后台复盘可直接修改" }) as HTMLInputElement;
+  expect(toggle.checked).toBe(false);
+  await user.click(toggle);
+  await waitFor(() => expect(setManaged).toHaveBeenCalledWith("weekly-report", true));
+  expect(toggle.checked).toBe(true);
+
+  await user.click(toggle);
+  await waitFor(() => expect(setManaged).toHaveBeenCalledWith("weekly-report", false));
+  expect(toggle.checked).toBe(false);
 });
 
 test("点附件读的是它自己那份内容，改完保存只写这个文件", async () => {
@@ -288,8 +303,7 @@ test("归档收在 ⋯ 菜单里，执行后顶栏说明它不再进对话", asy
 
   await waitFor(() => expect(archive).toHaveBeenCalledWith("weekly-report"));
   expect(await screen.findByText("已归档，不进入对话")).toBeTruthy();
-  // 事实行里的复盘开关对用户手写的技能不出现：它恒为受保护。
-  expect(screen.getByText("后台复盘只能提建议")).toBeTruthy();
+  expect(screen.getByRole("checkbox", { name: "后台复盘可直接修改" })).toBeTruthy();
 });
 
 test("目录行尾的 ⋯ 菜单可以归档，结果一句话留在列表上方", async () => {

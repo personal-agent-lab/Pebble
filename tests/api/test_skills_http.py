@@ -95,15 +95,21 @@ def test_list_filter_archive_and_managed(settings):
         restored = client.post("/api/skills/live-one/restore").json()
         assert restored["state"] == "active"
 
-        # 管理页只能取消直写权：用户手写的技能恒为受保护（契约 §2）。
-        protected = client.post("/api/skills/live-one/managed", json={"value": True})
-        assert protected.status_code == 422
-        assert protected.json()["error"] == "invalid_skill"
-        assert client.get("/api/skills/live-one").json()["managed"] is False
+        # 手写技能默认受保护，用户可开启直写并随时关闭。
+        original_revision = client.get("/api/skills/live-one").json()["revision"]
+        assert client.post("/api/skills/live-one/managed", json={"value": True}).json() == {
+            "skill_id": "live-one",
+            "managed": True,
+        }
+        enabled = client.get("/api/skills/live-one").json()
+        assert enabled["managed"] is True
+        assert enabled["origin"] == "user"
+        assert enabled["revision"] == original_revision
         assert client.post("/api/skills/live-one/managed", json={"value": False}).json() == {
             "skill_id": "live-one",
             "managed": False,
         }
+        assert client.get("/api/skills/live-one").json()["revision"] == original_revision
         # 管理策略不影响目录与内容版本。
         assert [entry["skill_id"] for entry in client.get("/api/skills").json()] == [
             "live-one",

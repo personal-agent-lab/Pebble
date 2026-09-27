@@ -118,18 +118,13 @@ def test_review_writes_managed_skill_directly(service: SkillService) -> None:
     assert service.get("reviewed-flow").body == "新正文\n"
 
 
-def test_user_skill_is_never_managed(service: SkillService) -> None:
-    """`origin=user` 恒为 managed=false：创建时给不了，管理页也开不了（契约 §2/§5）。"""
+def test_user_skill_can_opt_in_and_out_of_direct_review(service: SkillService) -> None:
+    """手写技能默认受保护；明确开启后复盘可直写，关闭后恢复待审。"""
 
     create(service, managed=True)
     assert service.get("weekly-report").managed is False
 
-    with pytest.raises(SkillValidationError) as failure:
-        service.set_managed("weekly-report", True)
-    assert failure.value.errors[0]["field"] == "managed"
-    assert service.get("weekly-report").managed is False
-
-    # 复盘因此只能提出建议。
+    original_revision = service.get("weekly-report").revision
     proposed = service.record_change(
         ChangeRequest(
             action=ChangeAction.PATCH,
@@ -141,10 +136,41 @@ def test_user_skill_is_never_managed(service: SkillService) -> None:
         )
     )
     assert proposed["status"] == "proposed"
+    assert service.get("weekly-report").body == "## 步骤\n\n1. 先查日历\n"
 
-    # 非用户来源可以关掉直写权，之后复盘同样只能提建议。
+    enabled = service.set_managed("weekly-report", True)
+    assert enabled.origin is SkillOrigin.USER
+    assert enabled.managed is True
+    assert enabled.revision == original_revision
+    applied = service.record_change(
+        ChangeRequest(
+            action=ChangeAction.PATCH,
+            payload={"body": "复盘已修改\n"},
+            actor=ChangeActor.REVIEW,
+            reason="复盘修正",
+            skill_id="weekly-report",
+            base_revision=enabled.revision,
+        )
+    )
+    assert applied["status"] == "applied"
+    assert service.get("weekly-report").body == "复盘已修改\n"
+
+    updated_revision = service.get("weekly-report").revision
     service.set_managed("weekly-report", False)
     assert service.get("weekly-report").managed is False
+    assert service.get("weekly-report").revision == updated_revision
+    proposed_again = service.record_change(
+        ChangeRequest(
+            action=ChangeAction.PATCH,
+            payload={"body": "等待确认\n"},
+            actor=ChangeActor.REVIEW,
+            reason="复盘修正",
+            skill_id="weekly-report",
+            base_revision=updated_revision,
+        )
+    )
+    assert proposed_again["status"] == "proposed"
+    assert service.get("weekly-report").body == "复盘已修改\n"
 
 
 def test_foreground_may_edit_user_skill_directly(service: SkillService) -> None:
