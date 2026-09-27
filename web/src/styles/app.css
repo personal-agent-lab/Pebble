@@ -1364,7 +1364,7 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .composer-inline-skill {
   position: relative; display: inline-flex; align-items: baseline; gap: 5px;
   margin-right: 7px; white-space: nowrap; vertical-align: baseline;
-  color: #7952bd; font-weight: 600; cursor: default;
+  color: var(--color-accent); font-weight: 600; cursor: default;
 }
 .composer-inline-skill > svg { width: 19px; height: 19px; align-self: center; flex: none; }
 .composer-inline-skill button {
@@ -1375,7 +1375,7 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   cursor: pointer; opacity: 0; pointer-events: none;
 }
 .composer-inline-skill:hover button, .composer-inline-skill button:focus-visible { opacity: 1; pointer-events: auto; }
-.composer-inline-skill button:hover { background: color-mix(in oklch, #7952bd 12%, transparent); }
+.composer-inline-skill button:hover { background: color-mix(in oklch, var(--color-accent) 12%, transparent); }
 .composer-inline-skill button:focus-visible { outline: 2px solid var(--color-ring); }
 .composer-skill-menu {
   position: absolute; left: 8px; right: 8px; bottom: calc(100% + 6px); z-index: 30;
