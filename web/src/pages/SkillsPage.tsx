@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import {
@@ -90,15 +90,54 @@ function failureText(error: ApiError): string {
   return detail ? detail : error.message;
 }
 
-/** 变更载荷的一行预览：按动作挑出关键字段，其余原样。 */
-function payloadPreview(change: SkillChangeView): string {
-  const payload = change.payload;
-  if (change.action === "patch") {
-    if (typeof payload.body === "string") return `整份替换正文（${payload.body.length} 字）`;
-    return `${String(payload.old_string)} → ${String(payload.new_string)}`;
+/** 变更的目标技能：create 的 skill_id 在载荷里，其余在记录上。 */
+function targetId(change: SkillChangeView): string | null {
+  if (typeof change.payload.skill_id === "string" && change.payload.skill_id !== "") {
+    return change.payload.skill_id;
   }
-  if (change.action === "create") return `新建 ${String(payload.skill_id)}`;
-  return String(payload.relative_path ?? "");
+  return change.skill_id;
+}
+
+/** 动作的一行说明：说人话，不报字数——人关心改了什么，不是多长。 */
+function actionLabel(change: SkillChangeView): string {
+  if (change.action === "create") return "新建";
+  if (change.action === "remove_file") return `删除附件 ${String(change.payload.relative_path ?? "")}`;
+  if (change.action === "write_file") return `更新附件 ${String(change.payload.relative_path ?? "")}`;
+  return typeof change.payload.body === "string" ? "替换正文" : "修改正文";
+}
+
+/** 理由的第一句摆出来，其余折叠：审批先看结论，细节想看再展开。 */
+function splitReason(reason: string): { lead: string; rest: string } {
+  const end = reason.search(/[。！？]/);
+  if (end === -1) return { lead: reason, rest: "" };
+  return { lead: reason.slice(0, end + 1), rest: reason.slice(end + 1).trim() };
+}
+
+type DiffLine = { kind: "add" | "del" | "same"; text: string };
+
+/** 行级 LCS diff：变更载荷最多几百行，O(n·m) 的表够用。 */
+function lineDiff(oldText: string, newText: string): DiffLine[] {
+  const a = oldText === "" ? [] : oldText.split("\n");
+  const b = newText === "" ? [] : newText.split("\n");
+  const lcs: number[][] = Array.from(
+    { length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0),
+  );
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  const lines: DiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { lines.push({ kind: "same", text: a[i] }); i++; j++; }
+    else if (lcs[i + 1][j] >= lcs[i][j + 1]) { lines.push({ kind: "del", text: a[i] }); i++; }
+    else { lines.push({ kind: "add", text: b[j] }); j++; }
+  }
+  for (; i < a.length; i++) lines.push({ kind: "del", text: a[i] });
+  for (; j < b.length; j++) lines.push({ kind: "add", text: b[j] });
+  return lines;
 }
 
 /**
@@ -198,6 +237,9 @@ export default function SkillsPage() {
         {note !== null && <div className="kb-list-note" role="status">{note}</div>}
         {actionError !== null && <Notice tone="danger" title="操作失败">{actionError}</Notice>}
 
+        {/* 待审变更排在目录前面：它是页面上唯一需要行动的东西，目录只是备查。 */}
+        {changes !== null && changes.length > 0 && <ChangesPane changes={changes} onChanged={load} />}
+
         {entries === null && error === null && <div className="loading">读取中…</div>}
         {entries !== null && entries.length === 0 && (
           <div className="empty">
@@ -240,8 +282,6 @@ export default function SkillsPage() {
             ))}
           </div>
         )}
-
-        {changes !== null && changes.length > 0 && <ChangesPane changes={changes} onChanged={load} />}
       </div>
     </AppShell>
   );
@@ -809,11 +849,34 @@ function SkillVersions({ skillId, revision, usage, busy, onFailure, onRestore }:
   );
 }
 
-/** 待审变更：复盘对用户手写技能（managed=false）只能提出建议，批准后才落盘。 */
+/** 待审变更：复盘对用户手写技能（managed=false）只能提出建议，批准后才落盘。
+    卡片按“看变化”排版：标题一行说清对象与增删规模，理由只摆第一句，
+    正文用 diff 只亮增删——批准的是改动，不是校对一整份文档。 */
 function ChangesPane({ changes, onChanged }: { changes: SkillChangeView[]; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [failure, setFailure] = useState<{ id: string; error: ApiError } | null>(null);
   const [note, setNote] = useNote();
+  // 目标技能当前的样子：名字给人看，正文给 diff 当基准。create 的技能还不存在，取不到就让它去。
+  const [targets, setTargets] = useState<Record<string, { name: string; body: string }>>({});
+  const idsKey = Array.from(
+    new Set(changes.map(targetId).filter((id): id is string => id !== null)),
+  ).join("\n");
+
+  useEffect(() => {
+    if (idsKey === "") return;
+    let cancelled = false;
+    void Promise.all(idsKey.split("\n").map(async (id) => {
+      try {
+        const found = await getSkill(id);
+        return [id, { name: found.name, body: found.body }] as const;
+      } catch {
+        return [id, null] as const;
+      }
+    })).then((pairs) => {
+      if (!cancelled) setTargets(Object.fromEntries(pairs.filter((pair) => pair[1] !== null)));
+    });
+    return () => { cancelled = true; };
+  }, [idsKey]);
 
   const act = async (change: SkillChangeView, action: () => Promise<unknown>, message: string) => {
     if (busy !== null) return;
@@ -833,41 +896,154 @@ function ChangesPane({ changes, onChanged }: { changes: SkillChangeView[]; onCha
 
   return (
     <section className="skill-changes" aria-labelledby="skill-changes-title">
-      <h3 id="skill-changes-title">待确认的技能变更</h3>
+      <h3 id="skill-changes-title">
+        待确认的技能变更{changes.length > 1 ? `（${changes.length}）` : ""}
+      </h3>
       {note !== null && <div className="memory-note" role="status">{note}</div>}
-      {changes.map((change) => (
-        <div className="skill-change" key={change.id}>
-          <div className="skill-change-head">
-            <strong>{change.skill_id ?? String(change.payload.skill_id ?? "")}</strong>
-            <span className="skill-origin">{ACTOR_LABELS[change.actor] ?? change.actor}</span>
-            <span>{payloadPreview(change)}</span>
-          </div>
-          <div className="skill-change-reason">{change.reason}</div>
-          {change.payload.body !== undefined && typeof change.payload.body === "string" && (
-            <pre className="skill-change-body">{change.payload.body}</pre>
-          )}
-          {change.evidence_item_ids.length > 0 && (
-            <div className="skill-change-evidence">依据条目：{change.evidence_item_ids.join("、")}</div>
-          )}
-          {failure?.id === change.id && (
-            <div className="kb-dialog-error" role="alert">
-              {failure.error.code === "skill_conflict"
-                ? "技能在建议提出后被改过，版本已过期。"
-                : failureText(failure.error)}
-            </div>
-          )}
-          <div className="skill-pane-actions">
-            <button type="button" className="btn-secondary" disabled={busy !== null}
-              onClick={() => void act(change, () => rejectSkillChange(change.id), "已驳回")}>驳回</button>
-            <button type="button" className="btn" disabled={busy !== null}
-              onClick={() => void act(
-                change,
-                () => approveSkillChange(change.id, change.base_revision ?? ""),
-                "已应用",
-              )}>批准</button>
-          </div>
+      {changes.map((change) => {
+        const id = targetId(change);
+        return (
+          <ChangeCard key={change.id} change={change} known={id === null ? undefined : targets[id]}
+            failure={failure?.id === change.id ? failure.error : null} busy={busy !== null}
+            onApprove={() => void act(
+              change,
+              () => approveSkillChange(change.id, change.base_revision ?? ""),
+              "已应用",
+            )}
+            onReject={() => void act(change, () => rejectSkillChange(change.id), "已驳回")} />
+        );
+      })}
+    </section>
+  );
+}
+
+/** 一条待审变更。diff 的基准随动作取：patch 的整份替换拿当前正文，
+    write_file 拿当前附件（读不到就是新文件），create 没有基准、整段都是新增。 */
+function ChangeCard({ change, known, failure, busy, onApprove, onReject }: {
+  change: SkillChangeView;
+  known: { name: string; body: string } | undefined;
+  failure: ApiError | null;
+  busy: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const skillId = targetId(change);
+  const relativePath = typeof change.payload.relative_path === "string"
+    ? change.payload.relative_path
+    : null;
+  const [fileBase, setFileBase] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (change.action !== "write_file" || relativePath === null || skillId === null) return;
+    let cancelled = false;
+    readSkillFile(skillId, relativePath)
+      .then((found) => { if (!cancelled) setFileBase(found.content); })
+      .catch(() => { if (!cancelled) setFileBase(""); });
+    return () => { cancelled = true; };
+  }, [change, relativePath, skillId]);
+
+  const name = change.action === "create" && typeof change.payload.name === "string"
+    && change.payload.name !== ""
+    ? change.payload.name
+    : known?.name ?? skillId ?? "新技能";
+
+  const newText = change.action === "patch"
+    ? (typeof change.payload.body === "string"
+      ? change.payload.body
+      : String(change.payload.new_string ?? ""))
+    : change.action === "create"
+      ? String(change.payload.body ?? "")
+      : String(change.payload.content ?? "");
+  const oldText = change.action === "patch"
+    ? (typeof change.payload.body === "string" ? known?.body ?? null : String(change.payload.old_string ?? ""))
+    : change.action === "write_file"
+      ? fileBase
+      : "";
+  const lines = useMemo(
+    () => (oldText === null ? null : lineDiff(oldText, newText)),
+    [oldText, newText],
+  );
+  const adds = lines?.filter((line) => line.kind === "add").length ?? 0;
+  const dels = lines?.filter((line) => line.kind === "del").length ?? 0;
+
+  const { lead, rest } = splitReason(change.reason);
+
+  return (
+    <div className="skill-change">
+      <div className="skill-change-head">
+        <strong>{name}</strong>
+        <span className="skill-origin">{ACTOR_LABELS[change.actor] ?? change.actor}</span>
+        <span className="skill-change-action">{actionLabel(change)}</span>
+        {(adds > 0 || dels > 0) && (
+          <span className="skill-change-stat" title={`新增 ${adds} 行，删除 ${dels} 行`}>
+            {adds > 0 && <span className="stat-add">+{adds}</span>}
+            {dels > 0 && <span className="stat-del">−{dels}</span>}
+          </span>
+        )}
+      </div>
+      <p className="skill-change-reason">{lead}</p>
+      {rest !== "" && (
+        <details className="skill-change-more">
+          <summary>完整说明</summary>
+          <p>{rest}</p>
+        </details>
+      )}
+      {change.action !== "remove_file" && (lines === null || lines.length > 0) && (lines === null
+        ? <pre className="skill-change-body">{newText}</pre>
+        : <DiffView lines={lines} />)}
+      {change.evidence_item_ids.length > 0 && (
+        <div className="skill-change-evidence" title={change.evidence_item_ids.join("、")}>
+          依据 {change.evidence_item_ids.length} 条任务记录
+        </div>
+      )}
+      {failure !== null && (
+        <div className="kb-dialog-error" role="alert">
+          {failure.code === "skill_conflict"
+            ? "技能在建议提出后被改过，版本已过期。"
+            : failureText(failure)}
+        </div>
+      )}
+      <div className="skill-pane-actions">
+        <button type="button" className="btn-secondary" disabled={busy}
+          onClick={onReject}>驳回</button>
+        <button type="button" className="btn" disabled={busy}
+          onClick={onApprove}>批准</button>
+      </div>
+    </div>
+  );
+}
+
+/** diff 的渲染：成段的未变行只留前后各两行，中间折叠成一行说明，不再是一整面墙。 */
+function DiffView({ lines }: { lines: DiffLine[] }) {
+  const pieces: Array<{ kind: "line"; line: DiffLine } | { kind: "skip"; count: number }> = [];
+  let unchanged: DiffLine[] = [];
+  const flush = () => {
+    if (unchanged.length > 8) {
+      for (const line of unchanged.slice(0, 2)) pieces.push({ kind: "line", line });
+      pieces.push({ kind: "skip", count: unchanged.length - 4 });
+      for (const line of unchanged.slice(-2)) pieces.push({ kind: "line", line });
+    } else {
+      for (const line of unchanged) pieces.push({ kind: "line", line });
+    }
+    unchanged = [];
+  };
+  for (const line of lines) {
+    if (line.kind === "same") unchanged.push(line);
+    else { flush(); pieces.push({ kind: "line", line }); }
+  }
+  flush();
+  return (
+    <div className="skill-change-diff">
+      {pieces.map((piece, index) => piece.kind === "skip" ? (
+        <div key={index} className="skill-change-diff-skip">…… 未改动的 {piece.count} 行 ……</div>
+      ) : (
+        <div key={index} className={`skill-change-diff-line ${piece.line.kind}`}>
+          <span className="skill-change-diff-mark" aria-hidden="true">
+            {piece.line.kind === "add" ? "+" : piece.line.kind === "del" ? "−" : ""}
+          </span>
+          <span>{piece.line.text === "" ? "\u00A0" : piece.line.text}</span>
         </div>
       ))}
-    </section>
+    </div>
   );
 }
