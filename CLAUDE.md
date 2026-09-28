@@ -15,6 +15,7 @@
 | 资料库：保存、检索、版本、用户直改 | `docs/kb.md` |
 | 技能：装配、变更管道、后台复盘、审批 | `docs/skills.md` |
 | 观测：轮次观测、降级、健康检查 | `docs/observability.md` |
+| 真实场景评测：目标、环境、场景库、红线 | `docs/evaluation.md` |
 | 启动、检查命令、远程访问、数据目录 | `README.md` |
 
 规则：
