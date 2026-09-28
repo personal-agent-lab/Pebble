@@ -190,12 +190,3 @@ uv run --project server python -m tests.acceptance.qoder_memory
 ```
 
 `qoder_context` 加 `--compact` 会发送较长的合成文本验证上下文压缩，消耗更多额度。
-
-最小业务评测支持独立实例、重复运行与逐次报告，使用方式见
-[`tests/evaluation/README.md`](tests/evaluation/README.md)。例如：
-
-```bash
-uv run --project server python -m tests.evaluation --model qmodel_38max --repeat 3
-```
-
-它使用真实模型和本地业务链路，合成资料及外部服务替身，不代表真实 Gmail/日历验收。
