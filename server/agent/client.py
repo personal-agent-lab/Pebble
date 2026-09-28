@@ -629,30 +629,7 @@ class QoderGateway:
             return ()
         return (context.Material(CATALOG_TITLE, catalog),) if catalog else ()
 
-    async def _image_input(self, turn: Turn) -> AsyncIterator[dict[str, Any]]:
-        content: list[dict[str, Any]] = [{"type": "text", "text": turn.message}]
-        for attachment in turn.attachments:
-            if not attachment.is_image:
-                continue
-            content.append(
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": attachment.mime_type,
-                        "data": base64.b64encode(attachment.path.read_bytes()).decode("ascii"),
-                    },
-                }
-            )
-        yield {
-            "type": "user",
-            "message": {"role": "user", "content": content},
-            "parent_tool_use_id": None,
-        }
-
-    def _query_input(self, turn: Turn) -> str | AsyncIterator[dict[str, Any]]:
-        if any(item.is_image for item in turn.attachments):
-            return self._image_input(turn)
+    def _query_input(self, turn: Turn) -> str:
         return turn.message
 
     def _task_workspace(self, task_id: str) -> Any:

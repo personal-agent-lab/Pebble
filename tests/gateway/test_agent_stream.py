@@ -220,7 +220,7 @@ def test_follow_up_without_attachments_denies_read_even_when_workspace_has_files
     assert isinstance(denied, PermissionResultDeny)
 
 
-def test_image_attachment_uses_structured_base64_input(settings):
+def test_image_attachment_uses_text_input_and_workspace_read(settings):
     gateway = make_gateway(settings)
     path = gateway.workspaces / "task-1" / "attachments" / "image-1"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -237,15 +237,17 @@ def test_image_attachment_uses_structured_base64_input(settings):
         ),
     )
 
-    payload = asyncio.run(collect(gateway._query_input(turn)))[0]
-    content = payload["message"]["content"]
-    assert content[0] == {"type": "text", "text": "看图"}
-    assert content[1]["type"] == "image"
-    assert content[1]["source"] == {
-        "type": "base64",
-        "media_type": "image/png",
-        "data": "cmFuZG9tLWltYWdl",
-    }
+    assert gateway._query_input(turn) == "看图"
+    options = options_for_turn(gateway, turn)
+    assert "Read" in options.allowed_tools
+    assert isinstance(
+        asyncio.run(
+            options.can_use_tool(
+                "Read", {"file_path": "attachments/image-1"}, ToolPermissionContext()
+            )
+        ),
+        PermissionResultAllow,
+    )
 
 
 @pytest.mark.parametrize("kind", list(TurnKind))
