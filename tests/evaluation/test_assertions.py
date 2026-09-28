@@ -1,4 +1,4 @@
-"""评测器的反例校准：来源错误、结论误导和评审分歧不能通过。"""
+"""评测器的反例校准：来源错误、评审失败和信息不足不能通过。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 
 from evaluation.harness.checks import check_grounded
 from evaluation.harness.model import TurnEvidence
-from evaluation.harness.review import review_reply
+from evaluation.harness.review import review_task
 from evaluation.scenarios.common import seed_corpus
 
 
@@ -70,59 +70,86 @@ def test_search_snippet_counts_only_when_fact_and_path_match_same_hit():
     assert not _passed(check_grounded(evidence, path=current, expect="90 天"))
 
 
-def _judge(conclusion: str, quote: str, unsupported: list[dict] | None = None) -> str:
+def _judge(completion: str = "pass", process: str = "pass") -> str:
     return json.dumps({
-        "conclusion": conclusion,
-        "conclusion_quote": quote,
-        "unsupported": unsupported or [],
+        "task_completion": {"status": completion, "reason": "完成情况说明"},
+        "process_reasonableness": {"status": process, "reason": "过程说明"},
     }, ensure_ascii=False)
 
 
-def _review(reply: str, answers: list[str]) -> list:
-    documents, _, _ = seed_corpus()
-    by_title = {doc.title: doc.body for doc in documents}
+def _review(answers: list[str]) -> list:
     values = iter(answers)
-    return review_reply(
-        reply=reply,
-        current=by_title["家庭保险"],
-        old=by_title["2025 保险单据（旧）"],
-        work_dir=Path("/unused"),
-        ask=lambda _prompt, _path: next(values),
+    return review_task(
+        task="查询邮件是否已发送", expected="如实说明尚未发送",
+        reference="最终状态：草稿待确认", evidence=[_evidence(tools=[])],
+        work_dir=Path("/unused"), ask=lambda _prompt, _path: next(values),
     )
 
 
-def test_correct_current_value_and_explicit_old_value_pass():
-    reply = "旧单据是 180 天，但当前《家庭保险》的等待期是 90 天。"
-    answer = _judge("correct", "当前《家庭保险》的等待期是 90 天")
-    assert _passed(_review(reply, [answer, answer]))
+def test_review_reports_completion_and_process_independently():
+    for completion, process in (("pass", "pass"), ("fail", "pass"), ("pass", "fail")):
+        result = _review([_judge(completion, process)])
+        assert [a.passed for a in result] == [completion == "pass", process == "pass"]
+        assert not any(a.pending for a in result)
 
 
-def test_negated_value_and_misleading_old_value_fail():
-    for reply, quote in (
-        ("等待期不是 90 天，而是 180 天。", "不是 90 天，而是 180 天"),
-        ("现行等待期为 180 天，旧资料提过 90 天。", "现行等待期为 180 天"),
+def test_insufficient_evidence_preserves_other_result():
+    result = _review([_judge("fail", "unclear")])
+    assert not result[0].passed and not result[0].pending
+    assert result[1].pending
+    result = _review([_judge("unclear")])
+    assert result[0].pending
+    assert result[1].passed
+
+
+def test_invalid_review_or_model_failure_never_passes():
+    for answers in (
+        ["not json"], ["[]"], ["{}"],
+        [json.dumps({"task_completion": {"status": "pass", "reason": ""}})],
+        [_judge("invalid")],
+        [],  # 注入调用抛异常
     ):
-        answer = _judge("incorrect", quote)
-        assert not _passed(_review(reply, [answer, answer]))
-
-
-def test_unsupported_extra_claim_fails():
-    reply = "当前等待期是 90 天，而且保费明年会翻倍。"
-    answer = _judge(
-        "correct", "当前等待期是 90 天",
-        [{"quote": "保费明年会翻倍", "reason": "权威资料没有这个变化"}],
-    )
-    assert not _passed(_review(reply, [answer, answer]))
-
-
-def test_review_disagreement_or_fabricated_quote_needs_manual_review():
-    reply = "等待期是 90 天。"
-    yes = _judge("correct", "等待期是 90 天")
-    no = _judge("incorrect", "等待期是 90 天")
-    for answers in ([yes, no], [_judge("correct", "回复里不存在的文字"), yes]):
-        result = _review(reply, answers)
+        result = _review(answers)
         assert not _passed(result)
-        assert "待人工复核" in result[0].detail
+        assert result[0].pending
+
+
+def test_review_receives_multiturn_execution_and_final_state_without_kb_dependency():
+    first = _evidence(tools=[{
+        "name": "calendar_create_event", "status": "error",
+        "arguments": {"title": "面试"}, "result": "时间冲突",
+    }])
+    first.message = "安排周五面试"
+    first.reply_text = "时间冲突，需要改期。"
+    first.timeline_items.append({
+        "kind": "tool", "run_id": "other-run", "name": "unrelated",
+        "result": "不应混入",
+    })
+    second = _evidence(tools=[{
+        "name": "calendar_create_event", "status": "ok",
+        "arguments": {"title": "面试", "day": "周六"}, "result": "创建成功",
+    }])
+    second.message = "改到周六"
+    second.reply_text = "已安排周六面试。"
+    prompts = []
+
+    def ask(prompt: str, _path: Path) -> str:
+        prompts.append(json.loads(prompt))
+        return _judge()
+
+    result = review_task(
+        task="安排面试，遇冲突后改期", expected="最终安排在周六",
+        reference="外部查询：周六存在面试事件", evidence=[first, second],
+        work_dir=Path("/unused"), ask=ask,
+    )
+    assert _passed(result)
+    assert len(prompts) == 1
+    payload = prompts[0]
+    assert payload["reference"] == "外部查询：周六存在面试事件"
+    assert [t["message"] for t in payload["turns"]] == ["安排周五面试", "改到周六"]
+    assert payload["turns"][0]["timeline"] == first.timeline_items[:1]
+    assert payload["turns"][1]["timeline"][0]["result"] == "创建成功"
+    assert payload["turns"][1]["reply"] == second.reply_text
 
 
 def test_seed_fact_has_distinct_current_old_and_blank_backup():

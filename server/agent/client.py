@@ -478,6 +478,9 @@ class QoderGateway:
                     context_before: dict | None = None
                     if turn.sdk_session_id is not None:
                         context_before = await self._compact_if_needed(client, observer)
+                    else:
+                        # 新会话首轮没有可压缩的上下文，但轮前读数每轮都要记。
+                        context_before = await self._read_context_before(client, observer)
                     await client.query(self._query_input(turn))
                     async for message in client.receive_response():
                         # 工具事件在产生它的那次调用之后、模型的下一条消息之前送出。
@@ -546,6 +549,23 @@ class QoderGateway:
             return activity(label, arguments.get(field))
         return None
 
+    async def _read_context_before(
+        self, client: QoderSDKClient, observer: TurnObserver
+    ) -> dict | None:
+        """轮首读取上下文占用并记录轮前读数——每轮都记，含新会话首轮。
+
+        读取失败只留空值；返回读数（观测存储形状）供压缩判断与压缩步骤引用。
+        """
+        try:
+            usage = await client.get_context_usage()
+        except Exception:
+            logger.exception("轮首的上下文占用读取失败")
+            return None
+        reading = _context_reading(usage)
+        if reading is not None:
+            observer.record_context(before=reading)
+        return reading
+
     async def _compact_if_needed(
         self, client: QoderSDKClient, observer: TurnObserver
     ) -> dict | None:
@@ -553,17 +573,14 @@ class QoderGateway:
 
         返回轮首的上下文读数供压缩步骤引用；读取失败只留空值。
         """
-        try:
-            usage = await client.get_context_usage()
-        except Exception:
-            logger.exception("轮首的上下文占用读取失败")
+        context_before = await self._read_context_before(client, observer)
+        if context_before is None:
             return None
-        context_before = _context_reading(usage)
-        observer.record_context(before=context_before)
-        automatic = usage["autoCompact"]
-        if automatic["enabled"]:
+        used = context_before.get("used_percentage")
+        threshold = context_before.get("threshold_percentage")
+        if context_before.get("auto_compact_enabled") or used is None or threshold is None:
             return context_before
-        if usage["contextWindow"]["usedPercentage"] < automatic["thresholdPercentage"]:
+        if used < threshold:
             return context_before
 
         compacted = False

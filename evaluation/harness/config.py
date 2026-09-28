@@ -5,7 +5,11 @@ from __future__ import annotations
 import os
 import socket
 from dataclasses import dataclass, field
+from datetime import timedelta, timezone
 from pathlib import Path
+
+# 评测产物面向本地阅读，时间戳统一按 UTC+8（北京时间）呈现，不用 UTC。
+EVAL_TZ = timezone(timedelta(hours=8), "UTC+8")
 
 
 def repo_root() -> Path:

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .config import EVAL_TZ
 from .model import Assertion, TurnEvidence
 
 
@@ -71,8 +72,13 @@ def _turn_json(evidence: TurnEvidence) -> dict[str, Any]:
         "message": evidence.message,
         "reply": evidence.reply_text,
         "tools": [
-            {"name": name, "status": status, "arguments": arguments}
-            for name, status, arguments in evidence.tool_calls()
+            {
+                "name": call.name,
+                "status": call.status,
+                "arguments": call.arguments,
+                "result": call.result,
+            }
+            for call in evidence.invocations()
         ],
         "usage": (evidence.observation or {}).get("usage_totals"),
     }
@@ -89,14 +95,25 @@ def _render_turn(idx: int, evidence: TurnEvidence) -> list[str]:
     lines.append("")
     lines.append(f"**助手**：{_clip(evidence.reply_text, 2000)}")
     lines.append("")
-    calls = evidence.tool_calls()
+    calls = evidence.invocations()
     if calls:
         lines.append("**工具调用**：")
-        for name, status, arguments in calls:
-            detail = ""
-            if arguments:
-                detail = " " + _clip(json.dumps(arguments, ensure_ascii=False), 160)
-            lines.append(f"- `{name}`（{status}）{detail}")
+        for index, call in enumerate(calls, start=1):
+            try:
+                result: Any = json.loads(call.result)
+            except (TypeError, ValueError):
+                result = call.result
+            lines.extend([
+                "",
+                f"{index}. `{call.name}`（{call.status}）",
+                "",
+                "```json",
+                json.dumps(
+                    {"arguments": call.arguments, "result": result},
+                    ensure_ascii=False, indent=2,
+                ),
+                "```",
+            ])
     else:
         lines.append("**工具调用**：（无）")
     return lines
@@ -110,7 +127,7 @@ def write_report(
     md_path = run_dir / "report.md"
 
     json_payload = {
-        "meta": {**meta, "generated_at": datetime.now(UTC).isoformat()},
+        "meta": {**meta, "generated_at": datetime.now(EVAL_TZ).isoformat()},
         "records": [
             {
                 "scenario_id": r.scenario_id,

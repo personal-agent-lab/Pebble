@@ -134,6 +134,25 @@ def test_stream_records_materials_usage_and_result(settings, monkeypatch):
     }
 
 
+def test_first_turn_records_context_before(settings, monkeypatch):
+    """新会话首轮也必须有轮前读数：观测规格要求每轮两次读数，首轮不豁免。"""
+    gateway = make_gateway(settings)
+    task = SessionStore().create_task("首轮读数")
+    seed_turn(task["task_id"], "run-first", "测试输入")
+    install_sdk(monkeypatch, gateway, [result()])
+
+    events = asyncio.run(
+        collect(gateway.stream_turn(observed_turn(task["task_id"], "run-first")))
+    )
+    assert events[-1] == {"type": "done"}
+
+    row = summary("run-first")
+    before = json.loads(row["context_before"])
+    after = json.loads(row["context_after"])
+    assert before["used_percentage"] == 42.0
+    assert after["used_percentage"] == 42.0
+
+
 def test_resumed_turn_records_context_and_manual_compact(settings, monkeypatch):
     gateway = make_gateway(settings)
     task = SessionStore().create_task("压缩观测")

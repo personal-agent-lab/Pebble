@@ -265,6 +265,9 @@ class PebbleClient:
     def kb_search(self, query: str) -> dict[str, Any]:
         return self._request("GET", f"/api/kb/search?q={urllib.parse.quote(query)}")
 
+    def kb_document(self, path: str) -> dict[str, Any]:
+        return self._request("GET", f"/api/kb/document?path={urllib.parse.quote(path)}")
+
     def kb_update_document(
         self, path: str, expected_version: str, body: str | None = None
     ) -> dict[str, Any]:

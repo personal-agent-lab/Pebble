@@ -105,6 +105,7 @@ class ScenarioContext:
         files: list[Attachment] | None = None,
         selection: dict[str, Any] | None = None,
         target: dict[str, Any] | None = None,
+        on_started: Callable[[str, str], None] | None = None,
     ) -> TurnEvidence:
         started = time.monotonic()
         if task_id is None:
@@ -121,6 +122,8 @@ class ScenarioContext:
                 task_id, message=message, files=files, selection=selection, target=target
             )
         run_id = run["run_id"]
+        if on_started is not None:
+            on_started(task_id, run_id)
         final_run = self.client.wait_turn(
             task_id,
             run_id,

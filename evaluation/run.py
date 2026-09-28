@@ -14,10 +14,10 @@ import argparse
 import sys
 import time
 import traceback
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
-from .harness.config import EvalSettings
+from .harness.config import EVAL_TZ, EvalSettings
 from .harness.model import Scenario, ScenarioContext
 from .harness.report import ScenarioRecord, write_report
 from .harness.seeds import SeedBuilder
@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     selected = (
         list(REGISTRY.values()) if args.scenario == "all" else [REGISTRY[args.scenario]]
     )
-    started_at = datetime.now(UTC)
+    started_at = datetime.now(EVAL_TZ)
     run_dir = settings.results_root / started_at.strftime("%Y%m%d-%H%M%S")
     records: list[ScenarioRecord] = []
     for scenario in selected:
