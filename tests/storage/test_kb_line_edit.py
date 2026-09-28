@@ -166,9 +166,3 @@ def test_read_tool_anchors_only_current_full_reads(settings):
     assert historical["body"] == BODY and "anchored_body" not in historical
     fragment = read_tool(store, ref=saved["ref"])
     assert "anchored_body" not in fragment
-
-
-def test_update_tool_declares_operations_schema():
-    schema = default_registry.get_tool("kb_update").parameters_schema["properties"]
-    actions = schema["operations"]["items"]["properties"]["action"]["enum"]
-    assert actions == ["append", "insert", "replace", "delete"]

@@ -265,19 +265,6 @@ def test_ref_reads_the_exact_section_and_rejects_forged_refs(settings):
         kb.read(ref={**ref, "path": "kb/inbox/missing.md"})
 
 
-def test_whole_body_range_ref_is_accepted(settings):
-    kb = store(settings)
-    saved = kb.save(title=TITLE, body=BODY, path="项目/验收.md")
-    ref = kb.search(query="CORAL-7421")["results"][0]["ref"]
-
-    # 整篇引用（save/read 返回的 ref）覆盖正文区间，可以读回整篇正文
-    whole = kb.read(doc_id=saved["id"])
-    read = kb.read(ref={**ref, "lines": whole["lines"]})
-
-    assert read["heading"] is None
-    assert read["body"] == whole["body"]
-
-
 def test_best_match_is_not_dropped_when_candidates_exceed_the_cap(settings):
     kb = store(settings)
     sections = "\n".join(f"## 群体 {index}\n\n燕鸥在湿地过冬。" for index in range(501))

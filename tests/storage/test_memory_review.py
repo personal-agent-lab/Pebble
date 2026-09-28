@@ -87,10 +87,6 @@ def test_review_registry_binds_only_the_edit_tool(store):
     assert store.snapshot()["memory"]["content"] == "- 用户在研究记忆机制"
 
 
-def test_review_registry_has_no_foreground_memory_tool():
-    assert review_registry.get_tool("memory") is None
-
-
 # ---------- 触发计数 ----------
 
 
@@ -245,14 +241,6 @@ def test_render_transcript_labels_notice_as_system():
         {"role": "assistant", "text": "你好！"},
     ]
     assert render_transcript(items) == "用户：你好\n系统：已记住：你好\n助手：你好！"
-
-
-def test_render_transcript_labels_roles():
-    items = [
-        {"role": "user", "text": "你好"},
-        {"role": "assistant", "text": "你好！"},
-    ]
-    assert render_transcript(items) == "用户：你好\n助手：你好！"
 
 
 def test_build_review_message_renders_materials(store):

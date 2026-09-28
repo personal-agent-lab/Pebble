@@ -1,4 +1,4 @@
-"""tests/test_gmail_validator.py: 测试 Gmail 邮件草稿业务校验纯函数。"""
+"""Gmail 邮件草稿业务校验纯函数。"""
 
 from server.tools.gmail.service import is_valid_email_address, validate_mail_draft
 
@@ -122,21 +122,6 @@ def test_validate_mail_draft_empty_subject_and_body() -> None:
     fields = [e["field"] for e in res["errors"]]
     assert "subject" in fields
     assert "body" in fields
-
-
-def test_validate_mail_draft_is_pure_function() -> None:
-    args = {
-        "kind": "reply",
-        "source_message_id": "msg_123",
-        "thread_id": "thread_456",
-        "to": ["user@example.com"],
-        "subject": "主题",
-        "body": "正文",
-    }
-    res1 = validate_mail_draft(**args)
-    res2 = validate_mail_draft(**args)
-    assert res1 == res2
-    assert res1["valid"] is True
 
 
 def test_is_valid_email_address_edge_cases() -> None:

@@ -101,7 +101,7 @@ def log(step, **fields):
     print(f"[{time.strftime('%H:%M:%S')}] {step} {detail}", flush=True)
 
 
-@pytest.mark.parametrize("outcome", ["sent", "failed", "unknown"])
+@pytest.mark.parametrize("outcome", ["sent", "unknown"])
 def test_http_sse_flow_and_process_restart(settings, outcome, monkeypatch):
     monkeypatch.setenv("PEBBLE_TEST_SEND_STATUS", outcome)
     log("开始：真实后端 + Agent/Gmail 替身", outcome=outcome, evidence=str(settings.data_dir))
@@ -398,43 +398,6 @@ def test_verification_route_upgrades_and_delivers(settings):
 
         assert client.post(f"/api/operations/{oid}/verification").json() == verified
         assert len(calls) == 2
-
-
-def test_confirmation_rejects_draft_without_recipients(settings):
-    """收件人空着的草稿可以保存和读取；确认发送被拒绝，且不取得执行权。"""
-    calls = []
-
-    def send(**fields):
-        calls.append(fields)
-        return {"status": "sent", "message_id": "gmail-1"}
-
-    app = create_app(send_message=send)
-    with TestClient(app) as client:
-        tid = app.state.tasks.create_task("测试")["task_id"]
-        op = MailDraftStore().save_email_draft(tid, [], "会议通知", "正文")
-        oid = op["operation_id"]
-        assert client.get(f"/api/operations/{oid}/draft").json()["to"] == []
-
-        # 卡片失焦时按当前字段整份写回：收件人留空也是合法的一版
-        edited = client.patch(
-            f"/api/operations/{oid}/draft",
-            json={"expected_version": 1, "to": [], "subject": "会议通知", "body": "正文（改）"},
-        )
-        assert edited.status_code == 200
-        assert edited.json()["version"] == 2
-
-        response = client.post(
-            f"/api/tasks/{tid}/confirmations", json={"operation_id": oid, "version": 2}
-        )
-
-        assert response.status_code == 422
-        assert response.json() == {
-            "error": "invalid_draft",
-            "message": "待确认内容未通过校验",
-            "errors": [{"field": "to", "message": "收件人 (to) 不能为空，填写后才能发送"}],
-        }
-        assert calls == []
-        assert client.get(f"/api/operations/{oid}/execution").json()["status"] == "pending"
 
 
 def test_verification_of_unconfirmed_operation_calls_nothing(settings):

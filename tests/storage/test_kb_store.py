@@ -88,6 +88,7 @@ def test_read_lines_cover_the_body_and_whole_body_ref_reads_back_the_body(settin
     ref = store.search(query="第二段")["results"][0]["ref"]
     fragment = store.read(ref={**ref, "lines": whole["lines"]})
     assert fragment["body"] == whole["body"]
+    assert fragment["heading"] is None
 
 
 def test_list_discovers_documents_without_knowing_path_or_id(settings):
@@ -358,16 +359,6 @@ def test_manual_edit_then_save_another_searches_the_edited_content(settings):
     _manually_edit(target, "CORAL-7421", "REVISED-9000")
 
     store.save(title="beta", body="无关正文。")
-
-    assert not store.search(query="CORAL-7421")["results"]
-    assert store.search(query="REVISED-9000")["results"]
-
-
-def test_manual_edit_then_search_does_not_return_stale_hits(settings):
-    store = KbStore(settings.data_dir)
-    store.save(title="alpha", body="## sec\nCORAL-7421")
-    target = next((settings.data_dir / "kb").glob("*.md"))
-    _manually_edit(target, "CORAL-7421", "REVISED-9000")
 
     assert not store.search(query="CORAL-7421")["results"]
     assert store.search(query="REVISED-9000")["results"]

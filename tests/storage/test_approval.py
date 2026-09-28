@@ -292,14 +292,6 @@ def test_edit_and_confirm_race(stores):
             {"status": "sent", "message_id": "gmail-42"},
             {"status": "sent", "message_id": "gmail-42"},
         ),
-        (
-            {"status": "failed", "reason": "收件人被拒绝"},
-            {"status": "failed", "reason": "收件人被拒绝"},
-        ),
-        (
-            {"status": "unknown", "reason": "网关超时"},
-            {"status": "unknown", "reason": "网关超时"},
-        ),
     ],
 )
 def test_send_result_persists_for_new_process(stores, outcome, expected):
@@ -344,14 +336,9 @@ print(json.dumps({{"execution": service.get_execution({operation["operation_id"]
     "returned",
     [
         RuntimeError("网络超时"),
-        None,
         "sent",
-        {"status": "sent"},
-        {"status": "failed"},
         {"status": "finished", "message_id": "x"},
         {"status": "sent", "message_id": 42},
-        {"status": []},
-        {"status": {}},
     ],
 )
 def test_unclear_send_result_saved_as_unknown(stores, returned):

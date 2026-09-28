@@ -1,4 +1,4 @@
-"""tests/test_prepare_reply.py: 测试 prepare_reply 工具、业务校验门禁与草稿去重。
+"""prepare_reply 工具、业务校验门禁与草稿去重。
 
 草稿存储用真实 SQLite：工具与 HTTP 共用同一实现，去重和版本由数据库唯一约束保证。
 """

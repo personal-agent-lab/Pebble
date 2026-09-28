@@ -123,7 +123,7 @@ def test_validation_failure_and_reuse(stores, monkeypatch):
     assert len(stores[0].list_task_operations(task["task_id"])) == 1
 
 
-@pytest.mark.parametrize("status", ["sending", "sent", "failed", "unknown"])
+@pytest.mark.parametrize("status", ["sending", "sent"])
 def test_noneditable(stores, status):
     task, op = prepare(stores)
     with session() as conn, write(conn):

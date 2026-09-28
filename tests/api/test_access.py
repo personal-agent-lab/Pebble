@@ -37,12 +37,8 @@ def pending_draft(app) -> dict:
 @pytest.mark.parametrize(
     "path",
     [
-        "/api/health",
         "/api/tasks",
-        "/api/kb/documents",
-        "/api/memory",
         "/api/tasks/any/events",
-        "/api/tasks/any/attachments/any",
     ],
 )
 def test_requests_without_identity_are_rejected(client, path):

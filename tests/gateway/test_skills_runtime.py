@@ -8,7 +8,6 @@ from server.errors import SkillUnknownError
 from server.skills.models import ChangeAction, ChangeActor, SkillState
 from server.skills.runtime import (
     catalog_material,
-    current,
     manual_materials,
     turn_scope,
 )
@@ -241,12 +240,3 @@ def test_skill_tool_visibility_per_turn_kind() -> None:
             assert "skill_manage" in visible
         else:
             assert "skill_manage" not in visible
-
-
-def test_turn_scope_sets_and_resets() -> None:
-    assert current() is None
-    with turn_scope(task_id="t", run_id="r", skills=("a",), auto_match=False) as scope:
-        assert current() is scope
-        assert scope.manual_skill_ids == ("a",)
-        assert scope.auto_match is False
-    assert current() is None

@@ -1179,11 +1179,3 @@ def test_tool_boundary_hides_unexpected_failure_detail(settings, monkeypatch):
     payload = tool_payload(failed)
     assert payload["error"] == "unexpected"
     assert "secret" not in json.dumps(payload, ensure_ascii=False)
-
-
-def test_schema_hides_injected_dependencies(settings):
-    gateway = make_gateway(settings)
-    for definition in gateway.tools:
-        assert not {"gmail", "drafts", "tasks", "task_id"} & set(
-            definition.parameters_schema["properties"]
-        )

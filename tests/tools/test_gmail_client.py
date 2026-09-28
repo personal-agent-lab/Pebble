@@ -1,4 +1,4 @@
-"""tests/test_gmail_client.py: 测试 GmailClient 协议实现、显式替身与 MIME 报文解析。"""
+"""GmailClient 协议实现与 MIME 报文解析（显式替身的行为由使用它的各测试间接钉住）。"""
 
 import base64
 import email
@@ -13,61 +13,6 @@ from server.tools.gmail.client import (
     MimeParser,
     create_gmail_client,
 )
-from tests.support.gmail_double import MockGmailClient
-
-
-def test_mock_client_get_message_and_thread() -> None:
-    client = MockGmailClient()
-    msg = client.get_message("msg_invite_001")
-
-    assert msg.id == "msg_invite_001"
-    assert msg.thread_id == "thread_invite_001"
-    assert msg.from_addr == "Alice <alice@example.com>"
-    assert "架构讨论" in msg.subject
-    assert "第二会议室" in msg.body_text
-    assert msg.internal_date_ms > 0
-    assert "INBOX" in msg.labels
-
-    thread = client.get_thread("thread_invite_001")
-    assert len(thread) == 1
-    assert thread[0].id == "msg_invite_001"
-
-
-def test_mock_client_message_not_found() -> None:
-    client = MockGmailClient()
-    with pytest.raises(KeyError):
-        client.get_message("non_existent_id")
-
-
-def test_mock_client_search_messages() -> None:
-    client = MockGmailClient()
-    results = client.search_messages("第二会议室")
-    assert len(results) == 1
-    assert results[0]["id"] == "msg_invite_001"
-
-    empty_results = client.search_messages("不存在的内容")
-    assert len(empty_results) == 0
-
-
-def test_mock_client_raw_send_message_and_verify() -> None:
-    client = MockGmailClient()
-    res = client.raw_send_message(
-        to=["alice@example.com"],
-        subject="Re: 项目进展评审与架构讨论邀请",
-        body="确认可以按时出席会议。",
-        thread_id="thread_invite_001",
-        in_reply_to_rfc_id="<invite-001@example.com>",
-    )
-
-    assert res.thread_id == "thread_invite_001"
-    assert res.message_id.startswith("mock_sent_")
-
-    # 验证 thread 内追加了回复
-    thread = client.get_thread("thread_invite_001")
-    assert len(thread) == 2
-    assert thread[1].id == res.message_id
-    assert thread[1].body_text == "确认可以按时出席会议。"
-    assert "SENT" in thread[1].labels
 
 
 def test_mime_parser_helpers() -> None:
@@ -341,8 +286,6 @@ def test_client_protocol_excludes_unconfirmed_send_paths() -> None:
 
 def test_create_gmail_client_requires_credentials(tmp_path, settings: Settings) -> None:
     # 缺少凭证时明确拒绝，测试替身只能显式注入
-    import pytest
-
     missing = Settings(data_dir=tmp_path, _env_file=None)
     with pytest.raises(RuntimeError, match="未配置"):
         create_gmail_client(missing)

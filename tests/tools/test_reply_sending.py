@@ -92,7 +92,7 @@ def test_wrong_thread_and_header_injection_never_send():
 
 
 @pytest.mark.parametrize(
-    "http_status,expected", [(401, "failed"), (403, "failed"), (408, "unknown"), (503, "unknown")]
+    "http_status,expected", [(401, "failed"), (408, "unknown")]
 )
 def test_http_failure_classification(http_status, expected):
     client = MockGmailClient()

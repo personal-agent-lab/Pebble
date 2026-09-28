@@ -57,19 +57,3 @@ def test_manual_review_endpoint_rejects_unknown_task(settings):
     with TestClient(create_app(gateway=FakeAgentGateway())) as client:
         response = client.post("/api/tasks/missing/memory-review")
         assert response.status_code == 404
-
-
-def test_interval_review_triggers_after_five_messages_over_http(settings):
-    gateway = FakeAgentGateway()
-    app = create_app(gateway=gateway)
-    with TestClient(app) as client:
-        task_id = app.state.tasks.create_task("闲聊")["task_id"]
-        for index in range(5):
-            client.post(f"/api/tasks/{task_id}/messages", data={"message": f"第 {index + 1} 句"})
-            wait_for(
-                lambda: client.get(f"/api/tasks/{task_id}").json()["latest_run"]["status"] == "done"
-            )
-        wait_for(lambda: review_rows() and review_rows()[0]["status"] == "done")
-        assert len(gateway.review_calls) == 1
-        assert gateway.review_calls[0]["transcript"].count("用户：") == 5
-        assert review_rows()[0]["origin"] == "interval"

@@ -50,21 +50,17 @@ def test_read_and_write_whole_document(settings):
         assert (settings.data_dir / "memory" / "USER.md").read_text() == ""
 
 
-def test_stale_version_conflicts_without_writing(settings):
+def test_write_errors_map_to_status_codes(settings):
     with client_for(settings) as client:
         stale = client.get("/api/memory").json()["memory"]["version"]
         (settings.data_dir / "memory" / "MEMORY.md").write_text("编辑器写入", encoding="utf-8")
 
-        response = client.put(
+        conflict = client.put(
             "/api/memory/memory", json={"content": "页面内容", "expected_version": stale}
         )
-        assert response.status_code == 409
-        assert response.json()["error"] == "version_conflict"
-        assert client.get("/api/memory").json()["memory"]["content"] == "编辑器写入"
+        assert conflict.status_code == 409
+        assert conflict.json()["error"] == "version_conflict"
 
-
-def test_capacity_and_unknown_target(settings):
-    with client_for(settings) as client:
         version = client.get("/api/memory").json()["user"]["version"]
 
         full = client.put(
