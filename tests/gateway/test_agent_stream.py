@@ -160,9 +160,14 @@ def test_user_turn_permission_callback_allows_only_declared_web_tools(settings):
     context = ToolPermissionContext()
 
     fetch = asyncio.run(options.can_use_tool("WebFetch", {"url": "https://example.com"}, context))
+    registered = next(name for name in options.allowed_tools if name.startswith("mcp__"))
+    mcp = asyncio.run(options.can_use_tool(registered, {}, context))
+    unknown_mcp = asyncio.run(options.can_use_tool("mcp__pebble__missing", {}, context))
     unexpected = asyncio.run(options.can_use_tool("Bash", {"command": "true"}, context))
 
     assert isinstance(fetch, PermissionResultAllow)
+    assert isinstance(mcp, PermissionResultAllow)
+    assert isinstance(unknown_mcp, PermissionResultDeny)
     assert isinstance(unexpected, PermissionResultDeny)
 
 
@@ -188,13 +193,31 @@ def test_attachment_turn_enables_read_only_inside_task_workspace(settings):
 
     assert "Read" in options.allowed_tools
     inside = asyncio.run(options.can_use_tool("Read", {"file_path": "attachments/file-1"}, context))
+    registered = next(name for name in options.allowed_tools if name.startswith("mcp__"))
+    mcp = asyncio.run(options.can_use_tool(registered, {}, context))
     outside = asyncio.run(
         options.can_use_tool("Read", {"file_path": "../task-2/attachments/file-2"}, context)
     )
     shell = asyncio.run(options.can_use_tool("Bash", {"command": "true"}, context))
     assert isinstance(inside, PermissionResultAllow)
+    assert isinstance(mcp, PermissionResultAllow)
     assert isinstance(outside, PermissionResultDeny)
     assert isinstance(shell, PermissionResultDeny)
+
+
+def test_follow_up_without_attachments_denies_read_even_when_workspace_has_files(settings):
+    gateway = make_gateway(settings)
+    workspace = gateway.workspaces / "task-1" / "attachments"
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "old-report.pdf").write_bytes(b"%PDF-1.4")
+    options = options_for(gateway, TurnKind.MESSAGE)
+
+    assert "Read" not in options.allowed_tools
+    assert "Read" not in options.tools
+    denied = asyncio.run(options.can_use_tool(
+        "Read", {"file_path": "attachments/old-report.pdf"}, ToolPermissionContext()
+    ))
+    assert isinstance(denied, PermissionResultDeny)
 
 
 def test_image_attachment_uses_structured_base64_input(settings):

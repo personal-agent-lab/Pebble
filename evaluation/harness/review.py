@@ -130,7 +130,12 @@ def review_task(
 
     ask = ask or call
     try:
-        review = parse_review(ask(prompt, work_dir / "review"))
+        raw = ask(prompt, work_dir / "review")
+        try:
+            review = parse_review(raw)
+        except (ValueError, TypeError):
+            # 轻模型偶尔返回不完整 JSON；只为格式错误重试一次，不把失败判成通过。
+            review = parse_review(ask(prompt, work_dir / "review-retry"))
     except Exception as exc:  # noqa: BLE001 评审边界失败不可让场景误报通过
         return [Assertion(
             "semantic_review", False,

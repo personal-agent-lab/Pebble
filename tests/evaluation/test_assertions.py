@@ -114,6 +114,12 @@ def test_invalid_review_or_model_failure_never_passes():
         assert result[0].pending
 
 
+def test_review_retries_one_malformed_response():
+    result = _review(["not json", _judge("pass", "fail")])
+    assert result[0].passed
+    assert not result[1].passed
+
+
 def test_review_receives_multiturn_execution_and_final_state_without_kb_dependency():
     first = _evidence(tools=[{
         "name": "calendar_create_event", "status": "error",

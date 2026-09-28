@@ -667,11 +667,14 @@ class QoderGateway:
         *,
         web_enabled: bool,
         read_enabled: bool,
+        allowed_mcp_tools: frozenset[str] = frozenset(),
         on_timeline_change: Callable[[], None] | None = None,
     ):
         workspace = self._task_workspace(task_id).resolve()
 
         async def authorize(tool_name: str, tool_input: dict, permission_context: Any):
+            if tool_name in allowed_mcp_tools:
+                return PermissionResultAllow()
             if web_enabled and tool_name in WEB_TOOLS:
                 return PermissionResultAllow()
             if (
@@ -766,7 +769,7 @@ class QoderGateway:
             )
         workspace = self._task_workspace(turn.task_id)
         web_tools = list(WEB_TOOLS) if turn.kind is TurnKind.MESSAGE else []
-        read_enabled = turn.kind is TurnKind.MESSAGE and (workspace / "attachments").is_dir()
+        read_enabled = turn.kind is TurnKind.MESSAGE and bool(turn.attachments)
         builtins = [*web_tools, *(["Read"] if read_enabled else [])]
         hooks = turn_context_hooks(ctx.additional_context) or {}
         hooks.update(
@@ -786,6 +789,10 @@ class QoderGateway:
                     turn.run_id,
                     web_enabled=bool(web_tools),
                     read_enabled=read_enabled,
+                    allowed_mcp_tools=frozenset(
+                        f"mcp__{TOOL_SERVER_NAME}__{definition.name}"
+                        for definition in visible
+                    ),
                     on_timeline_change=turn.on_timeline_change,
                 )
                 if builtins
