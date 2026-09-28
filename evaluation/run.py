@@ -56,16 +56,19 @@ def _run_repetition(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Pebble 真实场景评测")
     parser.add_argument(
-        "--scenario", default="S1", help=f"场景 id 或 all；可选：{','.join(REGISTRY)}"
+        "--scenario", default="S1",
+        help=f"场景 id、逗号分隔的多个 id，或 all；可选：{','.join(REGISTRY)}",
     )
     parser.add_argument("--repeat", type=int, default=None, help="覆盖场景默认重复次数")
     parser.add_argument("--model", default="", help="覆盖主模型（默认 auto）")
     args = parser.parse_args(argv)
 
     settings = EvalSettings(model=args.model)
-    selected = (
-        list(REGISTRY.values()) if args.scenario == "all" else [REGISTRY[args.scenario]]
-    )
+    names = list(REGISTRY) if args.scenario == "all" else args.scenario.split(",")
+    unknown = [name for name in names if name not in REGISTRY]
+    if unknown:
+        parser.error(f"未知场景：{','.join(unknown)}")
+    selected = [REGISTRY[name] for name in names]
     started_at = datetime.now(EVAL_TZ)
     run_dir = settings.results_root / started_at.strftime("%Y%m%d-%H%M%S")
     records: list[ScenarioRecord] = []
