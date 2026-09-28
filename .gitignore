@@ -13,3 +13,5 @@ web/dist/
 *.tsbuildinfo
 qwenwork/
 .vscode/
+
+.eval-results/
