@@ -24,7 +24,7 @@ type Props = {
  * 已结束一轮的折叠头：一行「已思考 X」加通栏分隔线，把过程区与结果隔开。
  *
  * 这里只报这一轮的时长。材料、用量与步骤清单不再单独成卡片；上下文占用移到
- * 输入框左侧的标记里（contracts/observability.md §4）。
+ * 输入框左侧的标记里（docs/observability.md §6）。
  */
 export default function RunDuration({ run, expanded, onToggle }: Props) {
   const duration = run?.sdk_result?.duration_ms ?? null;

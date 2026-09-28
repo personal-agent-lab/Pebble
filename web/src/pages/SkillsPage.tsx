@@ -138,7 +138,7 @@ function lineDiff(oldText: string, newText: string): DiffLine[] {
  *
  * 目录页与资料列表同一套行；点进一个技能后与资料页同一套骨架——顶栏是这个对象的操作，
  * 正文一栏到底，只是左边多一列文件树：一个技能是一个目录，正文之外还有 references/ 与
- * templates/ 两层附件（`skill-spec.md` §3），树把它们摆出来，右边读其中一份。
+ * templates/ 两层附件（`docs/skills.md` §2.1），树把它们摆出来，右边读其中一份。
  */
 export default function SkillsPage() {
   const [params, setParams] = useSearchParams();

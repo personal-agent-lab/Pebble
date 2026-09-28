@@ -8,24 +8,18 @@
 确认操作；任务不依赖始终开启的浏览器页面。新邮件是首版的系统触发源，收到即自动开始处理，
 但邮件只是它能做的事之一。
 
-已接通对话与任务、Gmail、iCloud Calendar、长期记忆、历史对话检索、个人资料库，以及经 Tailscale 的
-HTTPS 远程访问；主题页尚未实现；Skills 支持管理、审核与受控加载。完整的实现状态与已知偏差见 `docs/status.md`。真实账号验收仍在进行，本地测试通过不代表真实邮件或日程操作成功。
+能力范围与行为规则见 `docs/` 规格文档；实现状态与已知偏差见 `docs/status.md`。
 
 ## 文档
 
-- `docs/v1-spec.md`：需求范围、产品行为、验收标准。内容冲突时以此为准。
-- `docs/v1-design.md`：组件划分、交付阶段、验证要求与实现要点。
+- `docs/spec.md`：产品总纲——定位、全局不变量、轮次模型、上下文预算、部署与跨域验收。内容冲突时以此为准。
+- `docs/mail.md`：Gmail——触发、草稿、确认发送与核实。
+- `docs/calendar.md`：iCloud Calendar——查询、冲突、会话式创建。
+- `docs/memory.md`：长期记忆——两个文件、两条写路径、注入预算。
+- `docs/kb.md`：个人资料库——保存、检索、版本、用户直改。
+- `docs/skills.md`：技能——形态、装配、变更管道、后台复盘。
+- `docs/observability.md`：可观测性——轮次观测、降级、健康检查。
 - `docs/status.md`：实现状态与已知偏差，唯一的状态记录。
-- `docs/memory-spec.md`：记忆功能规格：短期上下文、长期记忆、常驻上下文与按需检索、历史检索。
-- `docs/kb-spec.md`：个人资料库功能规格：保存与主动保存、检索作答、删除与恢复、主题页。
-- `docs/contracts/mail.md`：Gmail 工具、同步触发、确认发送与核实的字段与语义。
-- `docs/contracts/calendar.md`：iCloud Calendar 工具、直连创建与冲突处理的字段与语义。
-- `docs/contracts/memory.md`：长期记忆与历史检索的文件格式、工具与接口。
-- `docs/skill-spec.md`：技能功能规格：形态、加载、创建来源、后台复盘与维护。
-- `docs/contracts/skill.md`：技能的文件格式、数据模型、工具、加载与变更接口。
-- `docs/contracts/personal-kb.md`：个人知识库的工具、存储与引用语义。
-
-设计文档第 2 节的组件表与代码结构是目标结构。
 
 ## 前置依赖
 
@@ -104,7 +98,7 @@ npm run dev
 
 经 [Tailscale](https://tailscale.com/) 私有网络访问：服务只监听本机，由 Tailscale Serve 提供带正式证书的
 HTTPS 地址并转发；只有你 tailnet 里的设备能连上，Pebble 再按 Tailscale 账号与请求来源校验
-（`docs/v1-design.md` §6）。服务不暴露在公网，不要开启 Tailscale Funnel。
+（`docs/spec.md` §8）。服务不暴露在公网，不要开启 Tailscale Funnel。
 
 1. 服务所在电脑与手机都安装 Tailscale，登录同一账号；管理后台开启 MagicDNS 与 HTTPS Certificates。
 2. 构建前端：`cd web && npm run build`。

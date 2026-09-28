@@ -1,4 +1,4 @@
-"""技能数据模型与内容版本计算；文件格式见 `contracts/skill.md` §1–§2。"""
+"""技能数据模型与内容版本计算；文件格式见 `docs/skills.md` §2。"""
 
 from __future__ import annotations
 

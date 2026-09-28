@@ -297,7 +297,7 @@ SCHEMA_V18 = (
     "created_at TEXT NOT NULL)",
 )
 
-# Skills 重写（contracts/skill.md，2026-09）：旧设计的运行表全部退役，正文不在 SQLite。
+# Skills 重写（docs/skills.md，2026-09）：旧设计的运行表全部退役，正文不在 SQLite。
 # skill_changes 记录“提出与应用分离”的每次变更；skill_loads 是进入材料与 skill_view 的加载记录。
 SCHEMA_V19 = (
     "DROP TABLE IF EXISTS skill_tool_evidence",
@@ -319,7 +319,7 @@ SCHEMA_V19 = (
     "CREATE INDEX skill_loads_skill ON skill_loads(skill_id, loaded_at)",
 )
 
-# 执行轨迹（contracts/skill.md §3）：时间线补任务内单调 sequence，并新增 tool 条目
+# 执行轨迹（docs/observability.md §2）：时间线补任务内单调 sequence，并新增 tool 条目
 # 承载每次工具调用——工具名、参数（含值）、成败与返回内容。轨迹条目留在时间线里，
 # evidence_item_ids 才能指向真实条目；参数与返回随轨迹只存本地 SQLite。
 SCHEMA_V20 = (
@@ -381,7 +381,7 @@ SCHEMA_V21 = (
     "WHERE kind='tool'",
 )
 
-# 运行观测（contracts/observability.md）：run_observations 是一轮的运行摘要，
+# 运行观测（docs/observability.md）：run_observations 是一轮的运行摘要，
 # observation_steps 记本轮的工具尝试、压缩与静默降级；都从属 agent_runs，删轮次时级联删除。
 # 工具参数与返回正文只在时间线存一份，这里只存引用与规模。
 SCHEMA_V22 = (

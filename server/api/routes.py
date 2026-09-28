@@ -142,13 +142,13 @@ async def list_models(models: Models) -> dict:
 
 
 class SkillPick(BaseModel):
-    """手动选择的一项：只带标识，内容版本在装配时由服务端绑定（`contracts/skill.md` §6）。"""
+    """手动选择的一项：只带标识，内容版本在装配时由服务端绑定（`docs/skills.md` §3）。"""
 
     id: str
 
 
 class SkillSelection(BaseModel):
-    """随消息提交的技能选择，形状见 `contracts/skill.md` §6。"""
+    """随消息提交的技能选择，形状见 `docs/skills.md` §3。"""
 
     skills: list[SkillPick] = Field(default_factory=list)
     excluded_skill_ids: list[str] = Field(default_factory=list)
@@ -228,7 +228,7 @@ def task_timeline(task_id: str, agent: Agent) -> dict:
 
 @router.get("/tasks/{task_id}/observations", tags=["tasks"])
 def task_observations(task_id: str, tasks: Tasks) -> dict:
-    """任务每轮的运行观测；只读，沿用任务权限（contracts/observability.md §4）。"""
+    """任务每轮的运行观测；只读，沿用任务权限（docs/observability.md §2）。"""
     tasks.get_task(task_id)
     try:
         runs = read_observations(task_id)

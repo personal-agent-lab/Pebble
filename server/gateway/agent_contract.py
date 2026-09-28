@@ -43,7 +43,7 @@ class Turn:
     run_id: str | None = None
     db_path: object = None
     on_timeline_change: Callable[[], None] | None = None
-    # 技能选择：手动项只带标识，内容版本由装配时绑定（contracts/skill.md §6）。
+    # 技能选择：手动项只带标识，内容版本由装配时绑定（docs/skills.md §3）。
     skills: tuple[str, ...] = ()
     excluded_skill_ids: tuple[str, ...] = ()
     auto_match: bool = True

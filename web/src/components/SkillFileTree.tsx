@@ -3,7 +3,7 @@ import { useState } from "react";
 /** 正文固定是这个文件名，它是技能目录的入口（契约 §1）。 */
 export const SKILL_BODY = "SKILL.md";
 
-/** 附件只有两层：参考资料与模板，正文指到才读取（`skill-spec.md` §3）。 */
+/** 附件只有两层：参考资料与模板，正文指到才读取（`docs/skills.md` §2.1）。 */
 export const SKILL_LAYERS = [
   { dir: "references/", label: "参考资料", hint: "正文提到时才读取" },
   { dir: "templates/", label: "模板", hint: "照它套格式时才读取" },

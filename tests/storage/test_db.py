@@ -41,7 +41,7 @@ def test_main_v16_migration_preserves_tasks_and_rebuilds_skills(
         assert conn.execute("SELECT goal FROM tasks").fetchone()[0] == "保留任务"
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
         assert {"memory_reviews", "skill_changes", "skill_loads"} <= tables
-        # 旧设计的运行表在 v19 全部退役，历史行不保留（skill-tasks.md A5）。
+        # 旧设计的运行表在 v19 全部退役，历史行不保留。
         assert not {"skill_run_links", "skill_draft_evidence", "skill_tool_evidence"} & tables
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 

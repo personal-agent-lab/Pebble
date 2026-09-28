@@ -1,4 +1,4 @@
-"""执行轨迹视图（contracts/skill.md §3）：时间线与轮次记录的可查询形状。
+"""执行轨迹视图（docs/observability.md §2）：时间线与轮次记录的可查询形状。
 
 轨迹不新建存储：条目来自 task_timeline_items（按 sequence 排序），轮次来自
 agent_runs。这里的职责是把两者拼成契约 §3 的形状——轮状态映射、条目角色映射、

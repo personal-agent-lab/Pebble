@@ -605,7 +605,7 @@ export type SkillChangeView = {
 /** 手动选择的一项：只带标识，内容版本在装配时由服务端绑定。 */
 export type SkillPick = { id: string };
 
-/** 随消息提交的技能选择，形状见 `docs/contracts/skill.md` §6。 */
+/** 随消息提交的技能选择，形状见 `docs/skills.md` §3。 */
 export type SkillSelection = {
   skills: SkillPick[];
   excluded_skill_ids: string[];

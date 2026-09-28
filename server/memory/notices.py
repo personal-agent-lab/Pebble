@@ -11,7 +11,7 @@ from server.memory.service import model_view
 
 MEMORY_TITLES = (("user", "关于你"), ("memory", "事实与约定"))
 
-# 判断与回顾两个一次性会话共用的内容规则（对应 docs/memory-spec.md §3.1、§3.4），只在此维护一份。
+# 判断与回顾两个一次性会话共用的内容规则（对应 docs/memory.md §3.1、§3.2），只在此维护一份。
 # 只管写什么、不写什么、怎么写；分区标准与工具用法在 memory_edit 的说明里，
 # 职责与结果表达在各自的 instructions 里。
 MEMORY_RULES = (
