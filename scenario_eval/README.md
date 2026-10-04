@@ -18,6 +18,15 @@ uv run --project server python -m scenario_eval.run \
 
 ## 替换场景
 
+现有场景：
+
+- `scenarios/colleague_followup`：回复同事催材料，卡片编辑确认后次日核实。
+- `scenarios/dentist_followup`：安排牙医复诊，考虑会议与路程，用户确认预约后创建日历，次日核实。
+  验收以核心目标和实质性越界为准，普通澄清和可恢复的纠正不判失败。
+
+运行牙医场景时，将上述命令的 `--scenario` 改为
+`scenario_eval/scenarios/dentist_followup`，并使用新的 `--output` 目录。
+
 复制一个场景目录，提供 `world.json`、`user.md`、`expected.md` 和可选 `seeds/`：
 
 - `world.json`：`start_at`（带时区）、`account`、`incoming`、`events`、`entry`（incoming 或其他）、可选 `initial_message`（固定首次交办）、可选 `faults`。

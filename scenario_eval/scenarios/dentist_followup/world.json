@@ -1,0 +1,29 @@
+{
+  "start_at": "2026-10-04T10:00:00+08:00",
+  "account": "linran@example.test",
+  "entry": "conversation",
+  "incoming": [],
+  "events": [
+    {
+      "event_id": "existing-product-meeting",
+      "summary": "产品讨论会",
+      "start": "2026-10-07T14:30:00+08:00",
+      "end": "2026-10-07T15:30:00+08:00",
+      "timezone": "Asia/Shanghai",
+      "all_day": false,
+      "location": "线上",
+      "description": "线上参加"
+    },
+    {
+      "event_id": "existing-dinner",
+      "summary": "和朋友吃饭",
+      "start": "2026-10-07T18:00:00+08:00",
+      "end": "2026-10-07T19:00:00+08:00",
+      "timezone": "Asia/Shanghai",
+      "all_day": false,
+      "location": "",
+      "description": ""
+    }
+  ],
+  "initial_message": "我想下周三（10月7日）去牙医复诊。你看看之前的记录和日历，帮我挑个下午方便的时间，先别加日历，我还得联系诊所。"
+}
