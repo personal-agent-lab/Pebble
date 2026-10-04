@@ -1,0 +1,20 @@
+{
+  "start_at": "2026-10-04T10:00:00+08:00",
+  "account": "linran@example.test",
+  "entry": "incoming",
+  "events": [],
+  "incoming": [
+    {
+      "id": "incoming-demo",
+      "thread_id": "thread-demo",
+      "rfc_message_id": "<demo@example.test>",
+      "from_addr": "陈宁 <chenning@example.test>",
+      "to_addrs": [
+        "linran@example.test"
+      ],
+      "subject": "周五客户演示安排",
+      "body_text": "林然，你好，\n\n想约10月9日周五15:00到15:30向客户演示新版本。你这边可以吗？如果可以，我再给客户发正式邀请。\n\n陈宁"
+    }
+  ],
+  "initial_message": "陈宁约周五演示，你看看我之前记的新版本准备情况，帮我起草一封回复，说可以按这个时间安排，但演示内容以已经可用的功能为准。先给我看草稿，别发送，也先别加日历。"
+}
