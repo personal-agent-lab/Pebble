@@ -397,6 +397,15 @@ class GatewayRuntime:
         self.kick()
         return row
 
+    def submit_skill_review(self) -> dict:
+        """手动登记一次跨任务技能复盘；不受轮次间隔与自动开关限制。"""
+        self.require_gateway()
+        if self.skill_reviews is None:
+            raise DependencyUnavailableError("技能复盘未接入")
+        row = self.skill_reviews.enqueue_manual()
+        self.kick()
+        return row
+
     def confirm_execution(self, operation_id: str) -> None:
         """后台执行已接受的确认；发送结果保存后由 kick 接续回传。"""
         if self.confirmations is None:

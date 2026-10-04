@@ -13,10 +13,10 @@ import KbEditor from "../components/KbEditor";
 import Notice from "../components/Notice";
 import { useNote } from "../hooks";
 
-/** 分区说明与服务端 `memory_edit` 工具说明里的分区标准一致：写的是用户本人，还是用户以外的事实。 */
+/** 分区说明与服务端 `memory_edit` 工具说明里的分区标准一致：陈述性背景进"关于你"，对助手的要求与约定进"事实与约定"。 */
 const SECTIONS: { target: MemoryTarget; title: string; hint: string }[] = [
-  { target: "user", title: "关于你", hint: "你本人：身份、长期目标、兴趣、表达偏好与工作习惯" },
-  { target: "memory", title: "事实与约定", hint: "你以外的事实：常用账号、日历、联系人与固定的安排规则" },
+  { target: "user", title: "关于你", hint: "你的画像：身份、家庭与身边人、长期目标、兴趣与稳定偏好" },
+  { target: "memory", title: "事实与约定", hint: "要我照办的：规则、约束、承诺与固定的默认做法" },
 ];
 
 /** 容量条从这个比例起提醒快满了。 */

@@ -7,6 +7,7 @@ from server.db import init_db
 from server.errors import SkillUnknownError
 from server.skills.models import ChangeAction, ChangeActor, SkillState
 from server.skills.runtime import (
+    SKIPPED_TITLE,
     catalog_material,
     manual_materials,
     turn_scope,
@@ -67,9 +68,13 @@ def test_manual_materials_bind_revision_and_record_load(service: SkillService) -
     materials = manual_materials(
         service, ["picked", "picked", "missing"], task_id="task-1", run_id="run-1"
     )
-    assert len(materials) == 1
+    assert len(materials) == 2  # 装配 1 份 + 不存在的技能进"未装配"材料
     assert materials[0].title == "用户选择的技能：技能 picked"
     assert materials[0].content == "被选中的正文\n"
+    assert materials[1].title == SKIPPED_TITLE
+    assert materials[1].content["skills"] == [
+        {"skill_id": "missing", "名称": "missing", "原因": "文件有未收编的直接修改或已不可加载"}
+    ]
     usage = service.task_skill_usage("task-1")
     assert [(row["skill_id"], row["source"], row["revision"]) for row in usage] == [
         ("picked", "manual", service.get("picked").revision)
@@ -79,7 +84,8 @@ def test_manual_materials_bind_revision_and_record_load(service: SkillService) -
 def test_manual_materials_skip_inactive(service: SkillService) -> None:
     add_skill(service, "archived-one")
     service.archive("archived-one")
-    assert manual_materials(service, ["archived-one"], task_id="t", run_id="r") == []
+    materials = manual_materials(service, ["archived-one"], task_id="t", run_id="r")
+    assert [material.title for material in materials] == [SKIPPED_TITLE]
 
 
 # ---------------------------------------------------------------- skill_view 范围强制
@@ -156,14 +162,39 @@ def test_manual_materials_enforce_selection_limits(service: SkillService) -> Non
         task_id="task-1",
         run_id="run-1",
     )
-    assert len(materials) == 10  # 额度在装配层同样成立，不只在提交校验时
+    # 额度在装配层同样成立：10 份正文 + 1 份"未装配"材料说明超限的两个。
+    assert len(materials) == 11
+    assert materials[-1].title == SKIPPED_TITLE
+    assert [entry["skill_id"] for entry in materials[-1].content["skills"]] == [
+        "picked-10",
+        "picked-11",
+    ]
 
     add_skill(service, "huge", body="长" * 30000)
     add_skill(service, "huge-2", body="长" * 20000)
-    capped = manual_materials(
-        service, ["huge", "huge-2"], task_id="task-2", run_id="run-2"
+    capped = manual_materials(service, ["huge", "huge-2"], task_id="task-2", run_id="run-2")
+    assert [material.title for material in capped] == ["用户选择的技能：技能 huge", SKIPPED_TITLE]
+    assert capped[-1].content["skills"][0]["原因"] == "正文合计超出 40000 字符的装配预算"
+
+
+def test_manual_materials_skip_notifies_user(service: SkillService) -> None:
+    """跳过必须有程序写的用户告知与模型可见材料（skills.md §9），不依赖模型转述。"""
+
+    add_skill(service, "hand-touched")
+    path = service.repository.skills_root / "hand-touched" / "SKILL.md"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("正文内容", "手改的正文"), encoding="utf-8"
     )
-    assert [material.title for material in capped] == ["用户选择的技能：技能 huge"]
+    notices: list[str] = []
+    materials = manual_materials(
+        service, ["hand-touched"], task_id="t", run_id="r", notify=notices.append
+    )
+    assert [material.title for material in materials] == [SKIPPED_TITLE]
+    assert materials[0].content["skills"][0]["名称"] == "技能 hand-touched"
+    assert notices == [
+        "你选择的技能未能装配：《技能 hand-touched》"
+        "（文件有未收编的直接修改或已不可加载）。本轮回复不包含它们的内容。"
+    ]
 
 
 def test_dirty_skill_is_not_loadable(service: SkillService) -> None:
@@ -180,9 +211,13 @@ def test_dirty_skill_is_not_loadable(service: SkillService) -> None:
         skill_view(skill_id="hand-touched", skills=service)
     with pytest.raises(SkillUnknownError):
         service.validate_selection(["hand-touched"])
-    assert manual_materials(
-        service, ["hand-touched"], task_id="t", run_id="r"
-    ) == []
+    # 不装配正文，但降级告知照常：一份"未装配"材料 + 程序写的时间线通知。
+    notices: list[str] = []
+    materials = manual_materials(
+        service, ["hand-touched"], task_id="t", run_id="r", notify=notices.append
+    )
+    assert [material.title for material in materials] == [SKIPPED_TITLE]
+    assert "技能 hand-touched" in notices[0]
     # 管理页仍可读到它，便于就地修改后重新提交。
     assert "手改的正文" in service.get("hand-touched").body
 

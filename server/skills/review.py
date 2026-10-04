@@ -160,6 +160,41 @@ class SkillReviewScheduler:
             )
             return self.get(review_id, conn=conn)
 
+    def enqueue_manual(self) -> dict:
+        """手动登记一次复盘：覆盖自上次完成以来的全部轮次，不受间隔与自动开关限制。
+
+        已有在途复盘时幂等返回那一条，与 enqueue_if_due 共用"同一时刻最多一个在途"索引。
+        没有未复盘轮次时仍登记，执行侧会以"没有可审阅的轨迹"收尾，不调用模型。
+        """
+        with session(self.path) as conn, write(conn):
+            open_row = conn.execute(
+                "SELECT id FROM skill_reviews "
+                "WHERE status IN ('pending','running','applying') LIMIT 1"
+            ).fetchone()
+            if open_row:
+                return self.get(open_row["id"], conn=conn)
+            state = conn.execute("SELECT * FROM skill_review_state WHERE id=1").fetchone()
+            latest = conn.execute(
+                "SELECT seq, task_id FROM skill_review_turns ORDER BY seq DESC LIMIT 1"
+            ).fetchone()
+            through = latest["seq"] if latest else state["cursor_seq"]
+            review_id = str(uuid4())
+            conn.execute(
+                "INSERT INTO skill_reviews "
+                "(id,from_seq,through_seq,target_seq,generation,anchor_task_id,"
+                "status,origin,created_at) VALUES (?,?,?,?,?,?,'pending','manual',?)",
+                (
+                    review_id,
+                    state["cursor_seq"],
+                    through,
+                    through,
+                    state["generation"],
+                    latest["task_id"] if latest else "",
+                    timestamp(),
+                ),
+            )
+            return self.get(review_id, conn=conn)
+
     def get(self, review_id: str, *, conn=None) -> dict:
         if conn is None:
             with session(self.path) as opened:

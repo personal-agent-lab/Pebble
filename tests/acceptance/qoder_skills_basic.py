@@ -32,7 +32,7 @@ from server.db import init_db
 from server.gateway.agent_contract import Turn
 from server.sessions.service import SessionStore
 from server.skills.models import ChangeAction, ChangeActor, SkillOrigin
-from server.skills.runtime import catalog_material, manual_materials
+from server.skills.runtime import SKIPPED_TITLE, catalog_material, manual_materials
 from server.skills.service import ChangeRequest, SkillService
 from server.tools.gmail.service import MailDraftStore
 from tests.support.gmail_double import MockGmailClient
@@ -317,11 +317,14 @@ def scenario_selection_boundaries(instance: Instance) -> dict:
         else [item["skill_id"] for item in dirty_catalog.content["skills"]]
     )
     check("weekly-report" not in dirty_listed, "被直接改动的技能仍留在目录", dirty_listed)
+    dirty_materials = manual_materials(
+        instance.skills, ["weekly-report"], task_id=task_id, run_id="run-dirty"
+    )
+    # 正文不装配，但告知照常：只剩一份"未装配"材料，说明跳过与原因。
     check(
-        manual_materials(instance.skills, ["weekly-report"], task_id=task_id, run_id="run-dirty")
-        == [],
-        "被直接改动的技能仍被手动装配",
-        dirty_listed,
+        [material.title for material in dirty_materials] == [SKIPPED_TITLE],
+        "被直接改动的技能仍被手动装配或缺少未装配告知",
+        [material.title for material in dirty_materials],
     )
     return {"manual_usage": usage, "catalog_after_edit": dirty_listed}
 

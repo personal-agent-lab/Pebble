@@ -115,6 +115,34 @@ async def test_cross_task_trigger_and_empty_review_advances(pair, settings):
     assert scheduler.enqueue_if_due()["from_seq"] == 2
 
 
+async def test_manual_review_bypasses_interval_and_empty_window_skips_model(pair, settings):
+    skills, scheduler = pair
+    add_done(settings.db_path, 1)
+    assert scheduler.enqueue_if_due() is None  # 1 轮不足间隔 2，自动不触发
+    disabled = SkillReviewScheduler(skills, path=settings.db_path, interval=2, enabled=False)
+    job = disabled.enqueue_manual()
+    assert (job["from_seq"], job["through_seq"], job["origin"], job["status"]) == (
+        0, 1, "manual", "pending",
+    )
+    assert scheduler.enqueue_manual()["id"] == job["id"]  # 已有在途复盘时幂等返回
+    scheduler.claim(job["id"])
+    await scheduler.run(job["id"], FakeReview())
+    assert scheduler.get(job["id"])["result_summary"] == "无值得保存的经验"
+
+    add_done(settings.db_path, 2)
+    assert scheduler.enqueue_if_due() is None  # 手动复盘已推进游标，仅剩 1 轮新完成
+    followup = scheduler.enqueue_manual()
+    assert (followup["from_seq"], followup["through_seq"]) == (1, 2)
+    scheduler.claim(followup["id"])
+    await scheduler.run(followup["id"], FakeReview())
+
+    empty = scheduler.enqueue_manual()
+    assert (empty["from_seq"], empty["through_seq"]) == (2, 2)
+    scheduler.claim(empty["id"])
+    await scheduler.run(empty["id"], FakeReview(error=RuntimeError("模型不应被调用")))
+    assert scheduler.get(empty["id"])["result_summary"] == "没有可审阅的轨迹"
+
+
 async def test_concurrent_enqueues_keep_one_open_window(pair, settings):
     _, scheduler = pair
     add_done(settings.db_path, 1)

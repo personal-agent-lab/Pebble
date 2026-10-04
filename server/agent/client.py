@@ -49,9 +49,11 @@ from server.agent.toolset import (
     exposed_tools,
 )
 from server.config import Settings, get_settings
+from server.db import session, write
 from server.errors import DependencyUnavailableError, error_details
 from server.gateway.agent_contract import AgentEvent, AgentProtocolError, Turn
 from server.memory.service import MemoryStore
+from server.sessions import timeline
 from server.sessions.observations import TurnObserver
 from server.sessions.tool_trace import begin_tool_call, finish_tool_call
 from server.tools.memory.tools import judge_registry, review_registry
@@ -710,6 +712,17 @@ class QoderGateway:
         if self.skills_store is not None:
             from server.skills import runtime as skills_runtime
 
+            def notify_skill_skip(text: str) -> None:
+                # 装配层降级的用户告知：程序写时间线通知并让页面即时可见（skills.md §9）；
+                # 文案由技能域给出，这里只负责投递。写入失败不影响这一轮对话。
+                try:
+                    with session(turn.db_path) as conn, write(conn):
+                        timeline.insert_notice(conn, turn.task_id, turn.run_id, text)
+                except Exception:
+                    logger.exception("手动技能降级的时间线通知写入失败")
+                if turn.on_timeline_change is not None:
+                    turn.on_timeline_change()
+
             materials.extend(
                 skills_runtime.manual_materials(
                     self.skills_store,
@@ -717,6 +730,7 @@ class QoderGateway:
                     task_id=turn.task_id,
                     run_id=turn.run_id,
                     observer=observer,
+                    notify=notify_skill_skip,
                 )
             )
             if turn.auto_match:

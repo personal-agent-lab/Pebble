@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import default_model, get_settings
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -423,6 +423,12 @@ SCHEMA_V23 = (
     "change_id TEXT, error TEXT, PRIMARY KEY(review_id, ordinal))",
 )
 
+# 技能复盘手动触发：origin 区分周期触发与手动触发，与记忆回顾 memory_reviews.origin 语义一致。
+SCHEMA_V24 = (
+    "ALTER TABLE skill_reviews ADD COLUMN origin TEXT NOT NULL DEFAULT 'interval' "
+    "CHECK(origin IN ('interval','manual'))",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -447,6 +453,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     21: SCHEMA_V21,
     22: SCHEMA_V22,
     23: SCHEMA_V23,
+    24: SCHEMA_V24,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

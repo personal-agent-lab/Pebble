@@ -600,6 +600,12 @@ def restore_skill_version(skill_id: str, body: RevisionInput, skills: Skills) ->
     return skills.restore_version(skill_id, body.revision)
 
 
+@router.post("/skills/review", status_code=202, tags=["skills"])
+async def trigger_skill_review(agent: Agent) -> dict:
+    """手动登记一次跨任务技能复盘：立即覆盖自上次完成以来的全部轮次，不受轮次间隔限制。"""
+    return agent.submit_skill_review()
+
+
 @router.get("/skill-changes", tags=["skills"])
 def list_skill_changes(
     status: str | None = None, skill_id: str | None = None, skills: Skills = None
