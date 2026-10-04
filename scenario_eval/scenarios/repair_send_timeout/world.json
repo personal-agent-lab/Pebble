@@ -1,0 +1,23 @@
+{
+  "start_at": "2026-10-04T10:00:00+08:00",
+  "account": "linran@example.test",
+  "entry": "incoming",
+  "events": [],
+  "faults": {
+    "send_response_lost": true
+  },
+  "incoming": [
+    {
+      "id": "incoming-repair",
+      "thread_id": "thread-repair",
+      "rfc_message_id": "<repair@example.test>",
+      "from_addr": "青禾物业 <property@example.test>",
+      "to_addrs": [
+        "linran@example.test"
+      ],
+      "subject": "厨房水龙头维修上门时间",
+      "body_text": "林先生，您好：\n\n收到您关于厨房水龙头漏水的报修。师傅周三（10月7日）上午可以上门，请问您方便的时间段是什么？请回复故障情况、地址和可上门时间，我们收到后再安排师傅。\n\n青禾物业"
+    }
+  ],
+  "initial_message": "物业问上门时间了，你看看之前记的情况，帮我回一下。时间先问我，别直接答应。"
+}

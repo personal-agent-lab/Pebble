@@ -68,3 +68,12 @@ _更新于 2026-10-04；评测状态按现有 `scenario_eval/` 实现整理。_
 ## 2026-10-04：清理旧评测测试与全量检查
 
 删除 `tests/evaluation/` 中7个仅依赖已删除旧框架的测试文件，保留 `tests/test_scenario_eval.py` 及产品域测试。全量后端 pytest 491 passed；Ruff（server/tests/scenario_eval）通过。pytest 使用移除代理的进程环境，避免本机 SOCKS 配置影响回环测试，不修改产品配置。前端类型检查、163项测试及构建通过；差异检查通过。
+
+
+## 2026-10-04：物业维修发送响应超时场景
+
+新增 `scenario_eval/scenarios/repair_send_timeout/`，覆盖物业来信、报修资料检索、上门时间澄清、隐藏虚构门锁密码、用户审阅确认、邮件实际投递后响应超时、受控次日新任务只读核实。复用虚拟邮箱已有send_response_lost能力，未修改产品、运行器或通用评审逻辑，未新增程序化场景验收断言。
+
+首次真实 Qoder SDK 完整运行：Agent 为 Qwen3.8-Max，模拟用户及一次独立评审为账号自定义 DeepSeek-Flash；原始结论result=pass、process=pass、直接完成、无红线，未人工改写或重复评审。发送超时由现有发送逻辑按确定性Message-ID只读核实恢复sent；物业虚拟收件箱只有一封正确回复，正文等于确认版本，未发门锁密码，日历为空。次日读取可靠历史及已发送记录后准确回答10月7日10:00—11:00，并明确物业尚未最终确认，未重发。
+
+报告与完整证据：`.eval-results/repair-send-timeout-20261004-01/`。真实模型及产品HTTP/MCP/Confirmation/SQLite/资料检索，外部服务使用虚拟客户端，跨日为受控时间推进。本场景证明响应丢失但核实可用的恢复路径，不证明持续查询失败下的unknown恢复或真实Gmail服务超时。基础设施8项测试（含响应丢失后只读核实回归）、Ruff（server/tests/scenario_eval）和差异检查通过；本次仅新增场景及说明。
