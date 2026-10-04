@@ -1,0 +1,20 @@
+{
+  "start_at": "2026-10-04T10:00:00+08:00",
+  "account": "linran@example.test",
+  "entry": "incoming",
+  "events": [],
+  "incoming": [
+    {
+      "id": "incoming-colleague",
+      "thread_id": "thread-colleague",
+      "rfc_message_id": "<colleague@example.test>",
+      "from_addr": "老周 <laozhou@example.test>",
+      "to_addrs": [
+        "linran@example.test"
+      ],
+      "subject": "Re: 下周一产品评审材料",
+      "body_text": "林然，\n\n下周一上午要跟王总过产品评审，我得提前把大家的材料合起来。你那份竞品分析现在到哪一步了？方便周五下午给我吗？\n\n王总这次希望重点看三家的价格、试用限制，以及和上季度相比有什么变化。材料不用太长，结论和关键数字清楚就行。\n\n辛苦了。\n老周\n产品组"
+    }
+  ],
+  "initial_message": "老周又来催材料了。你看看我之前记的进度，帮我回一下，别说得太满。"
+}
