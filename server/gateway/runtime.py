@@ -101,13 +101,16 @@ ATTACHMENT_ONLY_MESSAGE = "请阅读并处理本轮附件。"
 
 
 def execution_result_content(
-    *, operation_id: str, version: int, result: dict
+    *, operation_id: str, version: int, result: dict, confirmed_content: dict | None = None
 ) -> tuple[str, tuple[Material, ...]]:
     """执行结果回传轮的消息与材料：措辞属于确认子系统，与具体触发域无关。"""
+    content = {"operation_id": operation_id, "version": version, "result": result}
+    if confirmed_content is not None:
+        content["confirmed_content"] = confirmed_content
     return EXECUTION_RESULT_MESSAGE, (
         Material(
             EXECUTION_RESULT_MATERIAL_TITLE,
-            {"operation_id": operation_id, "version": version, "result": result},
+            content,
         ),
     )
 
@@ -671,6 +674,7 @@ class GatewayRuntime:
                 operation_id=delivery["operation_id"],
                 version=delivery["version"],
                 result=delivery["result"],
+                confirmed_content=delivery.get("confirmed_content"),
             )
 
         return self.gateway.stream_turn(

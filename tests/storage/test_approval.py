@@ -73,6 +73,7 @@ def run_python(code: str, *args: str) -> subprocess.CompletedProcess:
 
 def test_confirm_sends_exact_confirmed_version(stores):
     task, operation = prepare(stores)
+    stores[0].bind_sdk_session(task["task_id"], "sdk-final")
     drafts = stores[1]
     second = drafts.update_draft(
         operation["operation_id"], 1, **{**FINAL, "subject": "回复：活动邀请"}
@@ -109,6 +110,9 @@ def test_confirm_sends_exact_confirmed_version(stores):
     assert response["confirmation"]["confirmed_at"]
     assert response["result"] == {"status": "sent", "message_id": "sent-1"}
     assert service.get_execution(operation["operation_id"]) == response
+    delivery = service.get_agent_result(operation["operation_id"])
+    assert delivery["version"] == 3
+    assert delivery["confirmed_content"] == final
 
     assert drafts.get_draft(operation["operation_id"], 1)["subject"] == FINAL["subject"]
     assert drafts.get_draft(operation["operation_id"], 1)["to"] == FINAL["to"]
@@ -328,6 +332,7 @@ print(json.dumps({{"execution": service.get_execution({operation["operation_id"]
             "operation_id": operation["operation_id"],
             "version": 1,
             "result": expected,
+            "confirmed_content": FINAL,
         },
     }
 
@@ -516,6 +521,7 @@ def test_delivery_task_is_first_confirmation_task(stores):
         "operation_id": operation["operation_id"],
         "version": 1,
         "result": {"status": "failed", "reason": "SMTP 拒绝"},
+        "confirmed_content": FINAL,
     }
 
     assert confirm(service, first["task_id"], operation["operation_id"], 1) == response
@@ -548,6 +554,7 @@ def test_agent_result_needs_saved_result_and_session(stores):
         "operation_id": operation["operation_id"],
         "version": 1,
         "result": {"status": "sent", "message_id": "sent-1"},
+        "confirmed_content": FINAL,
     }
 
 
@@ -725,6 +732,7 @@ def test_verified_result_is_delivered_once(stores):
         "operation_id": operation["operation_id"],
         "version": 1,
         "result": {"status": "sent", "message_id": "gmail-9"},
+        "confirmed_content": FINAL,
     }
 
     service.verify_pending(operation["operation_id"])

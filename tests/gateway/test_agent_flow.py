@@ -817,8 +817,35 @@ async def test_confirmed_result_waits_for_session_then_delivers(flow):
         "operation_id": operation["operation_id"],
         "version": 1,
         "result": {"status": "sent", "message_id": "sent-1"},
+        "confirmed_content": DRAFT,
     }
     assert await wait_for(lambda: flow.service.list_runs(task["task_id"])[0]["status"] == "done")
+
+
+@pytest.mark.parametrize("status", ["sent", "unknown", "failed"])
+async def test_card_edit_content_reaches_execution_result(flow, status):
+    task = flow.tasks.create_task("卡片编辑后确认")
+    flow.tasks.bind_sdk_session(task["task_id"], "sdk-edited")
+    operation = flow.drafts.save_reply_draft(task["task_id"], "m1", "thread-1", **DRAFT)
+    edited = {
+        "to": ["laozhou@example.test"],
+        "subject": "Re: 下周一产品评审材料",
+        "body": "初稿已整理，还在完善对比内容。我周四下午五点前给你。\n",
+    }
+    saved = flow.drafts.update_draft(operation["operation_id"], 1, **edited)
+    flow.confirmations.send_message = lambda **fields: (
+        {"status": "sent", "message_id": "sent-1"}
+        if status == "sent"
+        else {"status": status, "reason": "测试执行结果"}
+    )
+    confirm(flow.confirmations, task["task_id"], operation["operation_id"], saved["version"])
+    flow.service.kick()
+    await drain(flow.service)
+
+    delivered = flow.gateway.calls_of("execution_result")[0]["materials"][0].content
+    assert delivered["version"] == saved["version"]
+    assert delivered["confirmed_content"] == edited
+    assert delivered["result"]["status"] == status
 
 
 async def test_duplicate_confirmation_sends_once_and_registers_one_delivery(flow):

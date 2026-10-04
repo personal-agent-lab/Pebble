@@ -275,15 +275,23 @@ class ConfirmationService:
     def get_agent_result(self, operation_id: str) -> dict | None:
         with session(self.path) as conn:
             row = repo.view(conn, operation_id)
-        if row["completed_at"] is None or row["sdk_session_id"] is None:
-            return None
-        return {
+            if row["completed_at"] is None or row["sdk_session_id"] is None:
+                return None
+            confirmed_content = None
+            if operations.operation(conn, operation_id)["type"] == "mail":
+                # 与发送端读取同一个不可变版本，不能用当前最新草稿代替。
+                draft = mail.draft(conn, operation_id, row["confirmed_version"])
+                confirmed_content = {key: draft[key] for key in ("to", "subject", "body")}
+        delivery = {
             "task_id": row["execution_task_id"],
             "sdk_session_id": row["sdk_session_id"],
             "operation_id": operation_id,
             "version": row["confirmed_version"],
             "result": result_response(row),
         }
+        if confirmed_content is not None:
+            delivery["confirmed_content"] = confirmed_content
+        return delivery
 
     def recover_interrupted_executions(self) -> list[str]:
         with session(self.path) as conn, write(conn):

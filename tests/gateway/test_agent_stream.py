@@ -326,7 +326,10 @@ def test_external_write_tools_are_never_visible_to_the_model(settings, kind):
 def test_execution_result_enters_system_prompt(settings):
     gateway = make_gateway(settings)
     message, materials = execution_result_content(
-        operation_id="op1", version=2, result={"status": "sent"}
+        operation_id="op1",
+        version=2,
+        result={"status": "sent"},
+        confirmed_content={"to": ["laozhou@example.test"], "subject": "回复", "body": "最终正文"},
     )
     turn = Turn(
         kind=TurnKind.EXECUTION_RESULT,
@@ -340,8 +343,10 @@ def test_execution_result_enters_system_prompt(settings):
     assert options.system_prompt == BASE_PROMPT
     assert '"status": "sent"' in injected_context(options)
     assert "op1" in injected_context(options)
+    assert "最终正文" in injected_context(options)
     # 回传材料只进附加上下文，不伪装成用户说过的话。
     assert "op1" not in turn.message
+    assert "最终正文" not in turn.message
 
 
 def test_new_mail_turn_passes_ids_as_material(settings):
