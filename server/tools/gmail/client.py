@@ -104,6 +104,14 @@ class BaseGmailClient(Protocol):
         """指定游标之后的 messageAdded 历史页：history、nextPageToken、historyId。"""
         ...
 
+    def list_labels(self) -> list[dict[str, str]]:
+        """列出邮箱标签的 ID 与名称，供触发源解析排除标签。"""
+        ...
+
+    def get_message_labels(self, message_id: str) -> list[str]:
+        """只读获取邮件当前的标签 ID，不读取正文。"""
+        ...
+
 
 class MimeParser:
     """可复用的 MIME 邮件解析与清洗工具类。"""
@@ -390,6 +398,26 @@ class GoogleApiGmailClient(BaseGmailClient):
 
     def get_profile(self) -> dict:
         return self.get_service().users().getProfile(userId="me").execute()
+
+    def list_labels(self) -> list[dict[str, str]]:
+        result = (
+            self.get_service()
+            .users()
+            .labels()
+            .list(userId="me", fields="labels(id,name)")
+            .execute()
+        )
+        return result.get("labels", [])
+
+    def get_message_labels(self, message_id: str) -> list[str]:
+        result = (
+            self.get_service()
+            .users()
+            .messages()
+            .get(userId="me", id=message_id, format="minimal", fields="labelIds")
+            .execute()
+        )
+        return result.get("labelIds", [])
 
     def list_added_messages(self, history_id: str, page_token: str | None = None) -> dict:
         return (

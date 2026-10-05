@@ -53,6 +53,7 @@ class GmailSource:
 
     async def poll(self):
         token = None
+        excluded_ids = None
         while True:
             page = await asyncio.to_thread(
                 self.client.list_added_messages, self.state["history_id"], token
@@ -61,6 +62,26 @@ class GmailSource:
                 for added in change.get("messagesAdded", []):
                     message = added["message"]
                     if "INBOX" in message.get("labelIds", []):
+                        # 每次有候选来信时刷新名称映射，支持运行中创建或重建 News 标签。
+                        if excluded_ids is None:
+                            labels = await asyncio.to_thread(self.client.list_labels)
+                            excluded_ids = {
+                                label["id"] for label in labels if label["name"] == "News"
+                            }
+                        if excluded_ids:
+                            try:
+                                current_labels = await asyncio.to_thread(
+                                    self.client.get_message_labels, message["id"]
+                                )
+                            except HttpError as error:
+                                if error.resp.status == 404:
+                                    # 已删除邮件不触发，也不误判成同步游标失效。
+                                    continue
+                                raise
+                            if "INBOX" not in current_labels or excluded_ids.intersection(
+                                current_labels
+                            ):
+                                continue
                         self.agent.accept_new_mail(message["id"], message["threadId"])
             token = page.get("nextPageToken")
             if not token:

@@ -15,6 +15,25 @@ from server.tools.gmail.client import (
 )
 
 
+def test_google_api_reads_label_names_and_current_message_labels():
+    service = MagicMock()
+    client = GoogleApiGmailClient(MagicMock(), MagicMock(), service=service)
+    service.users().labels().list().execute.return_value = {
+        "labels": [{"id": "Label_42", "name": "News"}]
+    }
+    service.users().messages().get().execute.return_value = {
+        "labelIds": ["INBOX", "Label_42"]
+    }
+    assert client.list_labels() == [{"id": "Label_42", "name": "News"}]
+    assert client.get_message_labels("mail") == ["INBOX", "Label_42"]
+    service.users().labels().list.assert_called_with(
+        userId="me", fields="labels(id,name)"
+    )
+    service.users().messages().get.assert_called_with(
+        userId="me", id="mail", format="minimal", fields="labelIds"
+    )
+
+
 def test_mime_parser_helpers() -> None:
     # 1. 测试 base64url 解码与缺少 padding 补全
     raw_str = "测试数据"

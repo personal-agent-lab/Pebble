@@ -217,6 +217,9 @@ def test_gmail_cursor_only_advances_after_acceptance(settings):
     }
 
     class Client:
+        def list_labels(self):
+            return []
+
         def list_added_messages(self, history_id, page_token=None):
             return page
 
