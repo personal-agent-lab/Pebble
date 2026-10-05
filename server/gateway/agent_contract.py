@@ -30,7 +30,7 @@ class TurnAttachment:
 
 @dataclass(frozen=True)
 class Turn:
-    """一轮调用的输入；材料只进系统提示，不进对话历史。"""
+    """一轮调用的输入；材料经 SDK 钩子注入，不伪装为应用时间线里的用户消息。"""
 
     kind: TurnKind
     task_id: str

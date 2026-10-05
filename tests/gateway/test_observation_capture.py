@@ -153,6 +153,37 @@ def test_first_turn_records_context_before(settings, monkeypatch):
     assert after["used_percentage"] == 42.0
 
 
+def test_cache_usage_is_recorded_without_inventing_missing_values(settings, monkeypatch):
+    gateway = make_gateway(settings)
+    task = SessionStore().create_task("缓存观测")
+    seed_turn(task["task_id"], "run-cache", "测试输入")
+    install_sdk(
+        monkeypatch,
+        gateway,
+        [
+            AssistantMessage(
+                [TextBlock("完成")],
+                "model",
+                message_id="cached-message",
+                usage={"request_id": "cached-request", "cache_read_input_tokens": 1200},
+            ),
+            ResultMessage(
+                "success", 1, 1, False, 1, "session-1",
+                usage={"cache_read_input_tokens": 1200, "cache_creation_input_tokens": 64},
+                model_usage={
+                    "model": {"cacheReadInputTokens": 2400, "cacheCreationInputTokens": 128}
+                },
+            ),
+        ],
+    )
+    asyncio.run(collect(gateway.stream_turn(observed_turn(task["task_id"], "run-cache"))))
+    observed = json.loads(summary("run-cache")["sdk_result"])
+    assert observed["usage"][0]["cache_read_input_tokens"] == 1200
+    assert "cache_creation_input_tokens" not in observed["usage"][0]
+    assert observed["result_usage"]["cache_creation_input_tokens"] == 64
+    assert observed["session_totals"]["cache_read_input_tokens"] == 2400
+
+
 def test_resumed_turn_records_context_and_manual_compact(settings, monkeypatch):
     gateway = make_gateway(settings)
     task = SessionStore().create_task("压缩观测")

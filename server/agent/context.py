@@ -1,8 +1,7 @@
 """每轮上下文：系统提示与技能名单的组装。
 
-基础提示在同一 SDK 会话中保持固定。本轮材料（触发载荷、执行结果、后续 Memory 等）渲染
-为独立上下文，由网关在每次用户输入时注入，不作为用户消息进入应用时间线。这样恢复会话时
-也能看到最新材料：Qoder 会复用会话建立时的 system_prompt，不能靠重新传入它更新材料。
+基础提示在同一 SDK 会话中保持固定。背景材料由 materials.py 跟踪内容摘要，首次与压缩后
+完整提供，普通恢复只追加变化。本轮事件随输入追加，不作为用户消息进入应用时间线。
 """
 
 from __future__ import annotations
@@ -20,6 +19,8 @@ class Material:
 
     title: str
     content: dict | str
+    # 可选的稳定身份，用于同名材料的会话去重；不进入模型正文。
+    key: str | None = None
 
 
 @dataclass(frozen=True)

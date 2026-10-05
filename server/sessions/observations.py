@@ -212,6 +212,16 @@ def _field(source: Any, key: str) -> Any:
     return getattr(source, key, None)
 
 
+def _cache_usage(source: Any) -> dict:
+    """只保留 SDK 实际提供的有效缓存读写量，缺失不补零。"""
+    values = {}
+    for key in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+        value = _field(source, key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            values[key] = value
+    return values
+
+
 def _result_usage(message: Any) -> dict | None:
     """ResultMessage.usage：本轮最后一次请求的规范用量，CN 运行时只在结果层有真实读数。"""
     usage = getattr(message, "usage", None)
@@ -223,6 +233,7 @@ def _result_usage(message: Any) -> dict | None:
         "output_tokens": _field(usage, "output_tokens"),
         "credits": _field(usage, "credits"),
         "context_usage_ratio": _field(usage, "context_usage_ratio"),
+        **_cache_usage(usage),
     }
 
 
@@ -235,6 +246,14 @@ def _session_totals(message: Any) -> dict:
     }
     model_usage = getattr(message, "model_usage", None)
     if isinstance(model_usage, dict) and model_usage:
+        for key, field in (
+            ("cache_read_input_tokens", "cacheReadInputTokens"),
+            ("cache_creation_input_tokens", "cacheCreationInputTokens"),
+        ):
+            values = [_field(usage, field) for usage in model_usage.values()]
+            if all(isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                   for value in values):
+                totals[key] = sum(values)
         sums = {"input_tokens": 0, "output_tokens": 0}
         for usage in model_usage.values():
             values = {
@@ -294,6 +313,7 @@ class TurnObserver:
                 "input_tokens": _field(usage, "input_tokens"),
                 "output_tokens": _field(usage, "output_tokens"),
                 "credits": _field(usage, "credits"),
+                **_cache_usage(usage),
             }
         )
 

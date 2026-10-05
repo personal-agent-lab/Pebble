@@ -128,7 +128,7 @@ def test_sdk_tools_to_http_confirmation(settings, monkeypatch):
                 )
                 yield self.say("已按你的要求补充。")
             else:
-                matcher = self.options.hooks["SessionStart"][0]
+                matcher = self.options.hooks["UserPromptSubmit"][0]
                 hook_result = await matcher.hooks[0]({}, None, {})
                 assert '"status": "sent"' in hook_result["hookSpecificOutput"]["additionalContext"]
                 yield self.say("邮件已经发出去了。")

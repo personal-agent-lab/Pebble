@@ -39,6 +39,7 @@ from qodercn_agent_sdk import (
 )
 
 from server.agent import context
+from server.agent.materials import SessionMaterials
 from server.agent.mcp import LOOPBACK_HOST, TOOL_ERROR_MESSAGE, TOOL_SERVER_NAME, ToolServer
 from server.agent.prompt import TITLE_PROMPT
 from server.agent.toolset import (
@@ -463,7 +464,12 @@ class QoderGateway:
         visible = exposed_tools(self.tools, allowed=ALLOWED_EFFECTS[turn.kind])
         announced: str | None = None
         streamed = False
+        terminal: AgentEvent | None = None
         observer = TurnObserver(turn.run_id)
+        materials = SessionMaterials(
+            self._task_workspace(turn.task_id) / ".context-materials.json", turn.sdk_session_id
+        )
+        materials.begin()
         async with self.tool_server.serve(
             visible,
             task_id=turn.task_id,
@@ -472,7 +478,9 @@ class QoderGateway:
             run_id=turn.run_id,
             on_timeline_change=turn.on_timeline_change,
         ) as path:
-            options = self._options(turn, visible=visible, path=path, observer=observer)
+            options = self._options(
+                turn, visible=visible, path=path, observer=observer, session_materials=materials
+            )
             async with QoderSDKClient(options) as client:
                 if turn.run_id is not None:
                     self._interrupts[turn.run_id] = client.interrupt
@@ -491,8 +499,9 @@ class QoderGateway:
                         if isinstance(message, ResultMessage):
                             observer.record_result(message)
                             await self._record_context_after(client, observer)
-                            yield _result_event(message)
-                            return
+                            announced = announced or turn.sdk_session_id or message.session_id
+                            terminal = _result_event(message)
+                            break
                         if isinstance(message, SystemMessage) and message.subtype == "init":
                             session_id = message.data.get("session_id")
                             # 同一会话一轮里会上报多次：只广播第一次，标识真的变化时照常上报。
@@ -529,6 +538,15 @@ class QoderGateway:
                     self._interrupts.pop(turn.run_id, None)
         while not queued.empty():
             yield queued.get_nowait()
+        if terminal is not None:
+            # SDK 客户端正常退出、会话持久化结束后才留下检查点；退出失败也不能冒充送达。
+            if terminal["type"] == "done":
+                try:
+                    materials.commit(announced)
+                except OSError:
+                    logger.exception("会话材料摘要保存失败，下轮重新加载背景")
+            yield terminal
+            return
         yield {"type": "error", "message": NO_TERMINAL_MESSAGE}
 
     @staticmethod
@@ -707,8 +725,10 @@ class QoderGateway:
         visible: list[ToolDefinition],
         path: str,
         observer: TurnObserver | None = None,
+        session_materials: SessionMaterials | None = None,
     ) -> QoderAgentOptions:
-        materials = list(turn.materials)
+        selected_materials = []
+        skill_catalog = []
         if self.skills_store is not None:
             from server.skills import runtime as skills_runtime
 
@@ -723,7 +743,7 @@ class QoderGateway:
                 if turn.on_timeline_change is not None:
                     turn.on_timeline_change()
 
-            materials.extend(
+            selected_materials.extend(
                 skills_runtime.manual_materials(
                     self.skills_store,
                     turn.skills,
@@ -740,7 +760,7 @@ class QoderGateway:
                     observer=observer,
                 )
                 if catalog is not None:
-                    materials.append(catalog)
+                    skill_catalog.append(catalog)
         snapshot = self.memory_store.snapshot()
         memory_materials = tuple(
             context.Material(title, snapshot[target]["content"])
@@ -748,21 +768,25 @@ class QoderGateway:
             if snapshot[target]["content"]
         )
         kb_materials = self._catalog_materials(observer)
-        ctx = context.assemble(materials=(*memory_materials, *kb_materials, *materials))
+        background = (*memory_materials, *kb_materials, *skill_catalog)
+        ctx = context.assemble()
         if observer is not None:
-            # 只记 Pebble 提交给 SDK 的材料：名称与渲染后的字符数，不存正文。
-            # dict 内容必须按渲染文本量（len(dict) 数的是键的个数，会记成 2）。
-            observer.record_materials(
-                [
-                    {"title": material.title, "chars": len(context.render_material(material))}
-                    for material in (*memory_materials, *kb_materials, *materials)
-                ]
-            )
+            # 钩子实际提交时再记录；复用的背景不冒充本轮新增材料。
+            observer.record_materials([])
         workspace = self._task_workspace(turn.task_id)
         web_tools = list(WEB_TOOLS) if turn.kind is TurnKind.MESSAGE else []
         read_enabled = turn.kind is TurnKind.MESSAGE and bool(turn.attachments)
         builtins = [*web_tools, *(["Read"] if read_enabled else [])]
-        hooks = turn_context_hooks(ctx.additional_context) or {}
+        session_materials = session_materials or SessionMaterials(
+            workspace / ".context-materials.json", turn.sdk_session_id
+        )
+        session_materials.configure(
+            background=background,
+            selected=selected_materials,
+            events=turn.materials,
+            observe=observer.record_materials if observer is not None else None,
+        )
+        hooks = session_materials.hooks()
         hooks.update(
             tool_trace_hooks(turn.task_id, turn.run_id, set(builtins), turn.on_timeline_change)
         )

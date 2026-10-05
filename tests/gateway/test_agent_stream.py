@@ -23,6 +23,7 @@ from qodercn_agent_sdk import (
 from server.agent import client as agent_client
 from server.agent.client import BYOK_PROVIDERS, QoderGateway
 from server.agent.context import Material, assemble
+from server.agent.materials import FULL_NOTE
 from server.agent.mcp import MCP_MOUNT_PATH, TOOL_SERVER_NAME, ToolServer
 from server.agent.prompt import BASE_PROMPT
 from server.agent.toolset import ALLOWED_EFFECTS, ToolDeps, TurnKind, exposed_tools
@@ -89,9 +90,17 @@ def options_for_turn(gateway: QoderGateway, turn: Turn):
 
 
 def injected_context(options) -> str:
-    matcher = options.hooks["SessionStart"][0]
-    result = asyncio.run(matcher.hooks[0]({}, None, {}))
-    return result["hookSpecificOutput"]["additionalContext"]
+    async def inject():
+        blocks = []
+        for event, data in (
+            ("SessionStart", {"source": "startup"}),
+            ("UserPromptSubmit", {"prompt": "测试输入"}),
+        ):
+            result = await options.hooks[event][0].hooks[0](data, None, {})
+            blocks.append(result.get("hookSpecificOutput", {}).get("additionalContext", ""))
+        return "\n\n".join(block for block in blocks if block)
+
+    return asyncio.run(inject())
 
 
 def message_turn(message: str, *, task_id: str = "task-1") -> Turn:
@@ -341,9 +350,10 @@ def test_execution_result_enters_system_prompt(settings):
     options = options_for_turn(gateway, turn)
 
     assert options.system_prompt == BASE_PROMPT
-    assert '"status": "sent"' in injected_context(options)
-    assert "op1" in injected_context(options)
-    assert "最终正文" in injected_context(options)
+    injected = injected_context(options)
+    assert '"status": "sent"' in injected
+    assert "op1" in injected
+    assert "最终正文" in injected
     # 回传材料只进附加上下文，不伪装成用户说过的话。
     assert "op1" not in turn.message
     assert "最终正文" not in turn.message
@@ -363,8 +373,9 @@ def test_new_mail_turn_passes_ids_as_material(settings):
 
     # 标识以 JSON 材料块进附加上下文，模型不必从散文句子里解析。
     assert options.system_prompt == BASE_PROMPT
-    assert '"source_message_id": "msg-1"' in injected_context(options)
-    assert '"thread_id": "th-1"' in injected_context(options)
+    injected = injected_context(options)
+    assert '"source_message_id": "msg-1"' in injected
+    assert '"thread_id": "th-1"' in injected
     assert "msg-1" not in turn.message
 
 
@@ -393,8 +404,8 @@ def test_resumed_turn_injects_fresh_material_without_changing_base_prompt(settin
     )
 
     assert first.system_prompt == second.system_prompt == BASE_PROMPT
-    assert injected_context(first) == "## 当前生效规则\n回答先给结论"
-    assert injected_context(second) == "## 当前生效规则\n回答先解释推导"
+    assert injected_context(first).endswith("## 当前生效规则\n回答先给结论")
+    assert injected_context(second).endswith("## 当前生效规则\n回答先解释推导")
 
 
 def test_memory_is_reloaded_and_precedes_turn_materials(settings):
@@ -414,8 +425,9 @@ def test_memory_is_reloaded_and_precedes_turn_materials(settings):
         materials=(Material("本轮材料", "只对本轮有效"),),
     )
 
-    assert injected_context(first).startswith("## 关于你\n回答先给结论")
+    assert "## 关于你\n回答先给结论" in injected_context(first)
     assert injected_context(second) == (
+        FULL_NOTE + "\n\n"
         "## 关于你\n回答先解释推导\n\n"
         "## 事实与约定\nPebble 使用 Python\n\n"
         "## 本轮材料\n只对本轮有效"
@@ -433,12 +445,15 @@ def test_kb_catalog_is_injected_after_memory_and_before_turn_materials(settings)
         settings=configured(settings),
     )
     seed_memory(gateway.memory_store, "user", "回答先给结论")
-    assert injected_context(options_for(gateway, TurnKind.MESSAGE)) == "## 关于你\n回答先给结论"
+    assert injected_context(options_for(gateway, TurnKind.MESSAGE)).endswith(
+        "## 关于你\n回答先给结论"
+    )
 
     kb.save(title="星云验收纪要", body="通过。", path="项目/验收", summary="二期验收结论")
     options = options_for(gateway, TurnKind.NEW_MAIL, materials=(Material("本轮材料", "新邮件"),))
 
     assert injected_context(options) == (
+        FULL_NOTE + "\n\n"
         "## 关于你\n回答先给结论\n\n"
         "## 资料目录\n"
         "资料库共 1 份资料；需要细节时用 kb_search 检索，或用 kb_read 读取原文。\n"
@@ -464,14 +479,14 @@ def test_catalog_failure_does_not_break_the_turn(settings, monkeypatch):
 
     monkeypatch.setattr(kb, "catalog", broken)
     options = options_for(gateway, TurnKind.MESSAGE, materials=(Material("本轮材料", "照常进行"),))
-    assert injected_context(options) == "## 本轮材料\n照常进行"
+    assert injected_context(options).endswith("## 本轮材料\n照常进行")
 
 
-def test_turn_without_materials_does_not_register_context_hook(settings):
+def test_turn_without_materials_registers_lifecycle_hooks(settings):
     options = options_for(make_gateway(settings), TurnKind.MESSAGE)
 
-    # 工具轨迹回调照常注册；无材料时不注册 SessionStart 注入钩子。
-    assert "SessionStart" not in (options.hooks or {})
+    # 无材料仍保留生命周期钩子，以便清除旧材料、处理压缩与后续更新。
+    assert injected_context(options) == FULL_NOTE
 
 
 def test_manual_compaction_runs_before_resumed_turn_when_sdk_auto_compact_is_off(
@@ -650,13 +665,23 @@ class ToolCall:
 
 def install_sdk(monkeypatch, gateway: QoderGateway, script):
     """替换 SDK 客户端：记录装配结果，按脚本产生消息，工具调用打到真实端点。"""
-    captured = {"options": None, "message": None, "results": []}
+    captured = {"options": None, "message": None, "results": [], "contexts": []}
 
     class StubClient:
         def __init__(self, options):
             captured["options"] = options
 
         async def __aenter__(self):
+            for matcher in (captured["options"].hooks or {}).get("SessionStart", []):
+                for hook in matcher.hooks:
+                    output = await hook(
+                        {"source": "resume" if captured["options"].resume else "startup"},
+                        None,
+                        {},
+                    )
+                    text = output.get("hookSpecificOutput", {}).get("additionalContext")
+                    if text:
+                        captured["contexts"].append(text)
             return self
 
         async def __aexit__(self, *exc):
@@ -664,6 +689,12 @@ def install_sdk(monkeypatch, gateway: QoderGateway, script):
 
         async def query(self, message):
             captured["message"] = message
+            for matcher in (captured["options"].hooks or {}).get("UserPromptSubmit", []):
+                for hook in matcher.hooks:
+                    output = await hook({"prompt": message}, None, {})
+                    text = output.get("hookSpecificOutput", {}).get("additionalContext")
+                    if text:
+                        captured["contexts"].append(text)
 
         async def interrupt(self):
             captured["results"].append("interrupted")
@@ -698,6 +729,57 @@ def install_sdk(monkeypatch, gateway: QoderGateway, script):
 
 def result(error=False, text=None):
     return ResultMessage("success", 1, 1, error, 1, "session-1", result=text)
+
+
+def test_stream_reuses_background_across_gateway_restart_and_appends_changes(settings, monkeypatch):
+    gateway = make_gateway(settings)
+    seed_memory(gateway.memory_store, "user", "常住南京")
+    initial = install_sdk(monkeypatch, gateway, [result()])
+    asyncio.run(collect(gateway.stream_turn(message_turn("你好"))))
+    assert "常住南京" in "\n".join(initial["contexts"])
+
+    restarted = make_gateway(settings)
+    reused = install_sdk(monkeypatch, restarted, [result()])
+    turn = Turn(
+        kind=TurnKind.MESSAGE,
+        task_id="task-1",
+        sdk_session_id="session-1",
+        message="继续",
+        materials=(Material("本次事件", "新结果"),),
+    )
+    asyncio.run(collect(restarted.stream_turn(turn)))
+    assert reused["contexts"] == ["## 本次事件\n新结果"]
+
+    seed_memory(restarted.memory_store, "user", "常住苏州")
+    changed = install_sdk(monkeypatch, restarted, [result()])
+    asyncio.run(collect(restarted.stream_turn(replace(turn, materials=()))))
+    text = "\n".join(changed["contexts"])
+    assert "常住苏州" in text and "常住南京" not in text
+    assert "完整替代此前版本" in text and FULL_NOTE not in text
+
+
+def test_failed_stream_does_not_commit_material_checkpoint(settings, monkeypatch):
+    gateway = make_gateway(settings)
+    seed_memory(gateway.memory_store, "user", "重要背景")
+    install_sdk(monkeypatch, gateway, [result(error=True, text="失败")])
+    asyncio.run(collect(gateway.stream_turn(message_turn("你好"))))
+    assert not (gateway.workspaces / "task-1" / ".context-materials.json").exists()
+
+
+def test_sdk_exit_failure_does_not_commit_checkpoint_or_report_done(settings, monkeypatch):
+    gateway = make_gateway(settings)
+    seed_memory(gateway.memory_store, "user", "重要背景")
+    install_sdk(monkeypatch, gateway, [result()])
+    original = agent_client.QoderSDKClient
+
+    class ExitFailure(original):
+        async def __aexit__(self, *exc):
+            raise RuntimeError("模拟会话保存失败")
+
+    monkeypatch.setattr(agent_client, "QoderSDKClient", ExitFailure)
+    with pytest.raises(ExceptionGroup):
+        asyncio.run(collect(gateway.stream_turn(message_turn("你好"))))
+    assert not (gateway.workspaces / "task-1" / ".context-materials.json").exists()
 
 
 def run_tools(gateway: QoderGateway, monkeypatch, *calls: ToolCall, task_id="task-1"):

@@ -1,6 +1,6 @@
 """技能装配运行时：本轮范围、目录材料与手动装配。
 
-目录常驻（每轮注入容量受限的目录）与正文按需（模型用 skill_view 读取）在这里成形；
+目录背景（每轮检查容量受限的目录）与正文按需（模型用 skill_view 读取）在这里成形；
 加载在装配或读取时绑定当前内容版本并记入 `skill_loads`。
 """
 
@@ -215,7 +215,13 @@ def manual_materials(
             service.record_load(task_id, run_id, skill, "manual")
         except Exception:
             logger.exception("技能 %s 的加载记录写入失败", skill_id)
-        materials.append(Material(title=f"用户选择的技能：{skill.name}", content=skill.body))
+        materials.append(
+            Material(
+                title=f"用户选择的技能：{skill.name}",
+                content=skill.body,
+                key=f"skill:{skill_id}",
+            )
+        )
     if skipped:
         materials.append(
             Material(
