@@ -27,6 +27,10 @@ _更新于 2026-10-08；评测状态按现有 `scenario_eval/` 实现整理。_
 - 静态检查：`ruff` 须显式 `--config server/pyproject.toml`。
 - 前端：`web/` 内 `npm run typecheck && npm test && npm run build`。
 
+## 2026-10-08：对话结果通知样式
+
+对话时间线的结果通知移除文字后的延伸横线，保留通知文字与相关入口。
+
 ## 2026-10-08：工具副作用与开放策略拆分
 
 工具注册声明由六类 `SideEffect` 拆为三类 `Effect` 与四类 `ToolPolicy`，两项必须显式填写；注册时拒绝非法组合与缺少专用范围的后台声明。前台 27 个工具保留原有轮次权限，统一通过 `ALLOWED_POLICIES` 与 `exposed_tools` 筛选，再同时交给 MCP 服务和 SDK 允许列表。

@@ -246,7 +246,6 @@ export default function TimelineFeed({
       <div className="sys-row" {...mark(item.item_id)}>
         <span>{item.text}</span>
         {isMemoryNotice(item.text) && <Link className="sys-link" to="/memory">查看记忆</Link>}
-        <span className="rule" />
       </div>
     </div>;
     if (item.kind === "mail_draft") return <div key={item.item_id}>
