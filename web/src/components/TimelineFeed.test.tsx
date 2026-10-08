@@ -28,6 +28,26 @@ const draft: Extract<TimelineItem, { kind: "mail_draft" }> = {
 
 type SdkResult = NonNullable<RunObservation["sdk_result"]>;
 
+test("结构化失败只显示一句原因，详情可展开，保留部分回答", async () => {
+  const items: TimelineItem[] = [
+    { item_id: "partial", kind: "text", role: "assistant", run_id: "r", text: "部分总结", created_at: "2026-10-08T08:40:00Z" },
+    { item_id: "error", kind: "error", run_id: "r", text: "模型服务因内容过滤停止了回答", created_at: "2026-10-08T08:41:00Z",
+      failure: { code: "model_content_filtered", message: "模型服务因内容过滤停止了回答", source: "model",
+        stage: "response", impact: "turn", recovery: "new_session", diagnostic_id: "diagnostic-1", details: {} } },
+  ];
+  const { container } = render(<TimelineFeed taskId="task-1" items={items} running={false}
+    sendMessage={vi.fn()} onChanged={vi.fn()} />);
+  expect(screen.getByText("部分总结")).toBeTruthy();
+  expect(screen.getByText("模型服务因内容过滤停止了回答")).toBeTruthy();
+  expect(screen.queryByText(/本轮处理失败/)).toBeNull();
+  const details = container.querySelector("details")!;
+  expect(details.open).toBe(false);
+  await userEvent.click(screen.getByText("查看错误详情"));
+  expect(details.open).toBe(true);
+  expect(screen.getByText("diagnostic-1")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /重试/ })).toBeNull();
+});
+
 /** 一轮的运行观测：折叠头只取时长，其余字段保留形状以便日后回填。 */
 const observation = (sdk: SdkResult | null = null): RunObservation => ({
   run_id: "run-1",

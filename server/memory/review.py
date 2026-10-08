@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Protocol
@@ -73,7 +74,10 @@ class ReviewGateway(Protocol):
 
 
 def review_response(row: dict) -> dict:
-    return {field: row[field] for field in REVIEW_FIELDS}
+    result = {field: row[field] for field in REVIEW_FIELDS}
+    if row.get("failure"):
+        result["failure"] = json.loads(row["failure"])
+    return result
 
 
 def review(conn: sqlite3.Connection, review_id: str) -> dict:
@@ -308,9 +312,14 @@ class MemoryReviewScheduler:
             row = claim_review(conn, review_id, timestamp())
             return review_response(row) if row is not None else None
 
-    def fail(self, review_id: str, message: str) -> None:
+    def fail(self, review_id: str, message: str, *, failure: dict | None = None) -> None:
         with session(self.path) as conn, write(conn):
             finish_review(conn, review_id, "error", message, timestamp())
+            if failure:
+                conn.execute(
+                    "UPDATE memory_reviews SET failure=? WHERE review_id=?",
+                    (json.dumps(failure, ensure_ascii=False), review_id),
+                )
 
     async def run(self, review_id: str, gateway: ReviewGateway) -> list[dict]:
         """执行一次回顾：取窗口对话与当前记忆，交给一次性模型调用，并落库结束状态。

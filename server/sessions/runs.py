@@ -45,7 +45,10 @@ def insert(
 
 
 def run_response(row: dict) -> dict:
-    return {field: row[field] for field in RUN_FIELDS}
+    payload = {field: row[field] for field in RUN_FIELDS}
+    if row.get("failure"):
+        payload["failure"] = json.loads(row["failure"])
+    return payload
 
 
 def run(conn: sqlite3.Connection, run_id: str) -> dict:
@@ -99,11 +102,18 @@ def claim(conn: sqlite3.Connection, run_id: str, now: str) -> bool:
     return cursor.rowcount == 1
 
 
-def finish(conn: sqlite3.Connection, run_id: str, status: str, error: str | None, now: str) -> None:
+def finish(
+    conn: sqlite3.Connection,
+    run_id: str,
+    status: str,
+    error: str | None,
+    now: str,
+    failure: dict | None = None,
+) -> None:
     conn.execute(
-        "UPDATE agent_runs SET status = ?, error = ?, finished_at = ? "
+        "UPDATE agent_runs SET status = ?, error = ?, finished_at = ?, failure = ? "
         "WHERE run_id = ? AND status = 'running'",
-        (status, error, now, run_id),
+        (status, error, now, json.dumps(failure, ensure_ascii=False) if failure else None, run_id),
     )
 
 
@@ -185,7 +195,8 @@ def retry_latest_message(conn: sqlite3.Connection, task_id: str) -> dict:
         conn.execute("DELETE FROM task_timeline_items WHERE item_id = ?", (item_id,))
 
     cursor = conn.execute(
-        "UPDATE agent_runs SET status = 'pending', error = NULL, started_at = NULL, "
+        "UPDATE agent_runs SET status = 'pending', error = NULL, failure = NULL, "
+        "started_at = NULL, "
         "finished_at = NULL WHERE run_id = ? AND status = 'interrupted'",
         (row["run_id"],),
     )

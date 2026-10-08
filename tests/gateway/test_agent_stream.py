@@ -30,6 +30,7 @@ from server.agent.toolset import ToolDeps, TurnKind, exposed_tools
 from server.config import Settings
 from server.db import init_db
 from server.errors import DependencyUnavailableError
+from server.failures import FailureError
 from server.gateway.agent_contract import AgentProtocolError, Turn, TurnAttachment
 from server.gateway.runtime import execution_result_content
 from server.sessions.service import SessionStore
@@ -223,9 +224,11 @@ def test_follow_up_without_attachments_denies_read_even_when_workspace_has_files
 
     assert "Read" not in options.allowed_tools
     assert "Read" not in options.tools
-    denied = asyncio.run(options.can_use_tool(
-        "Read", {"file_path": "attachments/old-report.pdf"}, ToolPermissionContext()
-    ))
+    denied = asyncio.run(
+        options.can_use_tool(
+            "Read", {"file_path": "attachments/old-report.pdf"}, ToolPermissionContext()
+        )
+    )
     assert isinstance(denied, PermissionResultDeny)
 
 
@@ -263,9 +266,7 @@ def test_image_attachment_uses_text_input_and_workspace_read(settings):
 def test_memory_tools_are_visible_only_in_user_turns(settings, kind):
     gateway = make_gateway(settings)
     gateway.tools.extend(gateway.review_tools)
-    names = {
-        name.rsplit("__", 1)[-1] for name in options_for(gateway, kind).allowed_tools
-    }
+    names = {name.rsplit("__", 1)[-1] for name in options_for(gateway, kind).allowed_tools}
 
     assert ("memory_edit" in names) is (kind is TurnKind.MESSAGE)
 
@@ -301,8 +302,11 @@ def test_review_options_expose_review_tools_in_fresh_session(settings):
 def test_external_write_requires_user_turn_policy():
     with pytest.raises(ValueError, match="不允许的工具权限组合"):
         ToolDefinition(
-            name="send_now", description="", func=lambda: None,
-            effect=Effect.EXTERNAL_WRITE, policy=ToolPolicy.ALL_TURNS,
+            name="send_now",
+            description="",
+            func=lambda: None,
+            effect=Effect.EXTERNAL_WRITE,
+            policy=ToolPolicy.ALL_TURNS,
         )
 
 
@@ -740,6 +744,29 @@ def test_failed_stream_does_not_commit_material_checkpoint(settings, monkeypatch
     assert not (gateway.workspaces / "task-1" / ".context-materials.json").exists()
 
 
+def test_content_filtered_after_partial_answer_is_a_structured_failure(settings, monkeypatch):
+    gateway = make_gateway(settings)
+    refused = replace(result(error=True), stop_reason="refusal")
+    install_sdk(
+        monkeypatch,
+        gateway,
+        [
+            AssistantMessage([TextBlock("部分回答")], "qmodel_38max"),
+            AssistantMessage(
+                [TextBlock("This conversation contains sensitive content. Try switching models")],
+                "<synthetic>",
+                error="invalid_request",
+            ),
+            refused,
+        ],
+    )
+    events = asyncio.run(collect(gateway.stream_turn(message_turn("你好"))))
+    assert [event["text"] for event in events if event["type"] == "text"] == ["部分回答"]
+    assert events[-1]["message"] == "模型服务因内容过滤停止了回答"
+    assert events[-1]["failure"]["code"] == "model_content_filtered"
+    assert events[-1]["failure"]["recovery"] == "new_session"
+
+
 def test_sdk_exit_failure_does_not_commit_checkpoint_or_report_done(settings, monkeypatch):
     gateway = make_gateway(settings)
     seed_memory(gateway.memory_store, "user", "重要背景")
@@ -751,9 +778,35 @@ def test_sdk_exit_failure_does_not_commit_checkpoint_or_report_done(settings, mo
             raise RuntimeError("模拟会话保存失败")
 
     monkeypatch.setattr(agent_client, "QoderSDKClient", ExitFailure)
-    with pytest.raises(ExceptionGroup):
+    with pytest.raises(FailureError):
         asyncio.run(collect(gateway.stream_turn(message_turn("你好"))))
     assert not (gateway.workspaces / "task-1" / ".context-materials.json").exists()
+
+
+def test_sdk_exit_failure_cannot_replace_content_filter_reason(settings, monkeypatch):
+    gateway = make_gateway(settings)
+    install_sdk(
+        monkeypatch,
+        gateway,
+        [
+            AssistantMessage(
+                [TextBlock("Session blocked, Please clear context try again")],
+                "<synthetic>",
+                error="invalid_request",
+            ),
+            replace(result(error=True), stop_reason="refusal"),
+        ],
+    )
+    original = agent_client.QoderSDKClient
+
+    class ExitFailure(original):
+        async def __aexit__(self, *exc):
+            raise RuntimeError("private-response")
+
+    monkeypatch.setattr(agent_client, "QoderSDKClient", ExitFailure)
+    events = asyncio.run(collect(gateway.stream_turn(message_turn("你好"))))
+    assert events[-1]["failure"]["code"] == "model_content_filtered"
+    assert "private-response" not in str(events)
 
 
 def run_tools(gateway: QoderGateway, monkeypatch, *calls: ToolCall, task_id="task-1"):
@@ -801,9 +854,7 @@ def test_skill_review_uses_only_staged_skill_tools(settings, monkeypatch):
         ],
     )
     candidates = asyncio.run(
-        gateway.review_skills(
-            "review-1", task_id, "复盘指令", "轨迹材料", "auto", {"E1": "item-1"}
-        )
+        gateway.review_skills("review-1", task_id, "复盘指令", "轨迹材料", "auto", {"E1": "item-1"})
     )
     assert {name.rsplit("__", 1)[-1] for name in captured["options"].allowed_tools} == {
         "skill_list",
@@ -821,30 +872,44 @@ def test_skill_review_rejects_bad_ref_then_accepts_corrected_ref(settings, monke
     skills = SkillService(settings.data_dir, settings.db_path)
     gateway = QoderGateway(
         ToolDeps(
-            drafts=MailDraftStore(), tasks=SessionStore(), gmail=MockGmailClient(),
+            drafts=MailDraftStore(),
+            tasks=SessionStore(),
+            gmail=MockGmailClient(),
             skills=skills,
         ),
-        ToolServer(), settings=configured(settings),
+        ToolServer(),
+        settings=configured(settings),
     )
     task_id = gateway.tasks_store.create_task("复盘")["task_id"]
     base = {
         "action": "create",
         "payload": {
-            "skill_id": "learned", "name": "方法", "description": "可复用方法", "body": "步骤",
+            "skill_id": "learned",
+            "name": "方法",
+            "description": "可复用方法",
+            "body": "步骤",
         },
         "reason": "用户纠正后成功",
     }
     captured = install_sdk(
-        monkeypatch, gateway,
+        monkeypatch,
+        gateway,
         [
             ToolCall("skill_propose_change", {**base, "evidence_refs_to_use": ["E99"]}),
             ToolCall("skill_propose_change", {**base, "evidence_refs_to_use": ["E1"]}),
             result(),
         ],
     )
-    candidates = asyncio.run(gateway.review_skills(
-        "review-1", task_id, "复盘指令", "[E1] user: 纠正", "auto", {"E1": "item-1"},
-    ))
+    candidates = asyncio.run(
+        gateway.review_skills(
+            "review-1",
+            task_id,
+            "复盘指令",
+            "[E1] user: 纠正",
+            "auto",
+            {"E1": "item-1"},
+        )
+    )
     assert captured["results"][0].isError
     assert not captured["results"][1].isError
     assert len(candidates) == 1
@@ -856,26 +921,47 @@ def test_skill_review_bad_ref_without_retry_fails_window(settings, monkeypatch):
     skills = SkillService(settings.data_dir, settings.db_path)
     gateway = QoderGateway(
         ToolDeps(
-            drafts=MailDraftStore(), tasks=SessionStore(), gmail=MockGmailClient(),
+            drafts=MailDraftStore(),
+            tasks=SessionStore(),
+            gmail=MockGmailClient(),
             skills=skills,
         ),
-        ToolServer(), settings=configured(settings),
+        ToolServer(),
+        settings=configured(settings),
     )
     task_id = gateway.tasks_store.create_task("复盘")["task_id"]
-    install_sdk(monkeypatch, gateway, [
-        ToolCall("skill_propose_change", {
-            "action": "create",
-            "payload": {
-                "skill_id": "learned", "name": "方法", "description": "可复用方法", "body": "步骤",
-            },
-            "reason": "用户纠正后成功", "evidence_refs_to_use": ["E99"],
-        }),
-        result(),
-    ])
+    install_sdk(
+        monkeypatch,
+        gateway,
+        [
+            ToolCall(
+                "skill_propose_change",
+                {
+                    "action": "create",
+                    "payload": {
+                        "skill_id": "learned",
+                        "name": "方法",
+                        "description": "可复用方法",
+                        "body": "步骤",
+                    },
+                    "reason": "用户纠正后成功",
+                    "evidence_refs_to_use": ["E99"],
+                },
+            ),
+            result(),
+        ],
+    )
     with pytest.raises(ExceptionGroup, match="unhandled errors in a TaskGroup") as error:
-        asyncio.run(gateway.review_skills(
-            "review-1", task_id, "复盘指令", "[E1] user: 纠正", "auto", {"E1": "item-1"},
-        ))
+        asyncio.run(
+            gateway.review_skills(
+                "review-1",
+                task_id,
+                "复盘指令",
+                "[E1] user: 纠正",
+                "auto",
+                {"E1": "item-1"},
+            )
+        )
     assert any(
         isinstance(item, AgentProtocolError) and "依据或用户可见理由无效，尚未纠正" in str(item)
         for item in error.value.exceptions
@@ -1109,7 +1195,7 @@ def test_repeated_init_announces_session_once(settings, monkeypatch):
         ([SystemMessage("init", {"session_id": "s"})], agent_client.NO_TERMINAL_MESSAGE),
         (
             [SystemMessage("init", {"session_id": "s"}), result(error=True, text="额度不足")],
-            "额度不足",
+            agent_client.MODEL_ERROR_MESSAGE,
         ),
         (
             [SystemMessage("init", {"session_id": "s"}), result(error=True)],
@@ -1233,7 +1319,9 @@ def test_tool_boundary_returns_structured_business_errors(settings, monkeypatch)
         task_id=task_id,
     )
     assert conflict.isError is True
-    assert tool_payload(conflict) == {
+    conflict_payload = tool_payload(conflict)
+    assert conflict_payload.pop("failure")["code"] == "version_conflict"
+    assert conflict_payload == {
         "error": "version_conflict",
         "message": "当前版本为 1",
         "current_version": 1,
@@ -1274,10 +1362,13 @@ def test_foreground_memory_tool_reads_and_writes_through_mcp(settings, monkeypat
     seed_memory(gateway.memory_store, "user", "旧偏好")
     anchor = memory_anchor(gateway.memory_store, "旧偏好")
     _, results = run_tools(
-        gateway, monkeypatch,
+        gateway,
+        monkeypatch,
         ToolCall("memory_edit", {}),
-        ToolCall("memory_edit", {"operations": [{"action": "replace", "anchor": anchor,
-                                                  "text": "新偏好"}]}),
+        ToolCall(
+            "memory_edit",
+            {"operations": [{"action": "replace", "anchor": anchor, "text": "新偏好"}]},
+        ),
     )
     assert len(results) == 2
     assert gateway.memory_store.snapshot()["user"]["content"] == "新偏好"

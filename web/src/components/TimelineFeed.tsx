@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
+import FailureDetails from "./FailureDetails";
 import { Link } from "react-router-dom";
 
 import { FileText } from "@phosphor-icons/react";
@@ -239,8 +240,9 @@ export default function TimelineFeed({
   const renderItem = (item: TimelineItem, index: number, process = false) => {
     if (item.kind === "error") return <div key={item.item_id}>
       <div className="sys-row" {...mark(item.item_id)}>
-        <span className="error-text">本轮处理失败：{item.text}</span><span className="rule" />
+        <span className="error-text">{item.failure ? item.failure.message : `本轮处理失败：${item.text}`}</span><span className="rule" />
       </div>
+      {item.failure && <FailureDetails failure={item.failure} />}
     </div>;
     if (item.kind === "notice") return <div key={item.item_id}>
       <div className="sys-row" {...mark(item.item_id)}>

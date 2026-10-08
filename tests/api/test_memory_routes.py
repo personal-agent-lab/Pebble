@@ -67,7 +67,9 @@ def test_write_errors_map_to_status_codes(settings):
             "/api/memory/user", json={"content": "甲" * 1376, "expected_version": version}
         )
         assert full.status_code == 422
-        assert full.json() == {
+        full_payload = full.json()
+        assert full_payload.pop("failure")["code"] == "memory_full"
+        assert full_payload == {
             "error": "memory_full",
             "message": "“关于你”放不下：保存后需要 1376 个字符，上限为 1375",
             "target": "user",

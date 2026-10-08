@@ -1,6 +1,7 @@
 """确认最终版本、取得一次执行权、保存结果并在不确定时只读核实。"""
 
 import json
+import logging
 from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
@@ -14,6 +15,7 @@ from server.errors import (
     NotFoundError,
     VersionConflictError,
 )
+from server.failures import Failure, exception_failure, log_failure
 from server.sessions import repository as operations
 from server.sessions import runs as agent_runs
 from server.sessions.service import timestamp
@@ -36,7 +38,16 @@ def checked_result(returned: object, success: str = "sent", identifier: str = "m
             return {"status": success, identifier: returned[identifier]}
         if status in {"failed", "unknown"} and isinstance(returned.get("reason"), str):
             return {"status": status, "reason": returned["reason"]}
-    return {"status": "unknown", "reason": f"执行结果不符合契约：{returned!r}"}
+    failure = Failure(
+        "execution_protocol",
+        "外部执行返回了无效结果，结果待核实",
+        "execution",
+        "result",
+        "unknown",
+        "verify_result",
+    )
+    log_failure(logging.getLogger(__name__), failure)
+    return {"status": "unknown", "reason": failure.message, "failure": failure.payload()}
 
 
 def result_response(row: dict) -> dict | None:
@@ -189,7 +200,18 @@ class ConfirmationService:
                 )
                 result = checked_result(returned)
         except Exception as error:
-            result = {"status": "unknown", "reason": f"外部执行调用异常：{error!r}"}
+            cause = exception_failure(error, source="execution", stage="execute", impact="unknown")
+            failure = Failure(
+                cause.code,
+                "外部执行调用异常，结果待核实",
+                "execution",
+                "execute",
+                "unknown",
+                "verify_result",
+                diagnostic_id=cause.diagnostic_id,
+            )
+            log_failure(logging.getLogger(__name__), failure, error)
+            result = {"status": "unknown", "reason": failure.message, "failure": failure.payload()}
         self._complete(operation_id, result, deliver=deliver)
         return self.get_execution(operation_id)
 
@@ -227,7 +249,25 @@ class ConfirmationService:
             )
             result = checked_result(returned, success, identifier)
         except Exception as error:
-            result = {"status": "unknown", "reason": f"核实调用异常：{error!r}"}
+            failure = Failure(
+                "verification_failed",
+                "结果核实失败，执行结果仍待核实",
+                "execution",
+                "verify",
+                "unknown",
+                "verify_result",
+            )
+            log_failure(logging.getLogger(__name__), failure, error)
+            result = {"status": "unknown", "reason": failure.message, "failure": failure.payload()}
+            with session(self.path) as conn, write(conn):
+                current = repo.view(conn, operation_id)
+                if current["status"] == "unknown":
+                    saved = result_response(current)
+                    saved["verification_failure"] = failure.payload()
+                    conn.execute(
+                        "UPDATE approval_executions SET result_json=? WHERE operation_id=?",
+                        (json.dumps(saved, ensure_ascii=False), operation_id),
+                    )
         if result["status"] == success:
             self._upgrade(operation_id, result)
         return self.get_execution(operation_id)

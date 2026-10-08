@@ -62,6 +62,7 @@ class AgentEvent(TypedDict, total=False):
     version: int
     message: str
     source: dict
+    failure: dict
 
 
 class AgentProtocolError(Exception):
@@ -91,8 +92,13 @@ class AgentGateway(Protocol):
     ) -> list[dict]: ...
 
     async def review_skills(
-        self, review_id: str, anchor_task_id: str, instructions: str, material: str,
-        model: str, evidence_refs: dict[str, str],
+        self,
+        review_id: str,
+        anchor_task_id: str,
+        instructions: str,
+        material: str,
+        model: str,
+        evidence_refs: dict[str, str],
     ) -> list[dict]: ...
 
 
@@ -117,4 +123,24 @@ def checked_event(event: object) -> AgentEvent:
         raise AgentProtocolError(f"draft_saved 事件缺少操作或版本：{event!r}")
     if kind == "error" and not isinstance(event.get("message"), str):
         raise AgentProtocolError(f"error 事件缺少原因：{event!r}")
+    if kind == "error" and "failure" in event:
+        from server.failures import Failure
+
+        try:
+            failure = Failure(**event["failure"])
+            if not all(
+                isinstance(value, str)
+                for value in (
+                    failure.code,
+                    failure.message,
+                    failure.source,
+                    failure.stage,
+                    failure.diagnostic_id,
+                )
+            ) or not isinstance(failure.details, dict):
+                raise ValueError("错误字段类型不合法")
+            if failure.message != event["message"]:
+                raise ValueError("错误说明不一致")
+        except (TypeError, ValueError) as error:
+            raise AgentProtocolError("error 事件的结构化原因无效") from error
     return event

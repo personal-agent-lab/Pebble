@@ -362,6 +362,21 @@ def test_unclear_send_result_saved_as_unknown(stores, returned):
     assert len(sender.calls) == 1
 
 
+def test_executor_exception_is_safe_and_remains_unknown(stores):
+    task, operation = prepare(stores)
+
+    def broken(**kwargs):
+        raise RuntimeError("Bearer private-token")
+
+    service = ConfirmationService(broken)
+    view = confirm(service, task["task_id"], operation["operation_id"], 1)
+    assert view["status"] == "unknown"
+    assert view["result"]["failure"]["impact"] == "unknown"
+    assert view["result"]["failure"]["recovery"] == "verify_result"
+    assert "private-token" not in str(view)
+    assert service.get_execution(operation["operation_id"]) == view
+
+
 def test_claim_rollback_leaves_no_trace(stores, monkeypatch):
     task, operation = prepare(stores)
     sender = Sender()
@@ -698,7 +713,11 @@ def test_verify_never_downgrades_or_resends(stores, returned):
     view = service.verify_pending(operation["operation_id"])
 
     assert view["status"] == "unknown"
-    assert view["result"] == {"status": "unknown", "reason": "网关超时"}
+    assert view["result"]["status"] == "unknown"
+    assert view["result"]["reason"] == "网关超时"
+    if isinstance(returned, Exception):
+        assert view["result"]["verification_failure"]["code"] == "verification_failed"
+        assert view["result"]["verification_failure"]["recovery"] == "verify_result"
     assert sender.calls == []
 
 

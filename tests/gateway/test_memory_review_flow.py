@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import json
 from typing import NamedTuple
 
 import pytest
@@ -308,7 +309,8 @@ async def test_review_failure_is_recorded_without_side_effects(review_flow):
     await send(review_flow, task_id, "一", "二", "三", "四", "五")
     rows = review_rows()
     assert rows[0]["status"] == "error"
-    assert "记忆回顾失败" in rows[0]["error"]
+    assert rows[0]["error"] == "处理时发生内部错误"
+    assert json.loads(rows[0]["failure"])["impact"] == "degraded"
     assert timeline_count(task_id) == 10
 
 

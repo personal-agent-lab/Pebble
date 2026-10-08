@@ -16,6 +16,7 @@ from typing import Any
 from uuid import uuid4
 
 from server.db import session, write
+from server.failures import exception_failure, log_failure
 from server.sessions.service import timestamp
 
 logger = logging.getLogger(__name__)
@@ -198,8 +199,11 @@ def record_degraded_sync(run_id: str, code: str, detail: dict | None = None) -> 
                 "VALUES (?, ?, 'degraded', ?, 'ok', ?, ?, NULL, NULL, ?)",
                 (str(uuid4()), run_id, code, now, now, _dump(detail)),
             )
-    except Exception:
-        logger.exception("降级观测步骤写入失败")
+    except Exception as error:
+        failure = exception_failure(
+            error, source="observation", stage="degraded_record", impact="degraded"
+        )
+        log_failure(logger, failure, error)
 
 
 # ---------- 网关侧的一轮记录器 ----------
@@ -251,8 +255,10 @@ def _session_totals(message: Any) -> dict:
             ("cache_creation_input_tokens", "cacheCreationInputTokens"),
         ):
             values = [_field(usage, field) for usage in model_usage.values()]
-            if all(isinstance(value, int) and not isinstance(value, bool) and value >= 0
-                   for value in values):
+            if all(
+                isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                for value in values
+            ):
                 totals[key] = sum(values)
         sums = {"input_tokens": 0, "output_tokens": 0}
         for usage in model_usage.values():
@@ -263,8 +269,10 @@ def _session_totals(message: Any) -> dict:
                     ("output_tokens", "outputTokens"),
                 )
             }
-            if any(not isinstance(value, (int, float)) or isinstance(value, bool)
-                   for value in values.values()):
+            if any(
+                not isinstance(value, (int, float)) or isinstance(value, bool)
+                for value in values.values()
+            ):
                 sums = {}
                 break
             for key, value in values.items():
@@ -377,8 +385,11 @@ class TurnObserver:
         try:
             with session() as conn, write(conn):
                 action(conn)
-        except Exception:
-            logger.exception("轮次 %s 的观测写入失败", self.run_id)
+        except Exception as error:
+            failure = exception_failure(
+                error, source="observation", stage="record", impact="degraded"
+            )
+            log_failure(logger, failure, error)
 
 
 # ---------- 读取 ----------
@@ -430,9 +441,7 @@ def _turn_totals(
             current = snapshot.get(key)
             base = 0 if first else previous.get(key)
             delta[key] = (
-                current - base
-                if positive(current) and _numeric(base) and current >= base
-                else None
+                current - base if positive(current) and _numeric(base) and current >= base else None
             )
         if any(value is not None for value in delta.values()):
             return delta, "delta"
@@ -443,7 +452,8 @@ def read_observations(task_id: str, path: Path | None = None) -> list[dict]:
     """按 agent_runs 顺序返回轮次摘要与步骤；无观测数据的轮次各字段为空值。"""
     with session(path) as conn:
         runs = conn.execute(
-            "SELECT r.run_id, r.kind, r.status, r.created_at, r.started_at, r.finished_at, "
+            "SELECT r.run_id, r.kind, r.status, r.failure, r.created_at, r.started_at, "
+            "r.finished_at, "
             "t.model, o.materials, o.sdk_result, o.context_before, o.context_after "
             "FROM agent_runs r JOIN tasks t ON t.task_id = r.task_id "
             "LEFT JOIN run_observations o ON o.run_id = r.run_id "
@@ -475,9 +485,7 @@ def read_observations(task_id: str, path: Path | None = None) -> list[dict]:
     for index, row in enumerate(runs):
         sdk_result = _load(row["sdk_result"])
         usage = sdk_result.get("usage") if isinstance(sdk_result, dict) else None
-        raw_snapshot = (
-            sdk_result.get("session_totals") if isinstance(sdk_result, dict) else None
-        )
+        raw_snapshot = sdk_result.get("session_totals") if isinstance(sdk_result, dict) else None
         snapshot = raw_snapshot if isinstance(raw_snapshot, dict) else None
         totals, source = _turn_totals(
             index == 0,
@@ -494,6 +502,7 @@ def read_observations(task_id: str, path: Path | None = None) -> list[dict]:
                 "created_at": row["created_at"],
                 "started_at": row["started_at"],
                 "finished_at": row["finished_at"],
+                "failure": _load(row["failure"]),
                 "materials": _load(row["materials"]),
                 "sdk_result": sdk_result,
                 "usage_totals": totals,

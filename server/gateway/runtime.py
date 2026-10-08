@@ -25,6 +25,7 @@ from server.errors import (
     TaskIdConflictError,
     TaskNotRunningError,
 )
+from server.failures import Failure, exception_failure, log_failure
 from server.gateway.agent_contract import (
     AgentEvent,
     AgentGateway,
@@ -503,8 +504,11 @@ class GatewayRuntime:
             try:
                 await self.skill_reviews.run(review_id, self.gateway)
             except Exception as error:
-                logging.getLogger(__name__).exception("Skill 后台复盘失败")
-                self.skill_reviews.fail(review_id, str(error))
+                failure = exception_failure(
+                    error, source="background", stage="skill_review", impact="degraded"
+                )
+                log_failure(logging.getLogger(__name__), failure, error)
+                self.skill_reviews.fail(review_id, failure.message, failure=failure.payload())
         finally:
             self._skill_review_task = None
             if self.skill_reviews is not None:
@@ -536,7 +540,11 @@ class GatewayRuntime:
             try:
                 notices = await self.reviews.run(review_id, self.gateway)
             except Exception as error:
-                self.reviews.fail(review_id, f"记忆回顾失败：{error}")
+                failure = exception_failure(
+                    error, source="background", stage="memory_review", impact="degraded"
+                )
+                log_failure(logging.getLogger(__name__), failure, error)
+                self.reviews.fail(review_id, failure.message, failure=failure.payload())
                 return
             for notice in notices:
                 self.events.publish(task_id, {**notice, "type": "notice"})
@@ -597,16 +605,28 @@ class GatewayRuntime:
                 self.events.publish(task_id, self._settle_interrupted(run_id))
             raise
         except Exception as error:
+            failure = exception_failure(error, source="gateway", stage="stream", impact="turn")
+            if isinstance(error, AgentProtocolError):
+                failure = Failure(
+                    "agent_protocol", "Agent 返回了无效的运行事件", "gateway", "stream", "turn"
+                )
+            log_failure(logging.getLogger(__name__), failure, error)
             if row is None:
-                logging.getLogger(__name__).exception("调用记录不可读，无法登记失败：%s", run_id)
+                logging.getLogger(__name__).error("调用记录不可读，无法登记失败：%s", run_id)
             else:
-                self._fail(row, f"Agent 调用失败：{error}")
+                self._fail(row, failure)
         finally:
             self._activities.pop(run_id, None)
             self._active.pop(task_id, None)
             self._active_runs.pop(task_id, None)
             self._user_interrupts.discard(run_id)
-            self.kick()
+            try:
+                self.kick()
+            except Exception as error:
+                failure = exception_failure(
+                    error, source="gateway", stage="schedule", impact="degraded"
+                )
+                log_failure(logging.getLogger(__name__), failure, error)
 
     def _claim(self, run_id: str) -> bool:
         with session(self.path) as conn, write(conn):
@@ -758,17 +778,48 @@ class GatewayRuntime:
             elif kind == "done":
                 self._activities.pop(row["run_id"], None)
                 self._finish(row["run_id"], "done", None)
-                self._schedule_retitle(row)
-                self._schedule_memory_review(row)
+                actions = [
+                    lambda: self._schedule_retitle(row),
+                    lambda: self._schedule_memory_review(row),
+                ]
                 if self.skill_reviews is not None and row["kind"] == repo.KIND_MESSAGE:
-                    self.skill_reviews.enqueue_if_due()
+                    actions.append(self.skill_reviews.enqueue_if_due)
+                for action in actions:
+                    try:
+                        action()
+                    except Exception as error:
+                        from server.sessions.observations import record_degraded_sync
+
+                        failure = exception_failure(
+                            error, source="background", stage="post_run", impact="degraded"
+                        )
+                        log_failure(logging.getLogger(__name__), failure, error)
+                        record_degraded_sync(
+                            row["run_id"],
+                            "background_schedule_failed",
+                            {"failure": failure.payload()},
+                        )
             else:
-                message = self._with_last_step(row["run_id"], event["message"])
+                failure = (
+                    event.get("failure")
+                    or Failure(
+                        "agent_failed",
+                        "Agent 处理失败",
+                        "gateway",
+                        "stream",
+                        "turn",
+                    ).payload()
+                )
+                step = self._activities.pop(row["run_id"], None)
+                if step:
+                    failure = {**failure, "details": {**failure["details"], "last_step": step}}
+                message = failure["message"]
                 published["message"] = message
+                published["failure"] = failure
                 with session(self.path) as conn, write(conn):
-                    repo.finish(conn, row["run_id"], "error", message, timestamp())
+                    repo.finish(conn, row["run_id"], "error", message, timestamp(), failure)
                     published["item_id"] = timeline.insert_error(
-                        conn, row["task_id"], row["run_id"], message
+                        conn, row["task_id"], row["run_id"], message, failure
                     )
         self.events.publish(row["task_id"], {"run_id": row["run_id"], **published})
 
@@ -819,8 +870,11 @@ class GatewayRuntime:
                 except NotFoundError:
                     return  # 任务在标题生成期间被删除
                 operations.update_goal(conn, task_id, title)
-        except Exception:
-            logging.getLogger(__name__).exception("标题落盘失败，保留任务原目标文案")
+        except Exception as error:
+            failure = exception_failure(
+                error, source="background", stage="title", impact="degraded"
+            )
+            log_failure(logging.getLogger(__name__), failure, error)
 
     def _finish(self, run_id: str, status: str, error: str | None) -> None:
         with session(self.path) as conn, write(conn):
@@ -832,19 +886,38 @@ class GatewayRuntime:
                 if row is not None and row["kind"] == repo.KIND_MESSAGE:
                     record_completed_turn(conn, run_id, row["task_id"])
 
-    def _with_last_step(self, run_id: str, message: str) -> str:
-        """失败说明附上这一轮最后在做的步骤，看得出停在哪一步；步骤随之清除。"""
-        step = self._activities.pop(run_id, None)
-        return f"{message}（最后一步：{step}）" if step else message
-
-    def _fail(self, row: dict, message: str) -> None:
-        message = self._with_last_step(row["run_id"], message)
-        with session(self.path) as conn, write(conn):
-            repo.finish(conn, row["run_id"], "error", message, timestamp())
-            item_id = timeline.insert_error(conn, row["task_id"], row["run_id"], message)
+    def _fail(self, row: dict, failure: Failure) -> None:
+        payload = failure.payload()
+        step = self._activities.pop(row["run_id"], None)
+        if step:
+            payload["details"]["last_step"] = step
+        try:
+            with session(self.path) as conn, write(conn):
+                repo.finish(conn, row["run_id"], "error", failure.message, timestamp(), payload)
+                item_id = timeline.insert_error(
+                    conn, row["task_id"], row["run_id"], failure.message, payload
+                )
+        except Exception as error:
+            secondary = exception_failure(
+                error, source="storage", stage="failure_record", impact="turn"
+            )
+            log_failure(logging.getLogger(__name__), secondary, error)
+            logging.getLogger(__name__).error(
+                "无法保存失败 primary=%s secondary=%s run_id=%s",
+                failure.diagnostic_id,
+                secondary.diagnostic_id,
+                row["run_id"],
+            )
+            return
         self.events.publish(
             row["task_id"],
-            {"run_id": row["run_id"], "item_id": item_id, "type": "error", "message": message},
+            {
+                "run_id": row["run_id"],
+                "item_id": item_id,
+                "type": "error",
+                "message": failure.message,
+                "failure": payload,
+            },
         )
 
 

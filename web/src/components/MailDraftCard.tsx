@@ -12,6 +12,7 @@ import {
 } from "../api";
 import { operationBadge, shortTime } from "../status";
 import Notice from "./Notice";
+import FailureDetails from "./FailureDetails";
 import StatusBadge from "./StatusBadge";
 
 type MailItem = Extract<TimelineItem, { kind: "mail_draft" }>;
@@ -271,6 +272,10 @@ export default function MailDraftCard({ taskId, item, sendMessage, onChanged }: 
         {result?.status === "sent" && `已发送至 ${item.draft.to.join("、")}。`}
         {result?.status === "failed" && `发送失败：${result.reason}。系统不会自动重试。`}
         {result?.status === "unknown" && `结果待核实：${result.reason}。未核实前不能再次发送。`}
+        {result && (result.status === "failed" || result.status === "unknown") && result.failure &&
+          <FailureDetails failure={result.failure} />}
+        {result?.status === "unknown" && result.verification_failure &&
+          <FailureDetails failure={result.verification_failure} />}
         <span>确认于 {shortTime(item.execution.confirmation.confirmed_at)}</span>
       </div>}
 

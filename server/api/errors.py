@@ -6,6 +6,8 @@
 数据库异常不在此处理，按服务端错误返回。
 """
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -35,6 +37,7 @@ from server.errors import (
     VersionConflictError,
     error_details,
 )
+from server.failures import FailureError, exception_failure, log_failure
 
 STATUS_CODES: tuple[tuple[type[Exception], int], ...] = (
     (DependencyUnavailableError, 503),
@@ -68,8 +71,40 @@ def install_error_handlers(app: FastAPI) -> None:
 
         def handler(status_code=status_code):
             async def respond(request: Request, error: Exception) -> JSONResponse:
-                return JSONResponse(status_code=status_code, content=error_details(error))
+                failure = exception_failure(error, source="api", stage="request")
+                body = {
+                    **error_details(error),
+                    "message": failure.message,
+                    "failure": failure.payload(),
+                }
+                return JSONResponse(status_code=status_code, content=body)
 
             return respond
 
         app.add_exception_handler(error_type, handler())
+
+    async def unexpected(request: Request, error: Exception) -> JSONResponse:
+        failure = exception_failure(error, source="api", stage="request")
+        log_failure(logging.getLogger(__name__), failure, error)
+        status = 500
+        if isinstance(error, FailureError):
+            status = {
+                "model_content_filtered": 422,
+                "model_refused": 422,
+                "model_invalid_request": 422,
+                "timeout": 504,
+                "model_authentication": 503,
+                "model_billing": 503,
+                "model_rate_limited": 503,
+                "model_unavailable": 503,
+            }.get(failure.code, 502 if failure.source in {"model", "sdk"} else 500)
+        return JSONResponse(
+            status_code=status,
+            content={
+                "error": failure.code,
+                "message": failure.message,
+                "failure": failure.payload(),
+            },
+        )
+
+    app.add_exception_handler(Exception, unexpected)

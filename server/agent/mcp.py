@@ -27,6 +27,7 @@ from starlette.routing import Mount
 from starlette.types import Receive, Scope, Send
 
 from server.errors import error_details
+from server.failures import exception_failure, log_failure
 from server.sessions.service import timestamp
 from server.sessions.tool_trace import begin_tool_call, finish_tool_call
 from server.tools.registry import ToolDefinition, ToolFileResult
@@ -239,10 +240,13 @@ async def invoke(
             result = await _execute(definition, fields, queued)
         except Exception as error:
             details = error_details(error)
+            failure = exception_failure(error, source="tool", stage=definition.name, impact="tool")
             if details is None:
-                logger.exception("工具 %s 执行失败", definition.name)
-                details = {"error": "unexpected", "message": TOOL_ERROR_MESSAGE}
-            result = error_result(details)
+                log_failure(logger, failure, error)
+                details = {"error": failure.code}
+            result = error_result(
+                {**details, "message": failure.message, "failure": failure.payload()}
+            )
     await finish_tool_call(
         task_id=task_id,
         run_id=run_id,

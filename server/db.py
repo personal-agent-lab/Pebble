@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import default_model, get_settings
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -455,6 +455,13 @@ SCHEMA_V25 = (
     "WHERE status = 'pending'",
 )
 
+SCHEMA_V26 = (
+    "ALTER TABLE agent_runs ADD COLUMN failure TEXT",
+    "ALTER TABLE task_timeline_items ADD COLUMN failure TEXT",
+    "ALTER TABLE memory_reviews ADD COLUMN failure TEXT",
+    "ALTER TABLE skill_reviews ADD COLUMN failure TEXT",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -481,6 +488,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     23: SCHEMA_V23,
     24: SCHEMA_V24,
     25: SCHEMA_V25,
+    26: SCHEMA_V26,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

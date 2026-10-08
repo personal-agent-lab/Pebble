@@ -1,6 +1,16 @@
 /** 后端 Interface：统一时间线、邮件草稿版本、确认执行、资料与长期记忆管理。 */
 
 export type RunStatus = "pending" | "running" | "done" | "error" | "interrupted";
+export type Failure = {
+  code: string;
+  message: string;
+  source: string;
+  stage: string;
+  impact: "request" | "tool" | "turn" | "degraded" | "unknown";
+  recovery: "none" | "check_configuration" | "correct_input" | "read_current" | "wait" | "verify_result" | "new_session";
+  diagnostic_id: string;
+  details: Record<string, unknown>;
+};
 export type OperationStatus =
   | "pending" | "sending" | "sent" | "creating" | "created" | "failed" | "unknown" | "cancelled";
 
@@ -10,6 +20,7 @@ export type Run = {
   kind: "new_mail" | "message" | "execution_result";
   status: RunStatus;
   error: string | null;
+  failure?: Failure | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -53,7 +64,7 @@ export type Draft = {
 export type SendResult =
   | { status: "sent"; message_id: string }
   | { status: "created"; event_id: string }
-  | { status: "failed" | "unknown"; reason: string };
+  | { status: "failed" | "unknown"; reason: string; failure?: Failure; verification_failure?: Failure };
 
 export type Execution = {
   operation_id: string;
@@ -87,6 +98,7 @@ export type TimelineItem =
       kind: "error";
       run_id: string;
       text: string;
+      failure?: Failure;
       created_at: string;
     }
   | {
@@ -144,6 +156,7 @@ export type ContextReading = {
 };
 
 export type RunObservation = {
+  failure?: Failure | null;
   run_id: string;
   kind: string;
   status: string;
@@ -215,7 +228,7 @@ export type AgentEvent =
   | { type: "done"; run_id: string }
   /** 用户终止了这一轮：调用已按中断落库，页面重读即可。 */
   | { type: "interrupted"; run_id: string }
-  | { type: "error"; run_id: string; item_id: string; message: string }
+  | { type: "error"; run_id: string; item_id: string; message: string; failure?: Failure }
   | { type: "notice"; run_id: string; item_id: string; text: string }
   | { type: "activity"; run_id: string; text: string }
   | { type: "timeline_changed"; run_id: string };
@@ -230,6 +243,7 @@ export class ApiError extends Error {
     readonly operationStatus?: string,
     readonly fieldErrors?: FieldError[],
     readonly currentRevision?: string,
+    readonly failure?: Failure,
   ) {
     super(message);
   }
@@ -238,6 +252,7 @@ export class ApiError extends Error {
 }
 
 type ErrorBody = {
+  failure?: Failure;
   error?: string;
   message?: string;
   current_version?: number | string;
@@ -271,7 +286,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ? `无法连接 Pebble 服务（HTTP ${response.status}）`
       : (body.message ?? (body.detail ? JSON.stringify(body.detail) : response.statusText));
     throw new ApiError(code, message, response.status, body.current_version, body.status, body.errors,
-      body.current_revision);
+      body.current_revision, body.failure);
   }
   return payload as T;
 }

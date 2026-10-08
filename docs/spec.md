@@ -192,6 +192,7 @@ Agent 执行层使用 Qoder Agent SDK：推理与工具调用循环、SDK 会话
 | `docs/kb.md` | 个人资料库：保存、检索、版本、用户直改。 |
 | `docs/skills.md` | 技能：形态、装配、变更管道、后台复盘。 |
 | `docs/observability.md` | 观测：轮次观测、工具轨迹、降级记录、健康检查。 |
+| `docs/errors.md` | 错误：边界分类、安全描述、持久诊断与恢复建议。 |
 | `docs/evaluation.md` | 真实场景评测：目标、环境与隔离、场景库、判定与红线、指标与运行规程。 |
 | `docs/status.md` | 实现状态与已知偏差，唯一的状态记录。 |
 | `README.md` | 启动与检查命令、远程访问现状。 |

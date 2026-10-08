@@ -11,6 +11,7 @@ import pytest
 from server.approval.service import ConfirmationService
 from server.db import init_db, session, write
 from server.errors import NotFoundError, RetryUnavailableError, TaskNotRunningError
+from server.failures import Failure
 from server.gateway.runtime import (
     INTERRUPTED_REASON,
     USER_INTERRUPTED_MESSAGE,
@@ -223,7 +224,8 @@ async def test_failure_names_the_last_step(flow):
     def handler(turn):
         async def events():
             yield {"type": "activity", "text": "正在查询日程：2026-09-17 00:00 至 2026-09-18 00:00"}
-            yield {"type": "error", "message": "iCloud 连接超时"}
+            failure = Failure("timeout", "请求超时", "tool", "query", "turn")
+            yield {"type": "error", "message": failure.message, "failure": failure.payload()}
 
         return events()
 
@@ -233,9 +235,11 @@ async def test_failure_names_the_last_step(flow):
 
     items = flow.service.get_timeline(task["task_id"])["items"]
     errors = [item for item in items if item["kind"] == "error"]
-    assert [item["text"] for item in errors] == [
-        "iCloud 连接超时（最后一步：正在查询日程：2026-09-17 00:00 至 2026-09-18 00:00）"
-    ]
+    assert [item["text"] for item in errors] == ["请求超时"]
+    assert (
+        errors[0]["failure"]["details"]["last_step"]
+        == "正在查询日程：2026-09-17 00:00 至 2026-09-18 00:00"
+    )
     assert flow.service.latest_run(task["task_id"])["error"] == errors[0]["text"]
 
 
@@ -419,7 +423,8 @@ async def test_gateway_failure_marks_run_error_and_next_run_works(flow):
     await drain(flow.service)
     row = flow.service.get_run(run["run_id"])
     assert row["status"] == "error"
-    assert "模拟网关故障" in row["error"]
+    assert row["failure"]["code"] == "unexpected"
+    assert "模拟网关故障" not in row["error"]
 
     def ok(**kwargs):
         async def events():
@@ -447,7 +452,7 @@ async def test_malformed_event_stream_is_protocol_error(flow):
     await drain(flow.service)
     row = flow.service.get_run(run["run_id"])
     assert row["status"] == "error"
-    assert "done" in row["error"] and "error" in row["error"]
+    assert row["failure"]["code"] == "agent_protocol"
 
     def broken(**kwargs):
         async def events():
@@ -458,7 +463,7 @@ async def test_malformed_event_stream_is_protocol_error(flow):
     flow.gateway.handle("message", broken)
     second = flow.service.submit_message(task["task_id"], "坏事件")
     await drain(flow.service)
-    assert "draft_saved" in flow.service.get_run(second["run_id"])["error"]
+    assert flow.service.get_run(second["run_id"])["failure"]["code"] == "agent_protocol"
 
 
 async def test_user_interrupt_stops_the_running_turn_and_keeps_partial_output(flow):
@@ -1000,6 +1005,77 @@ async def test_failed_first_run_keeps_original_goal(flow):
 
     assert flow.tasks.get_task(task["task_id"])["goal"] == "处理新收到的邮件"
     assert flow.gateway.title_calls == []
+
+
+async def test_structured_failure_survives_timeline_read_and_observation(flow):
+    from server.sessions.observations import read_observations
+
+    failure = Failure(
+        "model_content_filtered",
+        "模型服务因内容过滤停止了回答",
+        "model",
+        "response",
+        "turn",
+        "new_session",
+    )
+
+    async def failing(**kwargs):
+        yield {"type": "text", "text": "部分总结"}
+        yield {"type": "error", "message": failure.message, "failure": failure.payload()}
+
+    flow.gateway.handle("message", failing)
+    task = flow.tasks.create_task("总结")
+    run = flow.service.submit_message(task["task_id"], "整理")
+    await drain(flow.service)
+    assert flow.service.get_run(run["run_id"])["failure"] == failure.payload()
+    items = flow.service.get_timeline(task["task_id"])["items"]
+    assert items[-2]["text"] == "部分总结"
+    assert items[-1]["text"] == failure.message
+    assert items[-1]["failure"] == failure.payload()
+    assert read_observations(task["task_id"])[0]["failure"] == failure.payload()
+    assert flow.service.latest_run(task["task_id"])["retryable"] is False
+
+
+async def test_failure_record_error_does_not_leak_or_leave_active_slot(flow, monkeypatch, caplog):
+    import sqlite3
+
+    from server.sessions import timeline
+
+    async def broken(**kwargs):
+        raise RuntimeError("original-private-value")
+        yield
+
+    def write_error(*args, **kwargs):
+        raise sqlite3.OperationalError("secondary-private-value")
+
+    flow.gateway.handle("message", broken)
+    task = flow.tasks.create_task("错误收尾")
+    monkeypatch.setattr(timeline, "insert_error", write_error)
+    flow.service.submit_message(task["task_id"], "开始")
+    await drain(flow.service)
+    assert flow.service._active == {}
+    assert "failure_record" in caplog.text
+    assert "original-private-value" not in caplog.text
+    assert "secondary-private-value" not in caplog.text
+
+
+async def test_background_registration_failure_does_not_change_successful_turn(flow, monkeypatch):
+    from server.sessions.observations import read_observations
+
+    def fail_schedule(row):
+        raise RuntimeError("private-background-error")
+
+    monkeypatch.setattr(flow.service, "_schedule_memory_review", fail_schedule)
+    task = flow.tasks.create_task("正常对话")
+    run = flow.service.submit_message(task["task_id"], "你好")
+    await drain(flow.service)
+    assert flow.service.get_run(run["run_id"])["status"] == "done"
+    assert not any(
+        item["kind"] == "error" for item in flow.service.get_timeline(task["task_id"])["items"]
+    )
+    observed = read_observations(task["task_id"])[0]
+    step = next(step for step in observed["steps"] if step["code"] == "background_schedule_failed")
+    assert step["detail"]["failure"]["impact"] == "degraded"
 
 
 async def test_title_failure_keeps_original_goal(flow):

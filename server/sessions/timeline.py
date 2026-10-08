@@ -89,13 +89,27 @@ def ensure_mail_draft(
     return item_id
 
 
-def insert_error(conn: sqlite3.Connection, task_id: str, run_id: str, text: str) -> str:
+def insert_error(
+    conn: sqlite3.Connection,
+    task_id: str,
+    run_id: str,
+    text: str,
+    failure: dict | None = None,
+) -> str:
     item_id = str(uuid4())
     conn.execute(
         "INSERT INTO task_timeline_items "
-        "(item_id, task_id, run_id, sequence, kind, role, text, operation_id, created_at) "
-        "VALUES (?, ?, ?, ?, 'error', NULL, ?, NULL, ?)",
-        (item_id, task_id, run_id, next_sequence(conn, task_id), text, timestamp()),
+        "(item_id, task_id, run_id, sequence, kind, role, text, operation_id, created_at, failure) "
+        "VALUES (?, ?, ?, ?, 'error', NULL, ?, NULL, ?, ?)",
+        (
+            item_id,
+            task_id,
+            run_id,
+            next_sequence(conn, task_id),
+            text,
+            timestamp(),
+            json.dumps(failure, ensure_ascii=False) if failure else None,
+        ),
     )
     return item_id
 
@@ -248,7 +262,13 @@ class TimelineStore:
                     }
                     items.append(payload)
                 elif item["kind"] in ("error", "notice"):
-                    items.append({**base, "text": item["text"]})
+                    items.append(
+                        {
+                            **base,
+                            "text": item["text"],
+                            **({"failure": json.loads(item["failure"])} if item["failure"] else {}),
+                        }
+                    )
                 elif item["kind"] == "tool":
                     items.append(
                         {

@@ -1669,3 +1669,8 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
 .run-details-header svg { flex: none; }
 .tool-call-line { display: flex; align-items: center; gap: 6px; }
 .tool-call-line .tool-call-row { flex: 1; min-width: 0; }
+.failure-details { margin: 8px 0 16px; color: var(--color-muted); font-size: 13px; }
+.failure-details summary { cursor: pointer; width: fit-content; }
+.failure-details dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; }
+.failure-details dl > div { display: contents; }
+.failure-details dd { margin: 0; overflow-wrap: anywhere; }

@@ -18,6 +18,7 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -39,6 +40,7 @@ from qodercn_agent_sdk import (
 )
 
 from server.agent import context
+from server.agent.failures import assistant_failure, result_failure, sdk_exception
 from server.agent.materials import SessionMaterials
 from server.agent.mcp import LOOPBACK_HOST, TOOL_ERROR_MESSAGE, TOOL_SERVER_NAME, ToolServer
 from server.agent.prompt import TITLE_PROMPT
@@ -51,6 +53,7 @@ from server.agent.toolset import (
 from server.config import Settings, get_settings
 from server.db import session, write
 from server.errors import DependencyUnavailableError, error_details
+from server.failures import Failure, FailureError, log_failure
 from server.gateway.agent_contract import AgentEvent, AgentProtocolError, Turn
 from server.memory.service import MemoryStore
 from server.sessions import timeline
@@ -284,17 +287,16 @@ class QoderGateway:
         vision: bool = False,
     ) -> str:
         parts: list[str] = []
-        async with QoderSDKClient(self._light_options(instructions, vision=vision)) as client:
+        async with _sdk_client(
+            self._light_options(instructions, vision=vision), stage="auxiliary"
+        ) as client:
             await client.query(prompt)
-            async for message in client.receive_response():
+            async for message in _checked_response(client, stage="auxiliary"):
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock) and block.text.strip():
                             parts.append(block.text)
                 elif isinstance(message, ResultMessage):
-                    if message.is_error:
-                        detail = (message.result or "").strip() or MODEL_ERROR_MESSAGE
-                        raise AgentProtocolError(detail)
                     return "".join(parts).strip()
         raise AgentProtocolError(NO_TERMINAL_MESSAGE)
 
@@ -408,14 +410,10 @@ class QoderGateway:
             options = self._oneshot_options(
                 instructions, path, tools, task_id=anchor_task_id, model=model
             )
-            async with QoderSDKClient(options) as client:
+            async with _sdk_client(options, stage="auxiliary") as client:
                 await client.query(material)
-                async for reply in client.receive_response():
+                async for reply in _checked_response(client, stage="auxiliary"):
                     if isinstance(reply, ResultMessage):
-                        if reply.is_error:
-                            raise AgentProtocolError(
-                                (reply.result or "").strip() or MODEL_ERROR_MESSAGE
-                            )
                         if invalid_candidate_since_last_candidate:
                             raise AgentProtocolError("复盘候选的依据或用户可见理由无效，尚未纠正")
                         return candidates
@@ -440,13 +438,10 @@ class QoderGateway:
             options = self._oneshot_options(
                 instructions, path, tools, task_id=task_id, model=task["model"]
             )
-            async with QoderSDKClient(options) as client:
+            async with _sdk_client(options, stage="auxiliary") as client:
                 await client.query(message)
-                async for reply in client.receive_response():
+                async for reply in _checked_response(client, stage="auxiliary"):
                     if isinstance(reply, ResultMessage):
-                        if reply.is_error:
-                            detail = (reply.result or "").strip() or MODEL_ERROR_MESSAGE
-                            raise AgentProtocolError(detail)
                         return records
         raise AgentProtocolError(NO_TERMINAL_MESSAGE)
 
@@ -462,8 +457,13 @@ class QoderGateway:
             excluded_skill_ids=turn.excluded_skill_ids,
             auto_match=turn.auto_match,
         ):
-            async for event in self._scoped_stream(turn):
-                yield event
+            try:
+                async for event in self._scoped_stream(turn):
+                    yield event
+            except Exception as error:
+                failure = sdk_exception(error)
+                log_failure(logger, failure, error)
+                raise FailureError(failure) from error
 
     async def _scoped_stream(self, turn: Turn) -> AsyncIterator[AgentEvent]:
         queued: asyncio.Queue[AgentEvent] = asyncio.Queue()
@@ -471,6 +471,7 @@ class QoderGateway:
         announced: str | None = None
         streamed = False
         terminal: AgentEvent | None = None
+        failure: Failure | None = None
         observer = TurnObserver(turn.run_id)
         materials = SessionMaterials(
             self._task_workspace(turn.task_id) / ".context-materials.json", turn.sdk_session_id
@@ -487,61 +488,85 @@ class QoderGateway:
             options = self._options(
                 turn, visible=visible, path=path, observer=observer, session_materials=materials
             )
-            async with QoderSDKClient(options) as client:
-                if turn.run_id is not None:
-                    self._interrupts[turn.run_id] = client.interrupt
-                try:
-                    context_before: dict | None = None
-                    if turn.sdk_session_id is not None:
-                        context_before = await self._compact_if_needed(client, observer)
-                    else:
-                        # 新会话首轮没有可压缩的上下文，但轮前读数每轮都要记。
-                        context_before = await self._read_context_before(client, observer)
-                    await client.query(self._query_input(turn))
-                    async for message in client.receive_response():
-                        # 工具事件在产生它的那次调用之后、模型的下一条消息之前送出。
-                        while not queued.empty():
-                            yield queued.get_nowait()
-                        if isinstance(message, ResultMessage):
-                            observer.record_result(message)
-                            await self._record_context_after(client, observer)
-                            announced = announced or turn.sdk_session_id or message.session_id
-                            terminal = _result_event(message)
-                            break
-                        if isinstance(message, SystemMessage) and message.subtype == "init":
-                            session_id = message.data.get("session_id")
-                            # 同一会话一轮里会上报多次：只广播第一次，标识真的变化时照常上报。
-                            if session_id and session_id != announced:
-                                announced = session_id
-                                yield {"type": "session", "sdk_session_id": session_id}
-                        elif (
-                            isinstance(message, SystemMessage)
-                            and message.subtype == "compact_boundary"
-                        ):
-                            # SDK 自动压缩的真实边界信号；没有边界不声称发生过压缩。
-                            observer.record_compact(auto=True, before=context_before)
-                        elif isinstance(message, StreamEvent):
-                            text = _delta_text(message.event)
-                            if text:
-                                streamed = True
-                                yield {"type": "text", "text": text}
-                        elif isinstance(message, AssistantMessage):
-                            observer.collect_usage(message)
-                            # 去重只对本条消息生效：已转发它的增量输出就跳过整段文本，随后重置标志；
-                            # 整轮共用会让缺少增量的后续消息被误判为重复而整段丢失。
-                            if not streamed:
+            try:
+                async with QoderSDKClient(options) as client:
+                    if turn.run_id is not None:
+                        self._interrupts[turn.run_id] = client.interrupt
+                    try:
+                        context_before: dict | None = None
+                        if turn.sdk_session_id is not None:
+                            context_before = await self._compact_if_needed(client, observer)
+                        else:
+                            # 新会话首轮没有可压缩的上下文，但轮前读数每轮都要记。
+                            context_before = await self._read_context_before(client, observer)
+                        await client.query(self._query_input(turn))
+                        async for message in client.receive_response():
+                            # 工具事件在产生它的那次调用之后、模型的下一条消息之前送出。
+                            while not queued.empty():
+                                yield queued.get_nowait()
+                            if isinstance(message, ResultMessage):
+                                observer.record_result(message)
+                                await self._record_context_after(client, observer)
+                                announced = announced or turn.sdk_session_id or message.session_id
+                                failure = (
+                                    result_failure(message, failure) if message.is_error else None
+                                )
+                                terminal = _result_event(message, failure)
+                                break
+                            if isinstance(message, SystemMessage) and message.subtype == "init":
+                                session_id = message.data.get("session_id")
+                                # 同一会话一轮里会上报多次：只广播第一次，标识真的变化时照常上报。
+                                if session_id and session_id != announced:
+                                    announced = session_id
+                                    yield {"type": "session", "sdk_session_id": session_id}
+                            elif (
+                                isinstance(message, SystemMessage)
+                                and message.subtype == "compact_boundary"
+                            ):
+                                # SDK 自动压缩的真实边界信号；没有边界不声称发生过压缩。
+                                observer.record_compact(auto=True, before=context_before)
+                            elif isinstance(message, StreamEvent):
+                                text = _delta_text(message.event)
+                                if text:
+                                    streamed = True
+                                    yield {"type": "text", "text": text}
+                            elif isinstance(message, AssistantMessage):
+                                observer.collect_usage(message)
+                                failure = assistant_failure(message) or failure
+                                if message.error:
+                                    streamed = False
+                                    continue
+                                # 本条消息已有增量时跳过整段文本，随后重置标志；
+                                # 整轮共用会让缺少增量的后续消息被误判为重复而整段丢失。
+                                if not streamed:
+                                    for block in message.content:
+                                        if isinstance(block, TextBlock) and block.text.strip():
+                                            yield {"type": "text", "text": block.text}
+                                streamed = False
+                                # 模型给出完整的工具调用时、执行开始之前告诉页面这一步在做什么。
                                 for block in message.content:
-                                    if isinstance(block, TextBlock) and block.text.strip():
-                                        yield {"type": "text", "text": block.text}
-                            streamed = False
-                            # 模型给出完整的工具调用时、执行开始之前告诉页面这一步在做什么。
-                            for block in message.content:
-                                if isinstance(block, ToolUseBlock):
-                                    text = self._activity_text(block, visible)
-                                    if text:
-                                        yield {"type": "activity", "text": text}
-                finally:
-                    self._interrupts.pop(turn.run_id, None)
+                                    if isinstance(block, ToolUseBlock):
+                                        text = self._activity_text(block, visible)
+                                        if text:
+                                            yield {"type": "activity", "text": text}
+                    finally:
+                        self._interrupts.pop(turn.run_id, None)
+            except Exception as error:
+                if failure is not None:
+                    # 上游错误后的退出异常不得覆盖已经确认的主要失败。
+                    log_failure(logger, sdk_exception(error, stage="session_close"), error)
+                    terminal = {
+                        "type": "error",
+                        "message": failure.message,
+                        "failure": failure.payload(),
+                    }
+                else:
+                    adapted = sdk_exception(
+                        error, stage="session_close" if terminal else "response"
+                    )
+                    log_failure(logger, adapted, error)
+                    raise FailureError(adapted) from error
+
         while not queued.empty():
             yield queued.get_nowait()
         if terminal is not None:
@@ -553,7 +578,8 @@ class QoderGateway:
                     logger.exception("会话材料摘要保存失败，下轮重新加载背景")
             yield terminal
             return
-        yield {"type": "error", "message": NO_TERMINAL_MESSAGE}
+        missing = failure or Failure("sdk_protocol", NO_TERMINAL_MESSAGE, "sdk", "response", "turn")
+        yield {"type": "error", "message": missing.message, "failure": missing.payload()}
 
     @staticmethod
     def _activity_text(block: ToolUseBlock, visible: list[ToolDefinition]) -> str | None:
@@ -611,14 +637,13 @@ class QoderGateway:
 
         compacted = False
         await client.query("/compact")
-        async for message in client.receive_response():
+        async for message in _checked_response(client, stage="compact"):
             if isinstance(message, SystemMessage) and message.subtype == "compact_boundary":
                 compacted = True
-            elif isinstance(message, ResultMessage) and message.is_error:
-                detail = (message.result or "").strip() or COMPACTION_ERROR_MESSAGE
-                raise AgentProtocolError(detail)
         if not compacted:
-            raise AgentProtocolError(COMPACTION_ERROR_MESSAGE)
+            raise FailureError(
+                Failure("context_compaction", COMPACTION_ERROR_MESSAGE, "sdk", "compact", "turn")
+            )
         after = None
         try:
             after = _context_reading(await client.get_context_usage())
@@ -960,10 +985,11 @@ def _context_reading(usage: dict | None) -> dict | None:
     }
 
 
-def _result_event(message: ResultMessage) -> AgentEvent:
+def _result_event(message: ResultMessage, failure: Failure | None = None) -> AgentEvent:
     if message.is_error:
-        detail = (message.result or "").strip() or MODEL_ERROR_MESSAGE
-        return {"type": "error", "message": detail}
+        failure = result_failure(message, failure)
+        log_failure(logger, failure)
+        return {"type": "error", "message": failure.message, "failure": failure.payload()}
     return {"type": "done"}
 
 
@@ -974,3 +1000,31 @@ def _delta_text(event: dict[str, Any]) -> str:
     if delta.get("type") != "text_delta":
         return ""
     return delta.get("text", "")
+
+
+async def _checked_response(client: QoderSDKClient, *, stage: str):
+    failure = None
+    try:
+        async for message in client.receive_response():
+            if isinstance(message, AssistantMessage) and message.error:
+                failure = assistant_failure(message, stage=stage) or failure
+                continue
+            if isinstance(message, ResultMessage) and message.is_error:
+                raise FailureError(result_failure(message, failure, stage=stage))
+            yield message
+        if failure is not None:
+            raise FailureError(failure)
+    except Exception as error:
+        raise FailureError(sdk_exception(error, stage=stage)) from error
+
+
+@asynccontextmanager
+async def _sdk_client(options: QoderAgentOptions, *, stage: str):
+    try:
+        async with QoderSDKClient(options) as client:
+            yield client
+    except (AgentProtocolError, FailureError):
+        # 应用校验故障和已适配的故障不应冒充 SDK 传输异常。
+        raise
+    except Exception as error:
+        raise FailureError(sdk_exception(error, stage=stage)) from error

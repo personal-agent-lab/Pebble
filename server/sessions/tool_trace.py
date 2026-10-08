@@ -10,6 +10,7 @@ import asyncio
 import logging
 
 from server.db import session, write
+from server.failures import exception_failure, log_failure
 from server.sessions import observations, timeline
 from server.sessions.service import timestamp
 
@@ -45,10 +46,15 @@ def _begin(
                 started_at=created_at,
                 item_id=item_id,
             )
-    except Exception:
-        logger.exception("工具 %s 的轨迹开始写入失败", name)
+    except Exception as error:
+        failure = exception_failure(
+            error, source="observation", stage="tool_begin", impact="degraded"
+        )
+        log_failure(logger, failure, error)
         observations.record_degraded_sync(
-            run_id, "tool_trace_write_failed", {"tool": name, "phase": "begin"}
+            run_id,
+            "tool_trace_write_failed",
+            {"tool": name, "phase": "begin", "failure": failure.payload()},
         )
 
 
@@ -94,10 +100,15 @@ def _finish(
                 result_chars=len(result),
                 item_id=item_id,
             )
-    except Exception:
-        logger.exception("工具 %s 的轨迹结果写入失败", name)
+    except Exception as error:
+        failure = exception_failure(
+            error, source="observation", stage="tool_finish", impact="degraded"
+        )
+        log_failure(logger, failure, error)
         observations.record_degraded_sync(
-            run_id, "tool_trace_write_failed", {"tool": name, "phase": "finish"}
+            run_id,
+            "tool_trace_write_failed",
+            {"tool": name, "phase": "finish", "failure": failure.payload()},
         )
 
 

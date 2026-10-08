@@ -23,6 +23,7 @@ Qoder Agent SDK 承担推理与工具调用循环，Pebble 负责上下文、工
 - `docs/kb.md`：个人资料库——保存、检索、版本、用户直改。
 - `docs/skills.md`：技能——形态、装配、变更管道、后台复盘。
 - `docs/observability.md`：可观测性——轮次观测、降级、健康检查。
+- `docs/errors.md`：错误处理——分类、安全提示、诊断关联与恢复边界。
 - `docs/status.md`：实现状态与已知偏差，唯一的状态记录。
 
 ## 前置依赖

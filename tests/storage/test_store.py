@@ -316,7 +316,8 @@ def test_validator_cannot_rewrite_recipients(stores, monkeypatch):
 def insert_run(conn, run_id, task_id, status):
     finished = None if status in ("pending", "running") else "2026-09-14T10:00:00+00:00"
     conn.execute(
-        "INSERT INTO agent_runs VALUES (?, ?, 'message', NULL, '{}', ?, NULL, "
+        "INSERT INTO agent_runs (run_id, task_id, kind, reference_id, input, status, error, "
+        "created_at, started_at, finished_at) VALUES (?, ?, 'message', NULL, '{}', ?, NULL, "
         "'2026-09-14T09:00:00+00:00', '2026-09-14T09:00:01+00:00', ?)",
         (run_id, task_id, status, finished),
     )

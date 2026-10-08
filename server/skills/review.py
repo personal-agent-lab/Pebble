@@ -48,8 +48,13 @@ def validate_review_reason(reason: str, evidence_refs: dict[str, str]) -> None:
 
 class SkillReviewGateway(Protocol):
     async def review_skills(
-        self, review_id: str, anchor_task_id: str, instructions: str, material: str,
-        model: str, evidence_refs: dict[str, str],
+        self,
+        review_id: str,
+        anchor_task_id: str,
+        instructions: str,
+        material: str,
+        model: str,
+        evidence_refs: dict[str, str],
     ) -> list[dict]: ...
 
 
@@ -202,7 +207,9 @@ class SkillReviewScheduler:
         row = conn.execute("SELECT * FROM skill_reviews WHERE id=?", (review_id,)).fetchone()
         if row is None:
             raise KeyError(review_id)
-        return dict(row)
+        result = dict(row)
+        result["failure"] = json.loads(result["failure"]) if result["failure"] else None
+        return result
 
     def pending(self) -> list[dict]:
         with session(self.path) as conn:
@@ -234,15 +241,21 @@ class SkillReviewScheduler:
             )
             return self.get(review_id, conn=conn) if changed.rowcount else None
 
-    def fail(self, review_id: str, error: str) -> None:
+    def fail(self, review_id: str, error: str, *, failure: dict | None = None) -> None:
         with session(self.path) as conn, write(conn):
             maximum = conn.execute(
                 "SELECT COALESCE(MAX(seq),0) FROM skill_review_turns"
             ).fetchone()[0]
             conn.execute(
                 "UPDATE skill_reviews SET status='failed', error=?, retry_after_seq=?, "
-                "finished_at=? WHERE id=? AND status IN ('running','applying')",
-                (error, maximum, timestamp(), review_id),
+                "finished_at=?, failure=? WHERE id=? AND status IN ('running','applying')",
+                (
+                    error,
+                    maximum,
+                    timestamp(),
+                    json.dumps(failure, ensure_ascii=False) if failure else None,
+                    review_id,
+                ),
             )
 
     def _material(self, row: dict) -> tuple[str, int, dict[str, str]]:
@@ -273,9 +286,7 @@ class SkillReviewScheduler:
                         )
                         block_refs[ref] = item["item_id"]
                     elif item["kind"] in ("text", "notice"):
-                        lines.append(
-                            f"[{ref}] {item['role'] or item['kind']}: {item['text']}"
-                        )
+                        lines.append(f"[{ref}] {item['role'] or item['kind']}: {item['text']}")
                         block_refs[ref] = item["item_id"]
                 block = "\n".join(lines)
                 if blocks and len("\n".join(blocks)) + len(block) > MAX_REVIEW_CHARS:
@@ -317,7 +328,11 @@ class SkillReviewScheduler:
             ).fetchone()
         model = task["model"] if task else "auto"
         candidates = await gateway.review_skills(
-            review_id, row["anchor_task_id"], REVIEW_INSTRUCTIONS, material, model,
+            review_id,
+            row["anchor_task_id"],
+            REVIEW_INSTRUCTIONS,
+            material,
+            model,
             evidence_refs,
         )
         for candidate in candidates:
@@ -399,14 +414,18 @@ class SkillReviewScheduler:
                 )
         with session(self.path) as conn:
             statuses = [
-                item[0] for item in conn.execute(
+                item[0]
+                for item in conn.execute(
                     "SELECT status FROM skill_review_candidates WHERE review_id=?", (review_id,)
                 )
             ]
         failed = sum(status in ("failed", "conflict") for status in statuses)
         summary = (
-            f"复盘完成，{failed} 条候选未应用" if failed else
-            "复盘完成" if statuses else "无值得保存的经验"
+            f"复盘完成，{failed} 条候选未应用"
+            if failed
+            else "复盘完成"
+            if statuses
+            else "无值得保存的经验"
         )
         self._finish(review_id, row["through_seq"], summary)
 
