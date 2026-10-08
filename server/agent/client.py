@@ -56,7 +56,7 @@ from server.memory.service import MemoryStore
 from server.sessions import timeline
 from server.sessions.observations import TurnObserver
 from server.sessions.tool_trace import begin_tool_call, finish_tool_call
-from server.tools.memory.tools import judge_registry, review_registry
+from server.tools.memory.tools import review_registry
 from server.tools.personal_kb.catalog import CATALOG_TITLE
 from server.tools.registry import Effect, ToolDefinition, ToolPolicy, ToolRegistry, activity
 
@@ -225,10 +225,6 @@ class QoderGateway:
         self.review_tools = build_tools(
             replace(deps, memory_store=self.memory_store), registry=review_registry
         )
-        # 每轮记忆判断的一次性会话用判断工具集：新增、替换与停止使用。
-        self.judge_tools = build_tools(
-            replace(deps, memory_store=self.memory_store), registry=judge_registry
-        )
         self._check_model_config()
         # 每个进行中调用的 SDK 中断句柄：调度层请求终止时按调用标识找到仍在
         # 会话里的客户端；轮次结束即摘除，句柄只在本进程内存中。
@@ -309,15 +305,6 @@ class QoderGateway:
         """
         return await self._memory_session(
             self.review_tools, task_id, instructions, transcript, session_scope="memory_review"
-        )
-
-    async def judge_memory(self, task_id: str, instructions: str, message: str) -> list[dict]:
-        """一次性记忆判断：带判断工具集，不接续会话；返回按调用顺序记录的工具调用与结果。
-
-        判断对用户可见的提示由调用方按这些真实记录生成，不使用模型的文本回复。
-        """
-        return await self._memory_session(
-            self.judge_tools, task_id, instructions, message, session_scope="memory_judge"
         )
 
     async def review_skills(
@@ -787,7 +774,12 @@ class QoderGateway:
             if snapshot[target]["content"]
         )
         kb_materials = self._catalog_materials(observer)
+        from server.memory.proposals import MemoryProposals
+
+        proposal = MemoryProposals(self.memory_store, self.tasks_store.path).material(turn.task_id)
         background = (*memory_materials, *kb_materials, *skill_catalog)
+        if proposal is not None:
+            background = (*background, proposal)
         ctx = context.assemble()
         if observer is not None:
             # 钩子实际提交时再记录；复用的背景不冒充本轮新增材料。

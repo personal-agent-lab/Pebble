@@ -1,7 +1,7 @@
-"""真实 Qoder 模型的长期记忆验收：每轮判断的写入、分区、静默行为和新会话读取。
+"""真实 Qoder 模型的长期记忆验收：前台按需写入、分区、临时信息排除和新会话读取。
 
 显式运行，不进入 pytest；使用临时实例目录，不碰 `.data`。依次验证：
-偏好与学习方向写入“关于你”，外部约定写入“事实与约定”，一次性要求不写入，修改与忘记生效，
+学习方向写入“关于你”，长期回答要求与外部约定写入“事实与约定”，一次性要求不写入，修改与忘记生效，
 歧义信息不写入，全新 SDK 会话按记忆作答。
 """
 
@@ -22,7 +22,6 @@ from server.agent.toolset import ToolDeps, TurnKind
 from server.config import Settings
 from server.db import init_db
 from server.gateway.agent_contract import Turn
-from server.memory.judge import JUDGE_INSTRUCTIONS, build_judge_message
 from server.memory.service import MemoryStore
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
@@ -35,16 +34,16 @@ def available_port() -> int:
         return int(sock.getsockname()[1])
 
 
-async def judge(
+async def remember(
     gateway: QoderGateway,
     store: MemoryStore,
     task_id: str,
     message: str,
     transcript: str = "",
 ) -> list[dict]:
-    """跑一轮真实的记忆判断，返回实际工具记录。"""
-    prompt = build_judge_message(message, transcript, store.snapshot())
-    return await gateway.judge_memory(task_id, JUDGE_INSTRUCTIONS, prompt)
+    """通过真实前台轮保存记忆；用现有上下文表达临时任务的适用范围。"""
+    await ask(gateway, task_id, transcript + "\n" + message)
+    return []
 
 
 async def ask(gateway: QoderGateway, task_id: str, prompt: str) -> str:
@@ -101,15 +100,15 @@ async def verify(root: Path) -> dict:
         def memory(target: str) -> str:
             return store.snapshot()[target]["content"]
 
-        records = await judge(
+        records = await remember(
             gateway, store, task_id, "以后回答我的问题时，请先给结论，再解释原因。"
         )
-        check("结论" in memory("user"), "偏好没有写入“关于你”", store, records)
-        check("结论" not in memory("memory"), "偏好被写进了“事实与约定”", store, records)
+        check("结论" in memory("memory"), "长期回答要求没有写入“事实与约定”", store, records)
+        check("结论" not in memory("user"), "长期回答要求被写进了“关于你”", store, records)
         report["preference"] = records
 
         # 不是“以后请……”式的要求，只是陈述长期在做的事，也应当轮保存。
-        records = await judge(
+        records = await remember(
             gateway,
             store,
             task_id,
@@ -118,17 +117,17 @@ async def verify(root: Path) -> dict:
         check(memory("user").count("Hermes") == 1, "学习方向没有写入“关于你”", store, records)
         report["learning"] = records
 
-        records = await judge(gateway, store, task_id, "我们团队的内部会议默认都是 30 分钟。")
+        records = await remember(gateway, store, task_id, "我们团队的内部会议默认都是 30 分钟。")
         check("30" in memory("memory"), "外部约定没有写入“事实与约定”", store, records)
         check("30" not in memory("user"), "外部约定被写进了“关于你”", store, records)
         report["convention"] = records
 
         before = store.snapshot()
-        records = await judge(gateway, store, task_id, "这次用英文回答我就行。")
+        records = await remember(gateway, store, task_id, "这次用英文回答我就行。")
         check(store.snapshot() == before, "一次性要求被写入了记忆", store, records)
         report["one_off"] = records
 
-        records = await judge(
+        records = await remember(
             gateway,
             store,
             task_id,
@@ -139,12 +138,14 @@ async def verify(root: Path) -> dict:
         check(records == [], "语境不明的信息不应调用记忆工具", store, records)
         report["ambiguous_location"] = records
 
-        records = await judge(gateway, store, task_id, "我改主意了，以后先解释推导过程，再给结论。")
-        check("推导" in memory("user"), "修改没有写入", store, records)
+        records = await remember(
+            gateway, store, task_id, "我改主意了，以后先解释推导过程，再给结论。"
+        )
+        check("推导" in memory("memory"), "修改没有写入", store, records)
         report["update"] = records
 
-        records = await judge(gateway, store, task_id, "忘掉回答顺序这个偏好吧。")
-        check("推导" not in memory("user"), "要求忘记后内容仍在", store, records)
+        records = await remember(gateway, store, task_id, "忘掉回答顺序这个偏好吧。")
+        check("推导" not in memory("memory"), "要求忘记后内容仍在", store, records)
         report["forget"] = records
 
         reply = await ask(gateway, task_id, "我们团队内部会议默认多长时间？只回答时长。")

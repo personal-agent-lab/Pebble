@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import default_model, get_settings
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -429,6 +429,32 @@ SCHEMA_V24 = (
     "CHECK(origin IN ('interval','manual'))",
 )
 
+# 全局进度不依赖任务的生命周期；候选正文存 memory/proposals/，这里只存状态与关联。
+SCHEMA_V25 = (
+    "ALTER TABLE memory_reviews ADD COLUMN scope TEXT NOT NULL DEFAULT 'task'",
+    "CREATE UNIQUE INDEX memory_reviews_global_open ON memory_reviews(scope) "
+    "WHERE scope = 'global' AND status IN ('pending','running')",
+    "CREATE TABLE memory_review_checkpoint (id INTEGER PRIMARY KEY CHECK(id=1), "
+    "through_rowid INTEGER NOT NULL DEFAULT 0)",
+    "INSERT INTO memory_review_checkpoint VALUES (1, 0)",
+    "CREATE TABLE memory_review_turns (sequence INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "run_id TEXT NOT NULL UNIQUE, kind TEXT NOT NULL)",
+    "INSERT INTO memory_review_turns(run_id,kind) "
+    "SELECT run_id,kind FROM agent_runs WHERE status = 'done' ORDER BY rowid",
+    "UPDATE memory_review_checkpoint SET through_rowid = "
+    "(SELECT COALESCE(MAX(sequence),0) FROM memory_review_turns)",
+    "UPDATE memory_reviews SET status = 'interrupted', finished_at = "
+    "strftime('%Y-%m-%dT%H:%M:%fZ','now'), error = '回顾机制升级为全局窗口' "
+    "WHERE status IN ('pending','running')",
+    "CREATE TABLE memory_proposals (proposal_id TEXT PRIMARY KEY, "
+    "task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE CASCADE, "
+    "fingerprint TEXT NOT NULL, status TEXT NOT NULL "
+    "CHECK(status IN ('pending','applied','rejected')), created_at TEXT NOT NULL, "
+    "resolved_at TEXT, refreshed_run_id TEXT)",
+    "CREATE UNIQUE INDEX memory_proposals_pending ON memory_proposals(fingerprint) "
+    "WHERE status = 'pending'",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -454,6 +480,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     22: SCHEMA_V22,
     23: SCHEMA_V23,
     24: SCHEMA_V24,
+    25: SCHEMA_V25,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

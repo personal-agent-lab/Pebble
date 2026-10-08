@@ -58,7 +58,9 @@ class MemoryStore:
         with self._lock:
             return {target: self._target_snapshot(target) for target in TARGETS}
 
-    def edit(self, operations: list[dict]) -> dict:
+    def edit(
+        self, operations: list[dict], *, expected_versions: dict[str, str] | None = None
+    ) -> dict:
         """模型的按行编辑：`operations` 按锚点插入、替换、删除、移动整行，或在分区末尾追加。
 
         锚点都指调用前的内容，一次调用可以同时改两个分区，整体生效或整体失败；锚点失效
@@ -71,6 +73,10 @@ class MemoryStore:
             raise MemoryValidationError(error.errors) from error
         with self._lock:
             current = {target: self._target_snapshot(target) for target in TARGETS}
+            if expected_versions is not None:
+                for target in TARGETS:
+                    if expected_versions.get(target) != current[target]["version"]:
+                        raise VersionConflictError(current[target]["version"])
             contents = {target: current[target]["content"] for target in TARGETS}
             try:
                 updated, applied = apply_operations(contents, parsed, dedupe=True)
@@ -96,6 +102,30 @@ class MemoryStore:
                 "changed": bool(changed),
                 "applied": applied,
                 "memory": {target: view[target] for target in changed},
+            }
+
+    def preview(self, operations: list[dict]) -> dict:
+        """校验候选并计算差异，不写记忆；调用方用同一数据目录锁保护版本绑定。"""
+        with self._lock:
+            snapshot = self.snapshot()
+            contents = {target: snapshot[target]["content"] for target in TARGETS}
+            try:
+                parsed = parse_operations(operations, tuple(TARGETS))
+                updated, applied = apply_operations(contents, parsed, dedupe=True)
+            except LineEditError as error:
+                raise MemoryValidationError(error.errors, memory=model_view(contents)) from error
+            updated = {target: _normalize(text) for target, text in updated.items()}
+            for target in TARGETS:
+                size = len(updated[target])
+                if size > TARGETS[target][1] and size > len(contents[target]):
+                    raise MemoryFullError(
+                        target, size, TARGETS[target][1], memory=model_view(contents)
+                    )
+            return {
+                "before": snapshot,
+                "after": updated,
+                "applied": applied,
+                "changed": updated != contents,
             }
 
     def write(self, target: str, content: str, *, expected_version: str) -> dict:

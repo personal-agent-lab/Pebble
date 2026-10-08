@@ -19,7 +19,7 @@ Qoder Agent SDK 承担推理与工具调用循环，Pebble 负责上下文、工
 - `docs/spec.md`：产品总纲——定位、全局不变量、轮次模型、上下文预算、部署与跨域验收。内容冲突时以此为准。
 - `docs/mail.md`：Gmail——触发、草稿、确认发送与核实。
 - `docs/calendar.md`：iCloud Calendar——查询、冲突、会话式创建。
-- `docs/memory.md`：长期记忆——两个文件、两条写路径、注入预算。
+- `docs/memory.md`：长期记忆——前台按需编辑、跨任务回顾与改删询问。
 - `docs/kb.md`：个人资料库——保存、检索、版本、用户直改。
 - `docs/skills.md`：技能——形态、装配、变更管道、后台复盘。
 - `docs/observability.md`：可观测性——轮次观测、降级、健康检查。
@@ -44,6 +44,7 @@ cp .env.example .env
 | 变量 | 含义 |
 | --- | --- |
 | `PEBBLE_DATA_DIR` | 实例数据目录，默认 `<仓库根>/.data` |
+| `PEBBLE_MEMORY_REVIEW_INTERVAL`、`PEBBLE_MEMORY_REVIEW_ENABLED` | 后台全局记忆回顾：默认跨任务累计 10 个已完成用户轮；纯新增自动保存，改删在新对话中询问 |
 | `PEBBLE_HOST`、`PEBBLE_PORT` | 监听地址与端口，默认 `127.0.0.1:8000`；远程访问时保持回环地址 |
 | `PEBBLE_TOOL_PORT` | 工具端点的回环端口，默认 `8001`，只供本机 CLI 子进程连接 |
 | `PEBBLE_AUTH` | `tailscale`（默认）只接受经 Tailscale Serve 转发、账号在名单内的请求；`off` 关闭校验，只用于本机开发 |

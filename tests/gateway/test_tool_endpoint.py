@@ -12,9 +12,8 @@ from server.memory.service import MemoryStore
 from server.sessions.repository import cancel_pending
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
-from server.tools.memory.tools import judge_registry, review_registry
+from server.tools.memory.tools import review_registry
 from server.tools.personal_kb.service import KbStore
-from tests.support import memory_anchor, seed_memory
 from tests.support.gmail_double import MockGmailClient
 from tests.support.mcp_http import mcp_session, tool_payload
 
@@ -251,7 +250,7 @@ def test_review_endpoint_exposes_review_tools(settings):
     init_db()
     store = MemoryStore(settings.data_dir)
     tools = build_tools(
-        ToolDeps(drafts=None, tasks=None, gmail=None, memory_store=store),
+        ToolDeps(drafts=None, tasks=SessionStore(), gmail=None, memory_store=store),
         registry=review_registry,
     )
     task_id = SessionStore().create_task("闲聊")["task_id"]
@@ -282,58 +281,17 @@ def test_review_endpoint_exposes_review_tools(settings):
                 },
             )
             assert saved.isError is False
-            assert tool_payload(saved)["changed"] is True
+            assert tool_payload(saved)["planned"] is True
 
             stale = await session.call_tool(
-                "memory_edit", {"operations": [{"action": "delete", "anchor": "zzzz"}]}
+                "memory_edit",
+                {"operations": [{"action": "delete", "anchor": "zzzz"}], "reason": "清理"},
             )
             assert stale.isError is True
-            assert "用户在研究记忆机制" in tool_payload(stale)["memory"]["user"]["content"]
+            assert store.snapshot()["user"]["content"] == ""
 
     asyncio.run(scenario())
-    assert store.snapshot()["user"]["content"] == "用户在研究记忆机制"
-
-
-def test_judge_endpoint_exposes_judgment_tools(settings):
-    init_db()
-    store = MemoryStore(settings.data_dir)
-    seed_memory(store, "user", "用户在研究记忆机制")
-    line = memory_anchor(store, "用户在研究记忆机制")
-    tools = build_tools(
-        ToolDeps(drafts=None, tasks=None, gmail=None, memory_store=store),
-        registry=judge_registry,
-    )
-    task_id = SessionStore().create_task("闲聊")["task_id"]
-    server = ToolServer()
-
-    async def scenario():
-        async with (
-            server.serve(tools, task_id=task_id, queued=asyncio.Queue()) as path,
-            mcp_session(server, f"{BASE_URL}{path}") as session,
-        ):
-            listed = await session.list_tools()
-            assert [tool.name for tool in listed.tools] == ["memory_edit"]
-
-            replaced = await session.call_tool(
-                "memory_edit",
-                {
-                    "operations": [
-                        {"action": "replace", "anchor": line, "text": "用户在研究长期记忆机制"}
-                    ]
-                },
-            )
-            assert replaced.isError is False
-            assert tool_payload(replaced)["changed"] is True
-
-            # 已退役的前台 memory 工具在判断会话不存在。
-            blocked = await session.call_tool(
-                "memory", {"action": "add", "target": "user", "content": "x"}
-            )
-            assert blocked.isError is True
-            assert tool_payload(blocked)["error"] == "unknown_tool"
-
-    asyncio.run(scenario())
-    assert store.snapshot()["user"]["content"] == "用户在研究长期记忆机制"
+    assert store.snapshot()["user"]["content"] == ""
 
 
 def test_kb_destructive_tools_emit_notices_and_trigger_turns_can_only_save(settings):
@@ -408,11 +366,14 @@ def test_dedicated_endpoint_rejects_foreground_and_other_session_tools(settings)
     calls = []
     for registry, name in ((own, "own_probe"), (other, "other_probe")):
         registry.register(
-            lambda: calls.append("called") or {"status": "ok"}, name=name,
-            effect=Effect.LOCAL_WRITE, policy=ToolPolicy.DEDICATED_SESSION_ONLY,
+            lambda: calls.append("called") or {"status": "ok"},
+            name=name,
+            effect=Effect.LOCAL_WRITE,
+            policy=ToolPolicy.DEDICATED_SESSION_ONLY,
         )
     visible = exposed_tools(
-        [*tools, *own.list_tools(), *other.list_tools()], session_scope="worker-a",
+        [*tools, *own.list_tools(), *other.list_tools()],
+        session_scope="worker-a",
     )
     server = ToolServer()
 

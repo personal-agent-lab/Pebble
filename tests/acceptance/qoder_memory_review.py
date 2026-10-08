@@ -86,7 +86,7 @@ async def run_review(
     root: Path, gateway: QoderGateway, scheduler: MemoryReviewScheduler, task_id: str
 ) -> dict:
     row = scheduler.enqueue_if_due(task_id)
-    assert row is not None, "攒满 5 个已完成消息轮后未触发周期回顾"
+    assert row is not None, "跨任务攒满 10 个已完成消息轮后未触发周期回顾"
     claimed = scheduler.claim(row["review_id"])
     assert claimed is not None, "回顾未能取得运行权"
     await scheduler.run(row["review_id"], gateway)
@@ -133,18 +133,21 @@ async def verify(root: Path) -> dict:
         calls: list[tuple] = []
         original_edit = memory_store.edit
 
-        def traced_edit(operations):
+        def traced_edit(operations, **kwargs):
             calls.extend((e.get("action"), e.get("anchor"), e.get("text", "")) for e in operations)
-            return original_edit(operations)
+            return original_edit(operations, **kwargs)
 
         memory_store.edit = traced_edit
 
-        # ---------- 正例：5 轮含稳定信息的对话 ----------
+        # ---------- 正例：两个任务累计 10 轮含稳定信息的对话 ----------
         review_task = str(uuid4())
         with session(root / "pebble.db") as conn, write(conn):
             repository.insert_task(conn, review_task, "记忆回顾验收", timestamp())
-            for user_text, assistant_text in SEED:
-                seed_round(conn, review_task, user_text, assistant_text)
+            other_task = str(uuid4())
+            repository.insert_task(conn, other_task, "另一任务", timestamp())
+            for target in (review_task, other_task):
+                for user_text, assistant_text in SEED:
+                    seed_round(conn, target, user_text, assistant_text)
         before_items = timeline_items(review_task, root / "pebble.db")
 
         status = await run_review(root, gateway, scheduler, review_task)
@@ -174,7 +177,7 @@ async def verify(root: Path) -> dict:
                 ("回来了，有点累。", "那就早点休息。"),
                 ("晚饭吃什么好？", "看冰箱里有什么吧。"),
                 ("还是点外卖算了。", "也行，省事。"),
-            ):
+            ) * 2:
                 seed_round(conn, chatter_task, user_text, assistant_text)
         chatter_before_items = timeline_items(chatter_task, root / "pebble.db")
         chatter_before_memory = memory_store.snapshot()

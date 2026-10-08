@@ -51,7 +51,7 @@ class ReviewFlow(NamedTuple):
 async def review_flow(settings):
     init_db()
     gateway = FakeAgentGateway()
-    service = GatewayRuntime(gateway, reviews=MemoryReviewScheduler())
+    service = GatewayRuntime(gateway, reviews=MemoryReviewScheduler(interval=5))
     try:
         yield ReviewFlow(service=service, gateway=gateway, tasks=SessionStore())
     finally:
@@ -114,36 +114,29 @@ async def test_review_runs_after_five_done_messages_and_writes_nothing_visible(r
     assert (run["kind"], run["status"]) == ("message", "done")
 
 
-async def test_review_consolidation_notice_reaches_timeline_and_events(review_flow):
+async def test_review_consolidation_opens_new_conversation_without_editing(review_flow):
+    from server.tools.memory.tools import review_memory
+
     task_id = review_flow.tasks.create_task("闲聊")["task_id"]
     store = review_flow.service.memory_store
     seed_memory(store, "user", "- 回答先给结论\n- 回答要先说结论")
 
     async def consolidating_review(task_id, instructions, transcript):
-        line = memory_anchor(store, "- 回答要先说结论")
-        arguments = {"operations": [{"action": "delete", "anchor": line}]}
-        removed = store.edit(**arguments)
-        return [{"tool": "memory_edit", "arguments": arguments, "result": removed}]
+        operations = [{"action": "delete", "anchor": memory_anchor(store, "- 回答要先说结论")}]
+        result = review_memory(
+            operations, "删除重复项", memory_store=store, tasks=review_flow.tasks, task_id=task_id
+        )
+        return [{"tool": "memory_edit", "result": result}]
 
     review_flow.gateway.review_handler = consolidating_review
-    await send(review_flow, task_id, "一", "二", "三", "四")
-    subscription = review_flow.service.events.subscribe(task_id)
-    await send(review_flow, task_id, "五")
-
-    assert store.snapshot()["user"]["content"] == "- 回答先给结论"
-    items = review_flow.service.get_timeline(task_id)["items"]
-    assert items[-1]["kind"] == "notice"
-    assert items[-1]["text"] == "已整理记忆"
-    events = []
-    while not subscription.empty():
-        events.append(subscription.get_nowait())
-    notice = events[-1]
-    assert (notice["type"], notice["text"], notice["item_id"]) == (
-        "notice",
-        "已整理记忆",
-        items[-1]["item_id"],
-    )
-    assert notice["run_id"] == review_flow.service.latest_run(task_id)["run_id"]
+    await send(review_flow, task_id, "一", "二", "三", "四", "五")
+    assert store.snapshot()["user"]["content"] == "- 回答先给结论\n- 回答要先说结论"
+    tasks = review_flow.tasks.list_tasks()
+    assert len(tasks) == 2
+    proposed = next(task for task in tasks if task["task_id"] != task_id)
+    question = review_flow.service.get_timeline(proposed["task_id"])["items"][0]
+    assert question["kind"] == "notice" and "你同意" in question["text"]
+    assert "新对话" in review_flow.service.get_timeline(task_id)["items"][-1]["text"]
 
 
 async def test_fewer_than_five_messages_does_not_trigger(review_flow):
@@ -242,7 +235,7 @@ async def test_interrupted_review_self_heals_after_restart(review_flow, settings
     await wait_for(lambda: len(review_flow.gateway.review_calls) == 1)
     await review_flow.service.close()  # 模拟进程退出：回顾中断，行仍是 running
 
-    service = GatewayRuntime(review_flow.gateway, reviews=MemoryReviewScheduler())
+    service = GatewayRuntime(review_flow.gateway, reviews=MemoryReviewScheduler(interval=5))
     try:
         interrupted = service.resume()
         assert len(interrupted) == 1
@@ -263,7 +256,7 @@ async def test_pending_review_runs_after_startup(review_flow):
     scheduler.enqueue_manual(task_id)
     await review_flow.service.close()
 
-    service = GatewayRuntime(review_flow.gateway, reviews=MemoryReviewScheduler())
+    service = GatewayRuntime(review_flow.gateway, reviews=MemoryReviewScheduler(interval=5))
     try:
         service.resume()
         await drain(service)
@@ -319,7 +312,7 @@ async def test_review_failure_is_recorded_without_side_effects(review_flow):
     assert timeline_count(task_id) == 10
 
 
-async def test_reviews_of_different_tasks_run_concurrently(review_flow):
+async def test_sequential_global_windows_can_be_anchored_to_different_tasks(review_flow):
     first = review_flow.tasks.create_task("闲聊一")["task_id"]
     second = review_flow.tasks.create_task("闲聊二")["task_id"]
     await send(review_flow, first, "一一", "一二", "一三", "一四", "一五")

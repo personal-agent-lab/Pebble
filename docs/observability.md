@@ -41,7 +41,6 @@
 | --- | --- |
 | `catalog_failed` | 资料 / 技能目录装配失败，当轮无目录材料。 |
 | `manual_skill_not_assembled` | 用户选择的技能因超限 / 不可装配 / 正文超预算未能注入。 |
-| `memory_judge_failed` | 轮内记忆判断失败（不重试）。 |
 | `tool_trace_write_failed` | 工具轨迹写入失败（观测自身失败也如实记录）。 |
 
 ## 5. 健康检查

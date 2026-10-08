@@ -33,7 +33,9 @@ def test_manual_review_endpoint_enqueues_and_runs(settings):
         )
         task_id = created.json()["task"]["task_id"]
         wait_for(
-            lambda: client.get(f"/api/tasks/{task_id}").json()["latest_run"]["status"] == "done"
+            lambda task_id=task_id: (
+                client.get(f"/api/tasks/{task_id}").json()["latest_run"]["status"] == "done"
+            )
         )
         timeline_before = client.get(f"/api/tasks/{task_id}/timeline").json()["items"]
 
@@ -57,3 +59,77 @@ def test_manual_review_endpoint_rejects_unknown_task(settings):
     with TestClient(create_app(gateway=FakeAgentGateway())) as client:
         response = client.post("/api/tasks/missing/memory-review")
         assert response.status_code == 404
+
+
+def test_global_review_opens_question_then_user_reply_applies_candidate(settings):
+    from server.memory.proposals import MemoryProposals
+    from server.memory.service import MemoryStore
+    from server.sessions.service import SessionStore
+    from server.tools.memory.tools import edit_memory, review_memory
+    from tests.support import memory_anchor, seed_memory
+
+    gateway = FakeAgentGateway()
+    store = MemoryStore(settings.data_dir)
+    tasks = SessionStore(settings.db_path)
+    seed_memory(store, "user", "旧偏好")
+
+    async def review(task_id, instructions, transcript):
+        result = review_memory(
+            [{"action": "replace", "anchor": memory_anchor(store, "旧偏好"), "text": "新偏好"}],
+            "跨任务重复纠正了偏好",
+            memory_store=store,
+            tasks=tasks,
+            task_id=task_id,
+        )
+        return [{"result": result}]
+
+    gateway.review_handler = review
+    with TestClient(create_app(gateway=gateway)) as client:
+        source_ids = []
+        for topic in ("甲", "乙"):
+            response = client.post("/api/tasks", data={"model": "auto", "message": topic})
+            task_id = response.json()["task"]["task_id"]
+            source_ids.append(task_id)
+            wait_for(
+                lambda task_id=task_id: (
+                    client.get(f"/api/tasks/{task_id}").json()["latest_run"]["status"] == "done"
+                )
+            )
+            for n in range(4):
+                response = client.post(f"/api/tasks/{task_id}/messages", data={"message": str(n)})
+                run_id = response.json()["run_id"]
+                wait_for(
+                    lambda task_id=task_id, run_id=run_id: (
+                        (latest := client.get(f"/api/tasks/{task_id}").json()["latest_run"])
+                        and latest["run_id"] == run_id
+                        and latest["status"] == "done"
+                    )
+                )
+        wait_for(lambda: review_rows() and review_rows()[-1]["status"] == "done")
+        questions = [task for task in tasks.list_tasks() if task["task_id"] not in source_ids]
+        assert len(questions) == 1
+        question_id = questions[0]["task_id"]
+        items = client.get(f"/api/tasks/{question_id}/timeline").json()["items"]
+        assert "旧偏好" in items[0]["text"] and "新偏好" in items[0]["text"]
+        assert store.snapshot()["user"]["content"] == "旧偏好"
+        proposal = MemoryProposals(store, settings.db_path).for_task(question_id)
+
+        async def accept(turn):
+            result = edit_memory(
+                proposal_id=proposal["proposal_id"],
+                decision="apply",
+                memory_store=store,
+                tasks=tasks,
+                task_id=turn.task_id,
+            )
+            assert result["status"] == "applied"
+            yield {"type": "session", "sdk_session_id": "proposal-session"}
+            yield {"type": "text", "text": "已按你的意见更新记忆"}
+            yield {"type": "done"}
+
+        gateway.handle("message", accept)
+        client.post(f"/api/tasks/{question_id}/messages", data={"message": "同意"})
+        wait_for(
+            lambda: client.get(f"/api/tasks/{question_id}").json()["latest_run"]["status"] == "done"
+        )
+        assert store.snapshot()["user"]["content"] == "新偏好"

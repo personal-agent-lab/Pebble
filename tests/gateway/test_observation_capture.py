@@ -358,26 +358,3 @@ def test_catalog_failure_records_degraded_and_skipped(settings, monkeypatch):
     row = summary("run-degraded")
     materials = json.loads(row["materials"])
     assert materials["skipped"] == [{"category": "资料目录", "reason": "生成失败"}]
-
-
-def test_memory_judgment_failure_records_degraded(settings, monkeypatch):
-    """记忆判断失败不影响主回答，只记降级步骤（运行时入口 _judge 的口径）。"""
-    from server.gateway.runtime import GatewayRuntime
-
-    gateway = make_gateway(settings)
-    task = SessionStore().create_task("判断降级")
-    seed_turn(task["task_id"], "run-judge", "记一下")
-
-    async def broken(**_kwargs):
-        raise RuntimeError("模拟判断失败")
-
-    monkeypatch.setattr("server.gateway.runtime.run_judgment", broken)
-    runtime = GatewayRuntime.__new__(GatewayRuntime)
-    runtime.gateway = gateway
-    runtime.memory_store = gateway.memory_store
-    runtime.path = settings.db_path
-    row = {"task_id": task["task_id"], "run_id": "run-judge", "kind": "message"}
-    asyncio.run(runtime._judge(row, "记一下"))
-
-    degraded = steps("run-judge")
-    assert [item["code"] for item in degraded] == ["memory_judge_failed"]

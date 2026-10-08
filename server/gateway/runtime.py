@@ -33,16 +33,15 @@ from server.gateway.agent_contract import (
     TurnAttachment,
     checked_event,
 )
-from server.memory.judge import run_judgment
 from server.memory.review import (
     REVIEW_INTERRUPTED_REASON,
     MemoryReviewScheduler,
     interrupt_running_reviews,
 )
 from server.memory.service import MemoryStore
-from server.sessions import observations, timeline
 from server.sessions import repository as operations
 from server.sessions import runs as repo
+from server.sessions import timeline
 from server.sessions.service import SessionStore, timestamp
 from server.sessions.timeline import TimelineStore
 from server.skills.review import SkillReviewScheduler, record_completed_turn
@@ -155,7 +154,6 @@ class GatewayRuntime:
         self._skill_review_task: asyncio.Task | None = None
         self._sends: dict[str, asyncio.Task] = {}
         self._titles: set[asyncio.Task] = set()
-        self._judges: set[asyncio.Task] = set()
         self._closed = False
 
     def require_gateway(self) -> None:
@@ -551,11 +549,9 @@ class GatewayRuntime:
         # 同步发送已经在线程池中开始，正常关闭时等待结果落盘。
         if self._sends:
             await asyncio.gather(*list(self._sends.values()), return_exceptions=True)
-        # 进行中的记忆判断无状态，随关闭直接丢弃；提示在下一轮判断时基于落库内容重算。
         for task in [
             *self._active.values(),
             *self._titles,
-            *self._judges,
             *self._review_tasks.values(),
             *([self._skill_review_task] if self._skill_review_task is not None else []),
         ]:
@@ -564,7 +560,6 @@ class GatewayRuntime:
             *[
                 *self._active.values(),
                 *self._titles,
-                *self._judges,
                 *self._review_tasks.values(),
                 *([self._skill_review_task] if self._skill_review_task is not None else []),
             ],
@@ -594,7 +589,6 @@ class GatewayRuntime:
             row = self._row(run_id)
             if not self._claim(run_id):
                 return
-            self._schedule_memory_judgment(row)
             await self._stream(row)
         except asyncio.CancelledError:
             # 协作式终止拿不到句柄或调用无响应时的直接取消：按用户中断落库。
@@ -790,33 +784,6 @@ class GatewayRuntime:
     def _bind_session(self, task_id: str, sdk_session_id: str) -> None:
         self._sessions.bind_sdk_session(task_id, sdk_session_id)
         self.kick()
-
-    # ---------- 每轮记忆判断 ----------
-
-    def _schedule_memory_judgment(self, row: dict) -> None:
-        """用户消息轮开始时并行启动记忆判断：不占串行调度，不阻塞主回答，无状态不落库。"""
-        if self.gateway is None or row["kind"] != repo.KIND_MESSAGE:
-            return
-        message = json.loads(row["input"])["message"]
-        if not message.strip():
-            return
-        task = asyncio.create_task(self._judge(row, message))
-        self._judges.add(task)
-        task.add_done_callback(self._judges.discard)
-
-    async def _judge(self, row: dict, message: str) -> None:
-        """静默执行一轮记忆判断；判断失败不影响本轮回答，只记降级步骤。"""
-        try:
-            await run_judgment(
-                self.gateway,
-                self.memory_store,
-                self.path,
-                task_id=row["task_id"],
-                message=message,
-            )
-        except Exception:
-            logging.getLogger(__name__).exception("记忆判断失败")
-            observations.record_degraded_sync(row["run_id"], "memory_judge_failed")
 
     # ---------- 任务标题 ----------
 

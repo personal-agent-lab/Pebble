@@ -5,7 +5,7 @@ import pytest
 import server.skills.tools  # noqa: F401 注册技能工具
 import server.tools  # noqa: F401 注册领域工具
 from server.agent.toolset import TurnKind, exposed_tools
-from server.tools.memory.tools import judge_registry, review_registry
+from server.tools.memory.tools import review_registry
 from server.tools.registry import Effect, ToolPolicy, ToolRegistry, default_registry, tool
 
 
@@ -76,7 +76,7 @@ def test_full_foreground_tool_permissions():
         "gmail_update_draft",
         "kb_archive",
     }
-    user_writes = {"kb_delete", "kb_move", "kb_restore", "skill_manage"}
+    user_writes = {"kb_delete", "kb_move", "kb_restore", "skill_manage", "memory_edit"}
     expected = {
         TurnKind.NEW_MAIL: readonly | all_writes,
         TurnKind.MESSAGE: readonly
@@ -111,7 +111,6 @@ def test_dedicated_scopes_do_not_leak_into_frontend_or_each_other():
         policy=ToolPolicy.DEDICATED_SESSION_ONLY,
     )
     dedicated = [
-        *judge_registry.list_tools(),
         *review_registry.list_tools(),
         *skill_registry.list_tools(),
     ]
@@ -119,7 +118,6 @@ def test_dedicated_scopes_do_not_leak_into_frontend_or_each_other():
     for kind in TurnKind:
         assert not any(t.session_scope for t in exposed_tools(mixed, kind=kind))
     for scope, registry in (
-        ("memory_judge", judge_registry),
         ("memory_review", review_registry),
         ("skill_review", skill_registry),
     ):

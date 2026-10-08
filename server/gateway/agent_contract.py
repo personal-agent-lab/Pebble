@@ -90,8 +90,6 @@ class AgentGateway(Protocol):
         self, task_id: str, instructions: str, transcript: str
     ) -> list[dict]: ...
 
-    async def judge_memory(self, task_id: str, instructions: str, message: str) -> list[dict]: ...
-
     async def review_skills(
         self, review_id: str, anchor_task_id: str, instructions: str, material: str,
         model: str, evidence_refs: dict[str, str],

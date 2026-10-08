@@ -73,7 +73,7 @@ async def wait_run_done(service: GatewayRuntime, run_id: str) -> dict:
     while time.monotonic() < deadline:
         row = service.get_run(run_id)
         if row["status"] in ("done", "error", "interrupted"):
-            pending = [*service._active.values(), *service._titles, *service._judges]
+            pending = [*service._active.values(), *service._titles]
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
             return service.get_run(run_id)

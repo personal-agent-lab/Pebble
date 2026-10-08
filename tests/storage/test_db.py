@@ -201,3 +201,27 @@ def test_v14_migration_fixes_existing_task_model_and_adds_attachment_tables(
         }
         assert {"uploaded_files", "timeline_item_attachments"} <= tables
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_v25_migration_sets_global_baseline_and_interrupts_legacy_review(settings):
+    settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+    with session() as conn, write(conn):
+        conn.execute("CREATE TABLE schema_meta (version INTEGER NOT NULL)")
+        conn.execute("INSERT INTO schema_meta VALUES (24)")
+        for version in range(1, 25):
+            for statement in db.SCHEMA_MIGRATIONS[version]:
+                conn.execute(statement)
+        conn.execute("INSERT INTO tasks VALUES ('t1','旧任务',NULL,'now','auto')")
+        conn.execute(
+            "INSERT INTO agent_runs(run_id,task_id,kind,input,status,created_at,finished_at) "
+            "VALUES ('r1','t1','message','{}','done','now','later')"
+        )
+        conn.execute(
+            "INSERT INTO memory_reviews(review_id,task_id,status,origin,from_rowid,through_rowid,"
+            "created_at) VALUES ('review1','t1','pending','interval',0,1,'now')"
+        )
+    init_db()
+    with session() as conn:
+        assert conn.execute("SELECT through_rowid FROM memory_review_checkpoint").fetchone()[0] == 1
+        assert conn.execute("SELECT status FROM memory_reviews").fetchone()[0] == "interrupted"
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

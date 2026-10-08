@@ -1,6 +1,7 @@
 """真实生产服务的后台记忆回顾端到端验收：HTTP + SSE + SQLite 落库 + 重启恢复。
 
-显式运行，不进入 pytest。直接对仓库实例目录（.data）工作，测试产生的任务最后删除；
+显式运行，不进入 pytest。直接对仓库实例目录（.data）工作，测试产生的源任务最后删除，
+候选询问对话保留供用户处理；
 长期记忆条目会真实写入实例记忆库。
 """
 
@@ -36,6 +37,9 @@ PHASE_B_MESSAGES = [
     "行。",
     "好，今天先到这。",
 ]
+
+PHASE_A_MESSAGES += ["继续保持刚才的要求。", "先这样。", "明白。", "嗯。", "谢谢。"]
+PHASE_B_MESSAGES += ["嗯。", "先这样。", "明白。", "收到。", "谢谢。"]
 
 
 def available_port() -> int:
@@ -176,7 +180,7 @@ def timeline_texts(task_id: str):
 
 
 def is_review_notice(kind, text) -> bool:
-    return kind == "notice" and text == "已整理记忆"
+    return kind == "notice" and text.startswith("记忆修改建议已发起新对话：")
 
 
 def log(step, **fields):
@@ -247,7 +251,7 @@ def phase_a(service: Service) -> dict:
     items_after_messages = timeline_texts(task_id)
     user_md_before = (REPO_ROOT / ".data" / "memory" / "USER.md").read_text(encoding="utf-8")
 
-    log("A/5 五轮完成，等待周期复盘执行")
+    log("A/5 十轮完成，等待周期复盘执行")
 
     def review_done():
         rows = review_rows(task_id)
@@ -297,7 +301,7 @@ def phase_a(service: Service) -> dict:
 
 
 def phase_b(service: Service) -> str:
-    log("B/5 重启恢复：另起任务攒五轮")
+    log("B/5 重启恢复：另起任务攒十轮")
     status, created = service.request(
         "/tasks",
         {"model": os.environ.get("PEBBLE_QODER_MODEL", "auto"), "message": PHASE_B_MESSAGES[0]},
@@ -333,7 +337,7 @@ def phase_b(service: Service) -> str:
     assert interrupted["error"], interrupted
     log("B/5 PASS 中断已落库", review=interrupted)
 
-    log("B/5 第六条消息触发计数自愈")
+    log("B/5 第十一条消息触发计数自愈")
     send_and_wait(service, task_id, "对了，复盘机制验证得怎么样了？")
     wait_for(
         lambda: (

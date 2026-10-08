@@ -47,7 +47,7 @@
 
 - 记忆与资料只保存、整理、提供信息，不执行外部操作，不记录出处。
 - 常驻材料每轮受预算约束（`docs/spec.md` §6）；超限走降级并告知，不静默丢弃用户点名的内容。
-- 前台 Agent 不能改记忆；磁盘直改未收编的技能不可装配；索引落后不给过期答案。
+- 前台记忆编辑仅限用户轮，后台改删须转为候选询问；磁盘直改未收编的技能不可装配；索引落后不给过期答案。
 
 ## 代码地形
 
@@ -59,7 +59,7 @@ server/
   approval/   # Confirmation：外部写唯一闸门
   tools/      # 各域工具（gmail/ calendar/ memory/ personal_kb/）+ registry（Effect / ToolPolicy）
   skills/     # 技能服务、复盘、运行时装配
-  memory/     # 记忆服务、判断、回顾
+  memory/     # 记忆服务、全局回顾、候选
   sessions/   # 时间线、观测、历史检索
   api/        # HTTP 路由、访问控制、静态托管
   storage/    # 数据仓库（本地 Git）、行锚点编辑

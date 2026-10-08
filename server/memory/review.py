@@ -1,9 +1,4 @@
-"""后台记忆回顾：周期与手动触发的登记、执行与重启恢复。
-
-独立于每轮判断的第二条路径：任务内每完成若干个用户消息轮，用一次性 SDK 会话重读这段
-对话，补进跨轮才稳定下来的用户信息，并整理长期记忆（合并重复、更新过时、删除失效）。
-回顾不占用对话轮；新增不通知，修改与删除以程序提示挂在窗口内最后一轮上。
-"""
+"""全局累计用户消息轮的后台记忆回顾；改删由工具转为独立询问对话。"""
 
 from __future__ import annotations
 
@@ -15,15 +10,16 @@ from uuid import uuid4
 from server.agent.context import Material, render_materials
 from server.config import get_settings
 from server.db import session, write
-from server.errors import NotFoundError
+from server.errors import MemoryValidationError, NotFoundError
 from server.memory.notices import MEMORY_RULES, memory_materials, review_notice_texts
+from server.memory.proposals import MemoryProposals
 from server.memory.service import MemoryStore
 from server.sessions import repository, timeline
 from server.sessions.service import timestamp
 
 REVIEW_INSTRUCTIONS = (
     "你是 Pebble 的后台记忆整理程序，独立于用户对话运行，不面向用户回复。"
-    "用户单轮明确表达的信息由即时判断负责，不是你补漏的对象。"
+    "用户单轮明确表达的信息由前台 Agent 按需保存。"
     "你会收到一段对话记录和当前长期记忆，做两件事。\n"
     "\n"
     "补充跨多轮才看得出的信息，拿不准的不保存：\n"
@@ -35,6 +31,9 @@ REVIEW_INSTRUCTIONS = (
     "- 合并重复或相近的内容，精简冗长措辞，把放错分区的内容移回去；容量接近上限时优先整理。\n"
     "- 对话中有明确依据表明某项已过时或失效时更新或删除；没有明确依据不改动。\n"
     "\n"
+    "纯新增直接保存；涉及替换、删除或移动时，将所有相关操作放在同一批次，提供 reason。"
+    "工具会整批暂存并创建新的用户对话询问意见；staged 不代表记忆已经修改。"
+    "不得拆开合并操作先添加再删除，也不得在后台应用或审批候选。\n"
     "没有要做的事时不调用工具，只回复“无”；完成后用一句话概括做了什么。\n"
     "\n"
     f"{MEMORY_RULES}"
@@ -49,6 +48,7 @@ REVIEW_FIELDS = (
     "task_id",
     "status",
     "origin",
+    "scope",
     "from_rowid",
     "through_rowid",
     "error",
@@ -59,8 +59,8 @@ REVIEW_FIELDS = (
 
 INSERT_SQL = (
     "INSERT INTO memory_reviews "
-    "(review_id, task_id, status, origin, from_rowid, through_rowid, created_at) "
-    "VALUES (?, ?, 'pending', ?, ?, ?, ?)"
+    "(review_id, task_id, status, origin, from_rowid, through_rowid, created_at, scope) "
+    "VALUES (?, ?, 'pending', ?, ?, ?, ?, 'global')"
 )
 
 
@@ -99,7 +99,8 @@ def pending_reviews(conn: sqlite3.Connection) -> list[dict]:
     return [
         dict(row)
         for row in conn.execute(
-            "SELECT * FROM memory_reviews WHERE status = 'pending' ORDER BY rowid"
+            "SELECT * FROM memory_reviews WHERE status = 'pending' "
+            "AND scope = 'global' ORDER BY rowid"
         )
     ]
 
@@ -119,7 +120,20 @@ def claim_review(conn: sqlite3.Connection, review_id: str, now: str) -> dict | N
 def finish_review(
     conn: sqlite3.Connection, review_id: str, status: str, error: str | None, now: str
 ) -> None:
-    # 行数可为 0：回顾执行中任务可能已被删除，落库结果随之清理。
+    # 锚点任务删除或重复收尾不推进全局检查点。
+    record = conn.execute(
+        "SELECT * FROM memory_reviews WHERE review_id = ?", (review_id,)
+    ).fetchone()
+    if record is None or record["status"] != "running":
+        return
+    if status == "done":
+        row = dict(record)
+        if row["scope"] == "global":
+            conn.execute(
+                "UPDATE memory_review_checkpoint SET through_rowid = MAX(through_rowid, ?) "
+                "WHERE id = 1",
+                (row["through_rowid"],),
+            )
     conn.execute(
         "UPDATE memory_reviews SET status = ?, error = ?, finished_at = ? "
         "WHERE review_id = ? AND status = 'running'",
@@ -143,73 +157,71 @@ def interrupt_running_reviews(conn: sqlite3.Connection, now: str, reason: str) -
     return review_ids
 
 
-def open_review(conn: sqlite3.Connection, task_id: str) -> dict | None:
+def open_review(conn: sqlite3.Connection) -> dict | None:
     row = conn.execute(
-        "SELECT * FROM memory_reviews WHERE task_id = ? AND status IN ('pending','running') "
-        "ORDER BY rowid LIMIT 1",
-        (task_id,),
+        "SELECT * FROM memory_reviews WHERE scope = 'global' AND status IN ('pending','running') "
+        "ORDER BY rowid LIMIT 1"
     ).fetchone()
     return dict(row) if row is not None else None
 
 
-def last_through_rowid(conn: sqlite3.Connection, task_id: str) -> int:
-    row = conn.execute(
-        "SELECT through_rowid FROM memory_reviews WHERE task_id = ? AND status = 'done' "
-        "ORDER BY rowid DESC LIMIT 1",
-        (task_id,),
-    ).fetchone()
-    return row["through_rowid"] if row is not None else 0
+def sync_completed_turns(conn: sqlite3.Connection) -> None:
+    # 自增序列与任务生命周期分离，不依赖删除后可能复用的 agent_runs.rowid。
+    conn.execute(
+        "INSERT OR IGNORE INTO memory_review_turns(run_id,kind) "
+        "SELECT r.run_id,r.kind FROM agent_runs r WHERE r.status = 'done' "
+        "AND json_extract(r.input, '$.memory_proposal_id') IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM memory_review_turns w WHERE w.run_id = r.run_id) "
+        "ORDER BY r.rowid"
+    )
 
 
-def done_message_count_since(conn: sqlite3.Connection, task_id: str, through_rowid: int) -> int:
+def last_through_sequence(conn: sqlite3.Connection) -> int:
     return conn.execute(
-        "SELECT COUNT(*) AS n FROM agent_runs WHERE task_id = ? AND kind = 'message' "
-        "AND status = 'done' AND rowid > ?",
-        (task_id, through_rowid),
+        "SELECT through_rowid FROM memory_review_checkpoint WHERE id = 1"
+    ).fetchone()["through_rowid"]
+
+
+def done_message_count_since(conn: sqlite3.Connection, through_rowid: int) -> int:
+    sync_completed_turns(conn)
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM memory_review_turns WHERE kind = 'message' AND sequence > ?",
+        (through_rowid,),
     ).fetchone()["n"]
 
 
-def max_done_message_rowid(conn: sqlite3.Connection, task_id: str) -> int:
+def max_completed_sequence(conn: sqlite3.Connection) -> int:
+    sync_completed_turns(conn)
     return conn.execute(
-        "SELECT COALESCE(MAX(rowid), 0) AS m FROM agent_runs "
-        "WHERE task_id = ? AND kind = 'message' AND status = 'done'",
-        (task_id,),
-    ).fetchone()["m"]
-
-
-def max_run_rowid(conn: sqlite3.Connection, task_id: str) -> int:
-    return conn.execute(
-        "SELECT COALESCE(MAX(rowid), 0) AS m FROM agent_runs WHERE task_id = ?",
-        (task_id,),
+        "SELECT COALESCE(MAX(sequence), 0) AS m FROM memory_review_turns"
     ).fetchone()["m"]
 
 
 def last_run_id(conn: sqlite3.Connection, task_id: str, through_rowid: int) -> str | None:
     """窗口内最后一个调用；任务在回顾期间被删除时没有结果，提示随之不写。"""
     row = conn.execute(
-        "SELECT run_id FROM agent_runs WHERE task_id = ? AND rowid <= ? "
-        "ORDER BY rowid DESC LIMIT 1",
+        "SELECT r.run_id FROM agent_runs r JOIN memory_review_turns w ON w.run_id = r.run_id "
+        "WHERE r.task_id = ? AND w.sequence <= ? ORDER BY w.sequence DESC LIMIT 1",
         (task_id, through_rowid),
     ).fetchone()
     return row["run_id"] if row is not None else None
 
 
-def window_text_items(
-    conn: sqlite3.Connection, task_id: str, from_rowid: int, through_rowid: int
-) -> list[dict]:
+def window_text_items(conn: sqlite3.Connection, from_rowid: int, through_rowid: int) -> list[dict]:
     """回顾窗口内的对话文本：只取窗口内已结束调用的 text 与 notice 项。
 
-    notice 是程序生成的记忆提示：即时判断的保存结果与追问属于回顾要参考的上下文。
+    notice 是程序生成的提示，作为对话上下文一起提供。
     草稿卡片与错误项不算对话。
     """
     return [
         dict(row)
         for row in conn.execute(
-            "SELECT i.kind, i.role, i.text FROM task_timeline_items i "
+            "SELECT i.kind, i.role, i.text, i.task_id FROM task_timeline_items i "
             "JOIN agent_runs r ON r.run_id = i.run_id "
-            "WHERE i.task_id = ? AND i.kind IN ('text', 'notice') "
-            "AND r.rowid > ? AND r.rowid <= ? ORDER BY i.sequence",
-            (task_id, from_rowid, through_rowid),
+            "JOIN memory_review_turns w ON w.run_id = r.run_id "
+            "WHERE w.sequence > ? AND w.sequence <= ? AND r.status = 'done' "
+            "AND i.kind IN ('text','notice') ORDER BY w.sequence, i.sequence",
+            (from_rowid, through_rowid),
         )
     ]
 
@@ -217,6 +229,7 @@ def window_text_items(
 def render_transcript(items: list[dict]) -> str:
     labels = {"user": "用户", "assistant": "助手"}
     return "\n".join(
+        f"{'[任务 ' + item['task_id'] + '] ' if item.get('task_id') else ''}"
         f"{'系统' if item.get('kind') == 'notice' else labels.get(item['role'], item['role'])}"
         f"：{item['text']}"
         for item in items
@@ -225,7 +238,7 @@ def render_transcript(items: list[dict]) -> str:
 
 def build_review_message(transcript: str, snapshot: dict) -> str:
     materials = (
-        Material("自上次回顾以来的任务对话", transcript or REVIEW_EMPTY_TRANSCRIPT),
+        Material("自上次回顾以来各任务的对话", transcript or REVIEW_EMPTY_TRANSCRIPT),
         *memory_materials(snapshot),
     )
     return REVIEW_MESSAGE_HEADER + "\n\n" + render_materials(materials)
@@ -250,32 +263,40 @@ class MemoryReviewScheduler:
         self.enabled = enabled if enabled is not None else settings.memory_review_enabled
 
     def enqueue_if_due(self, task_id: str) -> dict | None:
-        """任务内自上次已完成回顾后又攒够间隔个已完成的用户消息轮时，登记一次回顾。"""
+        """所有任务自上次成功回顾后累计达到间隔个已完成用户轮时，登记全局回顾。"""
         if not self.enabled:
             return None
         now = timestamp()
         review_id = str(uuid4())
         with session(self.path) as conn, write(conn):
-            if open_review(conn, task_id) is not None:
+            if open_review(conn) is not None:
                 return None
-            from_rowid = last_through_rowid(conn, task_id)
-            if done_message_count_since(conn, task_id, from_rowid) < self.interval:
+            from_rowid = last_through_sequence(conn)
+            if done_message_count_since(conn, from_rowid) < self.interval:
                 return None
-            through_rowid = max_done_message_rowid(conn, task_id)
+            through_rowid = max_completed_sequence(conn)
             insert_review(conn, review_id, task_id, "interval", from_rowid, through_rowid, now)
             return review_response(review(conn, review_id))
 
     def enqueue_manual(self, task_id: str) -> dict:
-        """手动登记一次回顾：覆盖整个任务，不受间隔与自动开关限制。"""
+        """手动登记全局回顾：覆盖上次成功回顾以来的窗口，不受间隔与自动开关限制。"""
         with session(self.path) as conn:
             repository.task(conn, task_id)
         now = timestamp()
         review_id = str(uuid4())
         with session(self.path) as conn, write(conn):
-            existing = open_review(conn, task_id)
+            existing = open_review(conn)
             if existing is not None:
                 return review_response(existing)
-            insert_review(conn, review_id, task_id, "manual", 0, max_run_rowid(conn, task_id), now)
+            insert_review(
+                conn,
+                review_id,
+                task_id,
+                "manual",
+                last_through_sequence(conn),
+                max_completed_sequence(conn),
+                now,
+            )
             return review_response(review(conn, review_id))
 
     def pending_reviews(self) -> list[dict]:
@@ -294,13 +315,13 @@ class MemoryReviewScheduler:
     async def run(self, review_id: str, gateway: ReviewGateway) -> list[dict]:
         """执行一次回顾：取窗口对话与当前记忆，交给一次性模型调用，并落库结束状态。
 
-        整理改动了已有内容时，提示挂在窗口内最后一轮上写入时间线；返回写入的提示
+        创建候选询问对话时，提示挂在锚点任务窗口内最后一轮上；返回写入的提示
         （`run_id`、`item_id`、`text`），由调用方推送给页面。
         """
         with session(self.path) as conn:
             row = review(conn, review_id)
             repository.task(conn, row["task_id"])
-            items = window_text_items(conn, row["task_id"], row["from_rowid"], row["through_rowid"])
+            items = window_text_items(conn, row["from_rowid"], row["through_rowid"])
         if not items:
             with session(self.path) as conn, write(conn):
                 finish_review(conn, review_id, "done", None, timestamp())
@@ -308,7 +329,33 @@ class MemoryReviewScheduler:
         snapshot = self.memory_store.snapshot()
         message = build_review_message(render_transcript(items), snapshot)
         records = await gateway.review_memory(row["task_id"], REVIEW_INSTRUCTIONS, message)
-        texts = review_notice_texts(records)
+        if records and records[-1].get("error"):
+            raise MemoryValidationError(
+                [{"field": "review", "message": "回顾的最后一项计划校验失败，未应用任何操作"}]
+            )
+        plans = [r["result"] for r in records if r.get("result", {}).get("planned")]
+        applied_records = []
+        if plans:
+            operations = [op for plan in plans for op in plan["operations"]]
+            versions = plans[0]["versions"]
+            with self.memory_store._lock:
+                snapshot = self.memory_store.snapshot()
+                if any(plan["versions"] != versions for plan in plans) or any(
+                    snapshot[t]["version"] != version for t, version in versions.items()
+                ):
+                    raise MemoryValidationError(
+                        [{"field": "versions", "message": "回顾期间记忆变化，本次计划未应用"}]
+                    )
+                if any(op["action"] in {"replace", "delete", "move"} for op in operations):
+                    result = MemoryProposals(self.memory_store, self.path).stage(
+                        row["task_id"],
+                        operations,
+                        "；".join(dict.fromkeys(p["reason"] for p in plans if p["reason"])),
+                    )
+                else:
+                    result = self.memory_store.edit(operations, expected_versions=versions)
+                applied_records = [{"result": result}]
+        texts = review_notice_texts(applied_records)
         published = []
         with session(self.path) as conn, write(conn):
             finish_review(conn, review_id, "done", None, timestamp())
@@ -317,4 +364,5 @@ class MemoryReviewScheduler:
                 for text in texts:
                     item_id = timeline.insert_notice(conn, row["task_id"], run_id, text)
                     published.append({"run_id": run_id, "item_id": item_id, "text": text})
+        self.enqueue_if_due(row["task_id"])
         return published

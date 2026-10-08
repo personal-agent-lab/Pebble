@@ -1,17 +1,56 @@
-"""长期记忆写入工具：只供一次性记忆会话使用，不进入前台对话的工具列表。
+"""前台按需记忆与后台回顾：后台改删整批转为新对话中的候选。"""
 
-前台主 Agent 不持有记忆工具：每个用户消息轮由独立的一次性判断会话决定写入
-（judge_registry），后台定期回顾负责跨轮模式与整理（review_registry）。两者都用同一个
-按行锚点编辑的工具追加、插入、修改、删除与移动。
-"""
-
+from server.memory.notices import MEMORY_RULES
+from server.memory.proposals import MemoryProposals, invalid
 from server.memory.service import MemoryStore
-from server.tools.registry import Effect, ToolPolicy, ToolRegistry
+from server.sessions.service import SessionStore
+from server.tools.registry import Effect, ToolPolicy, ToolRegistry, default_registry
 
 
-def edit_memory(operations: list[dict], *, memory_store: MemoryStore) -> dict:
-    """按行锚点插入、替换、删除、移动整行或在分区末尾追加；一次调用可跨分区，整体生效。"""
+def edit_memory(
+    operations: list[dict] | None = None,
+    proposal_id: str | None = None,
+    decision: str = "view",
+    *,
+    memory_store: MemoryStore,
+    tasks: SessionStore,
+    task_id: str,
+) -> dict:
+    """用户轮读取或编辑；候选对话中的修改必须经过候选版本检查。"""
+    proposals = MemoryProposals(memory_store, tasks.path)
+    if proposal_id is None and decision != "view":
+        raise invalid("处理候选需要 proposal_id")
+    if proposal_id is not None:
+        return proposals.resolve(task_id, proposal_id, decision, operations)
+    if operations is None:
+        return proposals.view(task_id)
+    pending = proposals.for_task(task_id)
+    if pending is not None and pending["status"] == "pending":
+        raise invalid("本对话有待处理候选，请传 proposal_id 与 decision，不能绕过版本校验")
     return memory_store.edit(operations)
+
+
+def review_memory(
+    operations: list[dict],
+    reason: str = "",
+    *,
+    memory_store: MemoryStore,
+    tasks: SessionStore,
+    task_id: str,
+) -> dict:
+    """后台只自动添加；任何改删或移动均整批暂存，程序创建询问对话。"""
+    destructive = any(op.get("action") in {"replace", "delete", "move"} for op in operations)
+    if destructive and not reason.strip():
+        raise invalid("改删候选必须说明理由")
+    preview = memory_store.preview(operations)
+    return {
+        "planned": True,
+        "changed": False,
+        "operations": operations,
+        "reason": reason,
+        "versions": {t: v["version"] for t, v in preview["before"].items()},
+        "memory": MemoryProposals(memory_store, tasks.path).view(task_id)["memory"],
+    }
 
 
 # 只讲怎么调用：分区标准、锚点、各 action 与失败处理；写什么、不写什么见 notices.MEMORY_RULES。
@@ -73,15 +112,46 @@ OPERATIONS_SCHEMA = {
     },
 }
 
-review_registry = ToolRegistry(session_scope="memory_review")
-judge_registry = ToolRegistry(session_scope="memory_judge")
+FRONT_DESCRIPTION = (
+    "用户亲自发起的对话中按需维护长期记忆。只保存用户明确表达的长期信息；"
+    "明确纠正和忘记要求可直接修改或删除。拿不准替换还是并存时保持不变，必要时询问。"
+    "不能仅凭文字回复声称保存成功，必须以工具结果为准。"
+    "不传 operations 时返回最新行锚点与待处理候选，编辑旧记忆前先调用读取。\n"
+    + EDIT_DESCRIPTION
+    + "\n"
+    + MEMORY_RULES
+    + "\n"
+    "候选对话：用户同意后传 proposal_id、decision=apply（可传用户调整后的完整 operations）；"
+    "用户拒绝用 decision=reject。候选不是授权，不得在收到用户同意前应用。"
+    "版本冲突时读取最新记忆，使用 decision=refresh 与完整 operations 更新候选、展示差异并再问用户；"
+    "新候选不能在 refresh 的同一轮应用。"
+)
 
-for registry in (judge_registry, review_registry):
-    registry.register(
-        edit_memory,
-        name="memory_edit",
-        description=EDIT_DESCRIPTION,
-        effect=Effect.LOCAL_WRITE,
-        policy=ToolPolicy.DEDICATED_SESSION_ONLY,
-        param_schemas={"operations": OPERATIONS_SCHEMA},
-    )
+review_registry = ToolRegistry(session_scope="memory_review")
+review_registry.register(
+    review_memory,
+    name="memory_edit",
+    description=EDIT_DESCRIPTION + "\n" + MEMORY_RULES + "\n"
+    "调用只校验并登记本次计划，不立即写入；返回的锚点仍是原记忆。"
+    "会话成功后统一处理所有调用：纯 append/insert 直接写入；含改删则整批转为候选，提供 reason。"
+    "程序自动新建询问对话，用户未回复前原记忆保持不变；planned 不代表写入完成。",
+    effect=Effect.LOCAL_WRITE,
+    policy=ToolPolicy.DEDICATED_SESSION_ONLY,
+    param_schemas={"operations": OPERATIONS_SCHEMA},
+)
+default_registry.register(
+    edit_memory,
+    name="memory_edit",
+    description=FRONT_DESCRIPTION,
+    effect=Effect.LOCAL_WRITE,
+    policy=ToolPolicy.USER_TURN_ONLY,
+    param_schemas={
+        "operations": OPERATIONS_SCHEMA,
+        "decision": {
+            "type": "string",
+            "enum": ["view", "apply", "reject", "refresh"],
+            "default": "view",
+        },
+    },
+    activity_renderer=lambda _args: "维护长期记忆",
+)

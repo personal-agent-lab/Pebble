@@ -260,15 +260,14 @@ def test_image_attachment_uses_text_input_and_workspace_read(settings):
 
 
 @pytest.mark.parametrize("kind", list(TurnKind))
-def test_memory_tools_are_never_visible_in_foreground_turns(settings, kind):
+def test_memory_tools_are_visible_only_in_user_turns(settings, kind):
     gateway = make_gateway(settings)
-    gateway.tools.extend([*gateway.judge_tools, *gateway.review_tools])
+    gateway.tools.extend(gateway.review_tools)
     names = {
         name.rsplit("__", 1)[-1] for name in options_for(gateway, kind).allowed_tools
     }
 
-    # 记忆写入只发生在判断与回顾的一次性会话，前台任何轮次都看不到记忆工具。
-    assert not {name for name in names if name.startswith("memory")}
+    assert ("memory_edit" in names) is (kind is TurnKind.MESSAGE)
 
 
 def test_review_options_expose_review_tools_in_fresh_session(settings):
@@ -294,24 +293,6 @@ def test_review_options_expose_review_tools_in_fresh_session(settings):
     }
     assert options.allowed_mcp_server_names == [TOOL_SERVER_NAME]
     assert options.system_prompt == "回顾指令"
-    assert options.resume is None
-    assert options.hooks is None
-    assert options.include_partial_messages is False
-
-
-def test_judge_options_expose_judgment_tools_in_fresh_session(settings):
-    gateway = make_gateway(settings)
-    options = gateway._oneshot_options(
-        "判断指令",
-        f"{MCP_MOUNT_PATH}/{TURN_TOKEN}",
-        gateway.judge_tools,
-        task_id="task-1",
-        model="q-model",
-    )
-
-    assert options.allowed_tools == [f"mcp__{TOOL_SERVER_NAME}__memory_edit"]
-    assert options.tools == []
-    assert options.system_prompt == "判断指令"
     assert options.resume is None
     assert options.hooks is None
     assert options.include_partial_messages is False
@@ -783,13 +764,6 @@ def run_tools(gateway: QoderGateway, monkeypatch, *calls: ToolCall, task_id="tas
     return events, captured["results"]
 
 
-def run_judge(gateway: QoderGateway, monkeypatch, *calls: ToolCall, task_id="task-1"):
-    """在一次性判断会话里按序调用工具，返回记录到的工具调用与结果。"""
-    script = [*calls, result()]
-    install_sdk(monkeypatch, gateway, script)
-    return asyncio.run(gateway.judge_memory(task_id, "判断指令", "判断材料"))
-
-
 def test_skill_review_uses_only_staged_skill_tools(settings, monkeypatch):
     init_db()
     skills = SkillService(settings.data_dir, settings.db_path)
@@ -911,13 +885,18 @@ def test_skill_review_bad_ref_without_retry_fails_window(settings, monkeypatch):
 ADD_CHINESE = {"action": "append", "target": "user", "text": "默认使用中文"}
 
 
-def test_judge_memory_records_real_tool_results(settings, monkeypatch):
-    gateway = make_gateway(settings)
-    task_id = gateway.tasks_store.create_task("判断记忆")["task_id"]
+def run_review(gateway, monkeypatch, *calls, task_id):
+    install_sdk(monkeypatch, gateway, [*calls, result()])
+    return asyncio.run(gateway.review_memory(task_id, "回顾指令", "回顾材料"))
 
-    # 即使误混入前台与另一个后台会话的工具，也只注册判断会话的工具。
-    gateway.judge_tools.extend([*gateway.tools, *gateway.review_tools])
-    records = run_judge(
+
+def test_review_memory_records_real_tool_results(settings, monkeypatch):
+    gateway = make_gateway(settings)
+    task_id = gateway.tasks_store.create_task("回顾记忆")["task_id"]
+
+    # 即使误混入前台与另一个后台会话的工具，也只注册回顾会话的工具。
+    gateway.review_tools.extend(gateway.tools)
+    records = run_review(
         gateway,
         monkeypatch,
         ToolCall("memory_edit", {"operations": [ADD_CHINESE]}),
@@ -926,17 +905,17 @@ def test_judge_memory_records_real_tool_results(settings, monkeypatch):
 
     assert [record["tool"] for record in records] == ["memory_edit"]
     first = records[0]
-    assert first["arguments"] == {"operations": [ADD_CHINESE]}
-    assert first["result"]["changed"] is True
-    assert first["result"]["applied"][0]["added"] == ["默认使用中文"]
-    assert (settings.data_dir / "memory" / "USER.md").read_text() == "默认使用中文"
+    assert first["arguments"] == {"operations": [ADD_CHINESE], "task_id": task_id}
+    assert first["result"]["planned"] is True
+    assert first["result"]["operations"] == [ADD_CHINESE]
+    assert (settings.data_dir / "memory" / "USER.md").read_text() == ""
 
 
-def test_judge_memory_records_structured_errors(settings, monkeypatch):
+def test_review_memory_records_structured_errors(settings, monkeypatch):
     gateway = make_gateway(settings)
-    task_id = gateway.tasks_store.create_task("判断记忆")["task_id"]
+    task_id = gateway.tasks_store.create_task("回顾记忆")["task_id"]
 
-    records = run_judge(
+    records = run_review(
         gateway,
         monkeypatch,
         ToolCall(
@@ -1286,3 +1265,19 @@ def test_tool_boundary_hides_unexpected_failure_detail(settings, monkeypatch):
     payload = tool_payload(failed)
     assert payload["error"] == "unexpected"
     assert "secret" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_foreground_memory_tool_reads_and_writes_through_mcp(settings, monkeypatch):
+    from tests.support import memory_anchor
+
+    gateway = make_gateway(settings)
+    seed_memory(gateway.memory_store, "user", "旧偏好")
+    anchor = memory_anchor(gateway.memory_store, "旧偏好")
+    _, results = run_tools(
+        gateway, monkeypatch,
+        ToolCall("memory_edit", {}),
+        ToolCall("memory_edit", {"operations": [{"action": "replace", "anchor": anchor,
+                                                  "text": "新偏好"}]}),
+    )
+    assert len(results) == 2
+    assert gateway.memory_store.snapshot()["user"]["content"] == "新偏好"

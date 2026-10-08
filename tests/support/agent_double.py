@@ -32,13 +32,10 @@ class FakeAgentGateway:
         self.image_calls: list[dict[str, Any]] = []
         self.review_calls: list[dict[str, Any]] = []
         self.skill_review_calls: list[dict[str, Any]] = []
-        self.judge_calls: list[dict[str, Any]] = []
         self.interrupt_calls: list[str] = []
         # 可替换的一次性记忆回顾实现；缺省记录调用并返回空工具记录（无改动）。
         self.review_handler = None
         self.skill_review_handler = None
-        # 可替换的每轮记忆判断实现；缺省记录调用并返回空工具记录（无变化）。
-        self.judge_handler = None
         self._handlers: dict[str, Handler] = {}
         self._sessions = count(1)
         self._lock = threading.Lock()
@@ -81,14 +78,6 @@ class FakeAgentGateway:
             return await self.review_handler(task_id, instructions, transcript)
         return []
 
-    async def judge_memory(self, task_id: str, instructions: str, message: str) -> list[dict]:
-        with self._lock:
-            self.judge_calls.append(
-                {"task_id": task_id, "instructions": instructions, "message": message}
-            )
-        if self.judge_handler is not None:
-            return await self.judge_handler(task_id, instructions, message)
-        return []
 
     async def review_skills(
         self, review_id: str, anchor_task_id: str, instructions: str, material: str,

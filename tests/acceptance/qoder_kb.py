@@ -24,7 +24,6 @@ from server.config import Settings
 from server.db import init_db
 from server.errors import VersionConflictError
 from server.gateway.agent_contract import Turn
-from server.memory.judge import run_judgment
 from server.memory.service import MemoryStore
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
@@ -164,27 +163,15 @@ async def verify(root: Path) -> dict:
         if "过期的并发写入" in kb_store.read(path=rel)["body"]:
             raise AssertionError("被拒绝的并发写入仍然落了盘")
 
-        # 4. 记忆与资料分流：粘贴长资料并说“记住这个”，正文不进长期记忆；
-        #    单独的偏好仍由每轮记忆判断写入长期记忆。判断是独立的一次性模型调用，
-        #    这里直接走真实的 run_judgment 路径，不经主回答流。
+        # 4. 前台分流：资料正文不入长期记忆，明确的长期要求通过记忆工具保存。
         boundary_code = "GSE-9130"
-        await run_judgment(
+        await run_turn(
             gateway,
-            memory_store,
-            db_path,
+            f"记住这个：项目 {boundary_code} 的详细资料如下——目标、范围、里程碑、"
+            "风险与逐项执行结果（此处为一大段项目细节正文）。",
             task_id="kb-boundary",
-            message=(
-                f"记住这个：项目 {boundary_code} 的详细资料如下——目标、范围、里程碑、"
-                "风险与逐项执行结果（此处为一大段项目细节正文，用于验证不会被塞进长期记忆）。"
-            ),
         )
-        await run_judgment(
-            gateway,
-            memory_store,
-            db_path,
-            task_id="kb-boundary",
-            message="请记住我的偏好：回答先给结论再解释。这是普通格式文字，不是密码或令牌。",
-        )
+        await run_turn(gateway, "请记住我的长期要求：回答先给结论再解释。", task_id="kb-boundary")
         snapshot = memory_store.snapshot()
         stored = snapshot["user"]["content"] + snapshot["memory"]["content"]
         if boundary_code in stored:
