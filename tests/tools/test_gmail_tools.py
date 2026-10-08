@@ -6,7 +6,7 @@ from server.tools.gmail.tools import (
     get_email_thread,
     search_emails,
 )
-from server.tools.registry import SideEffect, ToolFileResult, default_registry
+from server.tools.registry import Effect, ToolFileResult, default_registry
 from tests.support.gmail_double import MockGmailClient
 
 
@@ -14,7 +14,7 @@ def test_gmail_tools_registered_as_readonly() -> None:
     for name in ("gmail_search", "gmail_get_thread", "gmail_get_message", "gmail_get_attachment"):
         definition = default_registry.get_tool(name)
         assert definition is not None
-        assert definition.side_effect == SideEffect.READONLY
+        assert definition.effect == Effect.READ_ONLY
 
 
 def test_search_returns_uniform_message_summaries() -> None:

@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from server.tools.personal_kb.service import KbStore, anchored_body
-from server.tools.registry import SideEffect, activity, tool
+from server.tools.registry import Effect, ToolPolicy, activity, tool
 
 
 def _folder(path: str) -> str:
@@ -97,7 +97,8 @@ REF_SCHEMA: dict[str, Any] = {
 
 @tool(
     name="kb_save",
-    side_effect=SideEffect.LOCAL_WRITE_ALL_TURNS,
+    effect=Effect.LOCAL_WRITE,
+    policy=ToolPolicy.ALL_TURNS,
     notice_renderer=_saved_notice,
     activity_renderer=lambda args: activity("正在保存资料", args.get("title")),
 )
@@ -135,7 +136,8 @@ def kb_save(
 
 @tool(
     name="kb_search",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity("正在检索资料", args.get("query")),
 )
 def kb_search(
@@ -162,7 +164,8 @@ def kb_search(
 
 @tool(
     name="kb_list",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity(
         "正在查看已删除的资料" if args.get("deleted") else "正在查看资料列表",
         args.get("directory"),
@@ -188,7 +191,8 @@ def kb_list(
 
 @tool(
     name="kb_read",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     param_schemas={"ref": REF_SCHEMA},
     activity_renderer=lambda args: activity("正在读取资料", _document_target(args)),
 )
@@ -243,7 +247,8 @@ OPERATIONS_SCHEMA: dict[str, Any] = {
 
 @tool(
     name="kb_update",
-    side_effect=SideEffect.LOCAL_WRITE_ALL_TURNS,
+    effect=Effect.LOCAL_WRITE,
+    policy=ToolPolicy.ALL_TURNS,
     notice_renderer=_updated_notice,
     param_schemas={"operations": OPERATIONS_SCHEMA},
     activity_renderer=lambda args: activity("正在修改资料", _document_target(args)),
@@ -299,7 +304,8 @@ def kb_update(
 
 @tool(
     name="kb_history",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity("正在查看资料的历史版本", _document_target(args)),
 )
 def kb_history(
@@ -335,7 +341,8 @@ ARCHIVE_ITEM_SCHEMA: dict[str, Any] = {
 
 @tool(
     name="kb_archive",
-    side_effect=SideEffect.LOCAL_WRITE,
+    effect=Effect.LOCAL_WRITE,
+    policy=ToolPolicy.USER_OR_RESULT_TURN,
     notice_renderer=_archived_notice,
     param_schemas={"items": ARCHIVE_ITEM_SCHEMA},
     activity_renderer=lambda args: activity("正在归档任务", args.get("title")),
@@ -365,7 +372,8 @@ CONSENT_RULE = (
 
 @tool(
     name="kb_delete",
-    side_effect=SideEffect.LOCAL_WRITE_USER_TURN,
+    effect=Effect.LOCAL_WRITE,
+    policy=ToolPolicy.USER_TURN_ONLY,
     notice_renderer=_deleted_notice,
     description=(
         "删除资料库中的一份资料，按 path 或 id 定位。expected_version 必填，取自最近一次"
@@ -386,7 +394,8 @@ def kb_delete(
 
 @tool(
     name="kb_move",
-    side_effect=SideEffect.LOCAL_WRITE_USER_TURN,
+    effect=Effect.LOCAL_WRITE,
+    policy=ToolPolicy.USER_TURN_ONLY,
     notice_renderer=_moved_notice,
     description=(
         "把资料库中的一份资料移动到别的文件夹，按 path 或 id 定位，new_path 是资料库内的新相对"
@@ -410,7 +419,8 @@ def kb_move(
 
 @tool(
     name="kb_restore",
-    side_effect=SideEffect.LOCAL_WRITE_USER_TURN,
+    effect=Effect.LOCAL_WRITE,
+    policy=ToolPolicy.USER_TURN_ONLY,
     notice_renderer=_restored_notice,
     description=(
         "把资料恢复为某个历史版本，或找回已删除的资料；按 path 或 id 定位，version 取自"

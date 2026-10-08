@@ -7,13 +7,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from server.agent.toolset import ALLOWED_EFFECTS, TurnKind, exposed_tools
+from server.agent.toolset import TurnKind, exposed_tools
 from server.db import init_db
 from server.errors import DraftValidationError, NotFoundError
 from server.sessions.service import SessionStore
 from server.tools.gmail.service import MailDraftStore
 from server.tools.gmail.tools import prepare_email, prepare_reply
-from server.tools.registry import SideEffect, default_registry
+from server.tools.registry import Effect, default_registry
 from tests.support.gmail_double import MockGmailClient
 
 
@@ -32,7 +32,7 @@ def task_id(settings) -> str:
 def test_prepare_reply_registered_as_local_write() -> None:
     tool_def = default_registry.get_tool("gmail_prepare_reply")
     assert tool_def is not None
-    assert tool_def.side_effect == SideEffect.LOCAL_WRITE
+    assert tool_def.effect == Effect.LOCAL_WRITE
     assert set(tool_def.parameters_schema["properties"]) == {
         "source_message_id",
         "to",
@@ -46,10 +46,10 @@ def test_prepare_reply_registered_as_local_write() -> None:
         "subject",
         "body",
     }
-    # LOCAL_WRITE 只在允许起草的轮次对模型可见；新邮件轮只分析，不起草。
+    # USER_OR_RESULT_TURN 限制起草轮次；新邮件轮只分析，不起草。
     tools = default_registry.list_tools()
-    assert tool_def in exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
-    assert tool_def not in exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.NEW_MAIL])
+    assert tool_def in exposed_tools(tools, kind=TurnKind.MESSAGE)
+    assert tool_def not in exposed_tools(tools, kind=TurnKind.NEW_MAIL)
 
 
 def test_prepare_email_creates_editable_new_message(drafts, task_id) -> None:

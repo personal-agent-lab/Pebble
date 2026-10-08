@@ -7,7 +7,7 @@ import asyncio
 
 import pytest
 
-from server.agent.toolset import ALLOWED_EFFECTS, ToolDeps, TurnKind, build_tools, exposed_tools
+from server.agent.toolset import ToolDeps, TurnKind, build_tools, exposed_tools
 from server.approval.service import ConfirmationService
 from server.db import init_db, session
 from server.errors import HistoryValidationError, NotFoundError
@@ -191,7 +191,7 @@ def test_history_tools_are_readonly_in_every_turn_and_exclude_the_current_task(s
     init_db()
     tools = build_tools(ToolDeps(drafts=None, tasks=None, gmail=None, history=HistoryStore()))
     for kind in TurnKind:
-        names = {tool.name for tool in exposed_tools(tools, allowed=ALLOWED_EFFECTS[kind])}
+        names = {tool.name for tool in exposed_tools(tools, kind=kind)}
         assert {"history_search", "history_read"} <= names
     search = next(tool for tool in tools if tool.name == "history_search")
     assert search.needs_task_id is True

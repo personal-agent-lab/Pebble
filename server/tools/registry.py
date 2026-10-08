@@ -1,14 +1,7 @@
-"""Pebble 工具注册中心与副作用声明。
+"""工具注册声明：业务副作用与开放策略分别显式声明。
 
-遵循 Pebble 架构设计：
-- 每个工具声明其能力、参数和副作用类型；
-- EXTERNAL_WRITE 绝对不暴露给模型上下文，只由 Confirmation 在用户确认后调用；
-- DIRECT_EXTERNAL_WRITE 同样是外部写，但按轮次暴露给模型，可见范围由 `agent/toolset.py` 决定；
-- 装饰器 @tool 用于声明与注册工具。
-
-注册表是装配的唯一来源：`agent/toolset.py` 遍历已注册工具绑定依赖，模型可见范围由
-`agent/toolset.py` 的 `exposed_tools` 按本轮允许的副作用筛选。注册表本身不做筛选，
-避免两套宽严不同的边界。
+注册时校验合法组合和专用会话范围；模型可见工具由 agent/toolset.py 统一筛选。
+外部服务执行函数不注册为模型工具，仍由 Confirmation 管理。
 """
 
 from __future__ import annotations
@@ -20,19 +13,28 @@ from enum import StrEnum
 from typing import Any, get_args, get_origin, get_type_hints
 
 
-class SideEffect(StrEnum):
-    """工具副作用声明，程序强制约束，模型不可篡改。"""
+class Effect(StrEnum):
+    """业务副作用；内部观测与缓存不改变只读工具的分类。"""
 
-    READONLY = "readonly"  # 只读查询，不改变任何系统状态
-    LOCAL_WRITE = "local_write"  # 本地写入：用户对话轮与执行结果回传轮可见（如草稿生成）
-    # 本地写入，触发轮同样可见：结果有提示、有版本、可恢复（如资料的新建与修改）。
-    LOCAL_WRITE_ALL_TURNS = "local_write_all_turns"
-    # 本地写入，只在用户亲自发起的对话轮可见（如资料的删除、移动与恢复）。
-    LOCAL_WRITE_USER_TURN = "local_write_user_turn"
-    # 外部写入，按轮次暴露给模型；可见范围由 `agent/toolset.py` 的 ALLOWED_EFFECTS 决定。
-    DIRECT_EXTERNAL_WRITE = "direct_external_write"
-    # 外部写入，严禁注册给模型；只由 Confirmation 在用户确认最终版本后调用。
+    READ_ONLY = "read_only"
+    LOCAL_WRITE = "local_write"
     EXTERNAL_WRITE = "external_write"
+
+
+class ToolPolicy(StrEnum):
+    """模型工具的开放策略，不能替代具体操作的领域授权校验。"""
+
+    ALL_TURNS = "all_turns"
+    USER_OR_RESULT_TURN = "user_or_result_turn"
+    USER_TURN_ONLY = "user_turn_only"
+    DEDICATED_SESSION_ONLY = "dedicated_session_only"
+
+
+VALID_POLICIES: dict[Effect, frozenset[ToolPolicy]] = {
+    Effect.READ_ONLY: frozenset({ToolPolicy.ALL_TURNS, ToolPolicy.DEDICATED_SESSION_ONLY}),
+    Effect.LOCAL_WRITE: frozenset(ToolPolicy),
+    Effect.EXTERNAL_WRITE: frozenset({ToolPolicy.USER_TURN_ONLY}),
+}
 
 
 @dataclass(frozen=True)
@@ -57,7 +59,9 @@ class ToolDefinition:
     name: str
     description: str
     func: Callable[..., Any]
-    side_effect: SideEffect
+    effect: Effect
+    policy: ToolPolicy
+    session_scope: str | None = None
     parameters_schema: dict[str, Any] = field(default_factory=dict)
     # 声明了仅关键字 task_id 参数的工具由网关在每轮调用时注入任务身份，不进入模型 schema。
     needs_task_id: bool = False
@@ -68,6 +72,19 @@ class ToolDefinition:
     # 模型发起调用时向用户说明“正在做什么”，输入是模型给出的参数；措辞由所属领域提供。
     activity_renderer: Callable[[dict[str, Any]], str] | None = None
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.effect, Effect) or not isinstance(self.policy, ToolPolicy):
+            raise ValueError("工具必须显式声明 Effect 与 ToolPolicy 枚举")
+        if self.policy not in VALID_POLICIES[self.effect]:
+            raise ValueError(f"不允许的工具权限组合：{self.effect}/{self.policy}")
+        if self.session_scope is not None and (
+            not isinstance(self.session_scope, str) or not self.session_scope.strip()
+        ):
+            raise ValueError("专用会话范围必须是非空字符串")
+        dedicated = self.policy is ToolPolicy.DEDICATED_SESSION_ONLY
+        if dedicated != bool(self.session_scope):
+            raise ValueError("专用工具必须绑定专用会话范围，前台工具不得绑定该范围")
+
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.func(*args, **kwargs)
 
@@ -75,7 +92,8 @@ class ToolDefinition:
 class ToolRegistry:
     """进程内工具注册表。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, session_scope: str | None = None) -> None:
+        self.session_scope = session_scope
         self._tools: dict[str, ToolDefinition] = {}
 
     def register(
@@ -84,7 +102,8 @@ class ToolRegistry:
         *,
         name: str | None = None,
         description: str | None = None,
-        side_effect: SideEffect = SideEffect.READONLY,
+        effect: Effect,
+        policy: ToolPolicy,
         emits_draft_saved: bool = False,
         notice_renderer: Callable[[dict[str, Any]], str] | None = None,
         activity_renderer: Callable[[dict[str, Any]], str] | None = None,
@@ -113,7 +132,9 @@ class ToolRegistry:
                 name=tool_name,
                 description=tool_desc.strip(),
                 func=fn,
-                side_effect=side_effect,
+                effect=effect,
+                policy=policy,
+                session_scope=self.session_scope,
                 parameters_schema=schema,
                 needs_task_id=needs_task_id,
                 emits_draft_saved=emits_draft_saved,
@@ -135,7 +156,7 @@ class ToolRegistry:
         """全部已注册工具，按注册顺序。
 
         模型可见范围不在这里决定：注册表只记录声明，装配交给 `agent/toolset.py`，
-        每轮的允许集合由它的 `exposed_tools` 按副作用声明筛选，全流程只有那一处筛选。
+        每轮的允许集合由它的 `exposed_tools` 按开放策略筛选，全流程只有那一处筛选。
         """
         return list(self._tools.values())
 
@@ -225,7 +246,8 @@ def tool(
     *,
     name: str | None = None,
     description: str | None = None,
-    side_effect: SideEffect = SideEffect.READONLY,
+    effect: Effect,
+    policy: ToolPolicy,
     emits_draft_saved: bool = False,
     notice_renderer: Callable[[dict[str, Any]], str] | None = None,
     activity_renderer: Callable[[dict[str, Any]], str] | None = None,
@@ -236,7 +258,8 @@ def tool(
         func,
         name=name,
         description=description,
-        side_effect=side_effect,
+        effect=effect,
+        policy=policy,
         emits_draft_saved=emits_draft_saved,
         notice_renderer=notice_renderer,
         activity_renderer=activity_renderer,

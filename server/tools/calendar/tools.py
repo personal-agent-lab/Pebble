@@ -3,7 +3,7 @@
 from typing import Protocol
 
 from server.tools.calendar.service import PRIMARY_CALENDAR, CalendarEventStore, validate_event
-from server.tools.registry import SideEffect, activity, tool
+from server.tools.registry import Effect, ToolPolicy, activity, tool
 
 
 class CalendarReader(Protocol):
@@ -33,7 +33,8 @@ def _span(args: dict, start: str, end: str) -> str | None:
 
 @tool(
     name="calendar_list_events",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity("正在查询日程", _span(args, "time_min", "time_max")),
 )
 def list_events(
@@ -50,7 +51,8 @@ def list_events(
 
 @tool(
     name="calendar_get_event",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity("正在读取日程"),
 )
 def get_event(event_id: str, *, calendar: CalendarReader) -> dict:
@@ -60,7 +62,8 @@ def get_event(event_id: str, *, calendar: CalendarReader) -> dict:
 
 @tool(
     name="calendar_check_conflicts",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity("正在检查日程冲突", _span(args, "start", "end")),
 )
 def check_conflicts(
@@ -72,7 +75,8 @@ def check_conflicts(
 
 @tool(
     name="calendar_create_event",
-    side_effect=SideEffect.DIRECT_EXTERNAL_WRITE,
+    effect=Effect.EXTERNAL_WRITE,
+    policy=ToolPolicy.USER_TURN_ONLY,
     activity_renderer=lambda args: activity("正在创建日程", args.get("summary")),
 )
 def create_event(

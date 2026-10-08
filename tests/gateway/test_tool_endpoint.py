@@ -6,7 +6,7 @@ import base64
 import httpx
 
 from server.agent.mcp import ToolServer
-from server.agent.toolset import ALLOWED_EFFECTS, ToolDeps, TurnKind, build_tools, exposed_tools
+from server.agent.toolset import ToolDeps, TurnKind, build_tools, exposed_tools
 from server.db import init_db, session, write
 from server.memory.service import MemoryStore
 from server.sessions.repository import cancel_pending
@@ -50,7 +50,7 @@ def test_turn_endpoint_exposes_only_its_own_tools(settings):
     tools, tasks = build(settings)
     task_id = tasks.create_task("处理新收到的邮件")["task_id"]
     server = ToolServer()
-    visible = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.NEW_MAIL])
+    visible = exposed_tools(tools, kind=TurnKind.NEW_MAIL)
 
     async def scenario():
         async with server.serve(visible, task_id=task_id, queued=asyncio.Queue()) as path:
@@ -95,8 +95,8 @@ def test_concurrent_turns_are_isolated(settings):
     tools, tasks = build(settings)
     task_id = tasks.create_task("处理新收到的邮件")["task_id"]
     server = ToolServer()
-    drafting = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
-    readonly = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.NEW_MAIL])
+    drafting = exposed_tools(tools, kind=TurnKind.MESSAGE)
+    readonly = exposed_tools(tools, kind=TurnKind.NEW_MAIL)
 
     async def scenario():
         mail_queue: asyncio.Queue = asyncio.Queue()
@@ -129,7 +129,7 @@ def test_kb_save_emits_program_notice_without_recording_source(settings):
     tools, tasks = build(settings)
     task_id = tasks.create_task("保存资料")["task_id"]
     server = ToolServer()
-    visible = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
+    visible = exposed_tools(tools, kind=TurnKind.MESSAGE)
     queued: asyncio.Queue = asyncio.Queue()
 
     async def scenario():
@@ -161,7 +161,7 @@ def test_targeted_turn_can_only_update_selected_draft(settings):
     target = drafts.save_email_draft(task_id, ["a@example.com"], "主题", "正文")
     other = drafts.save_email_draft(task_id, ["b@example.com"], "其他", "正文")
     server = ToolServer()
-    drafting = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
+    drafting = exposed_tools(tools, kind=TurnKind.MESSAGE)
 
     async def scenario():
         async with (
@@ -210,7 +210,7 @@ def test_update_of_cancelled_draft_creates_new_one(settings):
     with session() as conn, write(conn):
         cancel_pending(conn, task_id, "2026-09-18T00:00:00Z")
     server = ToolServer()
-    drafting = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
+    drafting = exposed_tools(tools, kind=TurnKind.MESSAGE)
     queued: asyncio.Queue = asyncio.Queue()
     revision = {
         "operation_id": original["operation_id"],
@@ -339,8 +339,8 @@ def test_judge_endpoint_exposes_judgment_tools(settings):
 def test_kb_destructive_tools_emit_notices_and_trigger_turns_can_only_save(settings):
     tools, tasks = build(settings)
     task_id = tasks.create_task("整理资料")["task_id"]
-    message_tools = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
-    trigger_tools = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.NEW_MAIL])
+    message_tools = exposed_tools(tools, kind=TurnKind.MESSAGE)
+    trigger_tools = exposed_tools(tools, kind=TurnKind.NEW_MAIL)
 
     async def call(visible, name, arguments):
         server = ToolServer()
@@ -396,3 +396,37 @@ def test_kb_destructive_tools_emit_notices_and_trigger_turns_can_only_save(setti
         ]
 
     asyncio.run(scenario())
+
+
+def test_dedicated_endpoint_rejects_foreground_and_other_session_tools(settings):
+    from server.tools.registry import Effect, ToolPolicy, ToolRegistry
+
+    tools, tasks = build(settings)
+    task_id = tasks.create_task("专用会话隔离")["task_id"]
+    own = ToolRegistry(session_scope="worker-a")
+    other = ToolRegistry(session_scope="worker-b")
+    calls = []
+    for registry, name in ((own, "own_probe"), (other, "other_probe")):
+        registry.register(
+            lambda: calls.append("called") or {"status": "ok"}, name=name,
+            effect=Effect.LOCAL_WRITE, policy=ToolPolicy.DEDICATED_SESSION_ONLY,
+        )
+    visible = exposed_tools(
+        [*tools, *own.list_tools(), *other.list_tools()], session_scope="worker-a",
+    )
+    server = ToolServer()
+
+    async def scenario():
+        async with (
+            server.serve(visible, task_id=task_id, queued=asyncio.Queue()) as path,
+            mcp_session(server, f"{BASE_URL}{path}") as session,
+        ):
+            assert [t.name for t in (await session.list_tools()).tools] == ["own_probe"]
+            for name in ("other_probe", "gmail_prepare_reply", "gmail_send_message"):
+                rejected = await session.call_tool(name, {})
+                assert rejected.isError
+                assert tool_payload(rejected)["error"] == "unknown_tool"
+            assert not (await session.call_tool("own_probe", {})).isError
+
+    asyncio.run(scenario())
+    assert calls == ["called"]

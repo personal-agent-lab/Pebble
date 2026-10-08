@@ -4,7 +4,7 @@
 在 tests/gateway/test_agent_stream.py 覆盖。
 """
 
-from server.tools.registry import SideEffect, ToolRegistry, default_registry, tool
+from server.tools.registry import Effect, ToolPolicy, ToolRegistry, default_registry, tool
 
 
 def test_tool_decorator_registers_metadata() -> None:
@@ -13,7 +13,7 @@ def test_tool_decorator_registers_metadata() -> None:
     @registry.register(
         name="test_calc",
         description="计算两数之和",
-        side_effect=SideEffect.READONLY,
+        effect=Effect.READ_ONLY, policy=ToolPolicy.ALL_TURNS,
     )
     def add(a: int, b: int = 1) -> int:
         return a + b
@@ -22,7 +22,7 @@ def test_tool_decorator_registers_metadata() -> None:
     assert tool_def is not None
     assert tool_def.name == "test_calc"
     assert tool_def.description == "计算两数之和"
-    assert tool_def.side_effect == SideEffect.READONLY
+    assert tool_def.effect == Effect.READ_ONLY
     assert tool_def(2, 3) == 5
 
     # 验证 schema 生成
@@ -34,13 +34,13 @@ def test_tool_decorator_registers_metadata() -> None:
 
 
 def test_global_tool_decorator_registers_to_default_registry() -> None:
-    @tool(name="global_read_probe", side_effect=SideEffect.READONLY)
+    @tool(name="global_read_probe", effect=Effect.READ_ONLY, policy=ToolPolicy.ALL_TURNS)
     def probe() -> str:
         return "ok"
 
     registered = default_registry.get_tool("global_read_probe")
     assert registered is not None
-    assert registered.side_effect == SideEffect.READONLY
+    assert registered.effect == Effect.READ_ONLY
     assert registered() == "ok"
 
 

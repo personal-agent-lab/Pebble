@@ -24,12 +24,12 @@
 
 ## 3. 工具面
 
-| 工具 | 副作用 | 语义 |
-| --- | --- | --- |
-| `calendar_list_events` | `READONLY` | 列出时间范围内主日历的事件。 |
-| `calendar_get_event` | `READONLY` | 读单个事件详情。 |
-| `calendar_check_conflicts` | `READONLY` | 检查某时间段与既有事件的冲突。 |
-| `calendar_create_event` | `DIRECT_EXTERNAL_WRITE` | 创建事件。**仅用户亲自发起的轮可见**（`spec.md` §4.1 矩阵）。 |
+| 工具 | Effect | Policy | 语义 |
+| --- | --- | --- | --- |
+| `calendar_list_events` | `READ_ONLY` | `ALL_TURNS` | 列出时间范围内主日历的事件。 |
+| `calendar_get_event` | `READ_ONLY` | `ALL_TURNS` | 读单个事件详情。 |
+| `calendar_check_conflicts` | `READ_ONLY` | `ALL_TURNS` | 检查某时间段与既有事件的冲突。 |
+| `calendar_create_event` | `EXTERNAL_WRITE` | `USER_TURN_ONLY` | 创建事件。**仅用户亲自发起的轮可见**（`spec.md` §4.1 矩阵）。 |
 
 `calendar_create_event` 的产品规则写在工具 description 中，模型必须遵守：
 

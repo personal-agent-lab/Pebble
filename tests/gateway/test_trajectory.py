@@ -9,7 +9,7 @@ import json
 
 from server.agent.client import tool_trace_hooks
 from server.agent.mcp import ToolServer
-from server.agent.toolset import ALLOWED_EFFECTS, ToolDeps, TurnKind, build_tools, exposed_tools
+from server.agent.toolset import ToolDeps, TurnKind, build_tools, exposed_tools
 from server.db import SCHEMA_VERSION, init_db, session, write
 from server.sessions import runs
 from server.sessions.service import SessionStore, timestamp
@@ -67,7 +67,7 @@ def test_tool_calls_recorded_with_values_status_and_order(settings):
     seed_turn(task["task_id"], "run-1", "帮我看看邀请邮件")
 
     server = ToolServer()
-    visible = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
+    visible = exposed_tools(tools, kind=TurnKind.MESSAGE)
     seen_states: list[str] = []
 
     def timeline_changed() -> None:
@@ -145,7 +145,7 @@ def test_onshot_sessions_without_run_id_are_not_recorded(settings):
     tools, tasks = build(settings)
     task = tasks.create_task("一次性会话")
     server = ToolServer()
-    visible = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.NEW_MAIL])
+    visible = exposed_tools(tools, kind=TurnKind.NEW_MAIL)
 
     async def scenario():
         async with (
@@ -165,7 +165,7 @@ def test_trajectory_survives_reopen(settings):
     seed_turn(task["task_id"], "run-keep", "查邮件")
 
     server = ToolServer()
-    visible = exposed_tools(tools, allowed=ALLOWED_EFFECTS[TurnKind.MESSAGE])
+    visible = exposed_tools(tools, kind=TurnKind.MESSAGE)
 
     async def scenario():
         async with (

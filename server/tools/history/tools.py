@@ -7,12 +7,13 @@
 from __future__ import annotations
 
 from server.sessions.history import HistoryStore
-from server.tools.registry import SideEffect, activity, tool
+from server.tools.registry import Effect, ToolPolicy, activity, tool
 
 
 @tool(
     name="history_search",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity("正在检索过去的对话", args.get("query")),
 )
 def history_search(
@@ -45,7 +46,8 @@ def history_search(
 
 @tool(
     name="history_read",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity("正在查看过去的对话"),
 )
 def history_read(

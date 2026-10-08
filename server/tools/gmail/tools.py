@@ -9,7 +9,7 @@ from server.errors import NotFoundError
 from server.sessions.service import SessionStore
 from server.tools.gmail.client import BaseGmailClient, GmailAttachment, GmailMessage
 from server.tools.gmail.service import MailDraftStore
-from server.tools.registry import SideEffect, ToolFileResult, activity, tool
+from server.tools.registry import Effect, ToolFileResult, ToolPolicy, activity, tool
 
 
 def attachment_fields(attachment: GmailAttachment) -> dict[str, Any]:
@@ -42,7 +42,8 @@ def message_fields(message: GmailMessage, *, include_body: bool) -> dict[str, An
 @tool(
     name="gmail_search",
     description=("使用 Gmail 搜索条件查找邮件。返回每封邮件统一的基本信息和附件列表。"),
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity("正在搜索邮件", args.get("query")),
 )
 def search_emails(
@@ -55,7 +56,8 @@ def search_emails(
 @tool(
     name="gmail_get_thread",
     description="读取指定 Gmail 往来中按时间排列的全部邮件。",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity("正在读取邮件往来"),
 )
 def get_email_thread(thread_id: str, *, gmail: BaseGmailClient) -> dict[str, Any]:
@@ -70,7 +72,8 @@ def get_email_thread(thread_id: str, *, gmail: BaseGmailClient) -> dict[str, Any
 @tool(
     name="gmail_get_message",
     description="读取单封 Gmail 邮件的完整正文、收发件人、时间和附件列表。",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity("正在读取邮件"),
 )
 def get_email_detail(message_id: str, *, gmail: BaseGmailClient) -> dict[str, Any]:
@@ -80,7 +83,8 @@ def get_email_detail(message_id: str, *, gmail: BaseGmailClient) -> dict[str, An
 @tool(
     name="gmail_get_attachment",
     description="读取指定 Gmail 邮件中的一个附件，返回附件信息和原始文件。",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity("正在读取邮件附件"),
 )
 def get_attachment(
@@ -111,7 +115,8 @@ def get_attachment(
         "针对一封 Gmail 邮件保存本地回复草稿，仅用于审阅，不会发送。"
         "邮件往来标识由工具从原邮件读取。保存成功后系统会把草稿以审阅卡片呈现给用户。"
     ),
-    side_effect=SideEffect.LOCAL_WRITE,
+    effect=Effect.LOCAL_WRITE,
+    policy=ToolPolicy.USER_OR_RESULT_TURN,
     emits_draft_saved=True,
     activity_renderer=lambda args: activity("正在起草回复", args.get("subject")),
 )
@@ -143,7 +148,8 @@ def prepare_reply(
         "收件人可以是空列表：先按已知信息起草，收件人由用户稍后在审阅卡片上补填。"
         "保存成功后系统会把草稿以审阅卡片呈现给用户。"
     ),
-    side_effect=SideEffect.LOCAL_WRITE,
+    effect=Effect.LOCAL_WRITE,
+    policy=ToolPolicy.USER_OR_RESULT_TURN,
     emits_draft_saved=True,
     activity_renderer=lambda args: activity("正在起草邮件", args.get("subject")),
 )
@@ -160,7 +166,8 @@ def prepare_email(
 
 @tool(
     name="gmail_read_draft",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity("正在读取邮件草稿"),
 )
 def read_draft(
@@ -180,7 +187,8 @@ def read_draft(
         "保存成功后系统会把草稿以审阅卡片呈现给用户。"
         "向用户只说明改了什么，不提及原草稿被取消、作废或另起新稿等系统处理。"
     ),
-    side_effect=SideEffect.LOCAL_WRITE,
+    effect=Effect.LOCAL_WRITE,
+    policy=ToolPolicy.USER_OR_RESULT_TURN,
     emits_draft_saved=True,
     activity_renderer=lambda args: activity("正在修改邮件草稿", args.get("subject")),
 )

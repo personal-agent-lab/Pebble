@@ -28,17 +28,17 @@
 
 模型可见的工具（名称即产品接口）：
 
-| 工具 | 副作用 | 语义 |
-| --- | --- | --- |
-| `gmail_search` | `READONLY` | 按条件搜索邮件。 |
-| `gmail_get_thread` / `gmail_get_message` | `READONLY` | 读会话 / 读单封邮件。 |
-| `gmail_get_attachment` | `READONLY` | 读附件，以文件引用返回给工作区。 |
-| `gmail_prepare_reply` | `LOCAL_WRITE` | 针对来源来信起草回复，保存草稿并产生草稿卡片。 |
-| `gmail_prepare_email` | `LOCAL_WRITE` | 起草全新邮件。 |
-| `gmail_read_draft` | `READONLY` | 读当前草稿内容。 |
-| `gmail_update_draft` | `LOCAL_WRITE` | 修改草稿；对已取消草稿的修改走取代规则。 |
+| 工具 | Effect | Policy | 语义 |
+| --- | --- | --- | --- |
+| `gmail_search` | `READ_ONLY` | `ALL_TURNS` | 按条件搜索邮件。 |
+| `gmail_get_thread` / `gmail_get_message` | `READ_ONLY` | `ALL_TURNS` | 读会话 / 读单封邮件。 |
+| `gmail_get_attachment` | `READ_ONLY` | `ALL_TURNS` | 读附件，以文件引用返回给工作区。 |
+| `gmail_prepare_reply` | `LOCAL_WRITE` | `USER_OR_RESULT_TURN` | 针对来源来信起草回复，保存草稿并产生草稿卡片。 |
+| `gmail_prepare_email` | `LOCAL_WRITE` | `USER_OR_RESULT_TURN` | 起草全新邮件。 |
+| `gmail_read_draft` | `READ_ONLY` | `ALL_TURNS` | 读当前草稿内容。 |
+| `gmail_update_draft` | `LOCAL_WRITE` | `USER_OR_RESULT_TURN` | 修改草稿；对已取消草稿的修改走取代规则。 |
 
-**发送与核实函数不属于工具面**：它们只注入给确认执行器，属于 `EXTERNAL_WRITE` 级别（见 `spec.md` §4.1）。
+**发送与核实函数不属于工具面**：它们只注入给确认执行器，不采用模型工具的开放策略（见 `spec.md` §4.1）。
 
 ## 4. 行为流程
 

@@ -12,14 +12,15 @@ from server.errors import SkillUnknownError, SkillValidationError
 from server.skills.models import DESCRIPTION_LIMIT, ChangeAction, ChangeActor, SkillState
 from server.skills.runtime import current
 from server.skills.service import ChangeRequest, SkillService
-from server.tools.registry import SideEffect, activity, tool
+from server.tools.registry import Effect, ToolPolicy, activity, tool
 
 logger = logging.getLogger(__name__)
 
 
 @tool(
     name="skill_list",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity("正在查看技能目录"),
 )
 def skill_list(state: str = "active", *, skills: SkillService) -> list[dict]:
@@ -57,7 +58,8 @@ def skill_list(state: str = "active", *, skills: SkillService) -> list[dict]:
 
 @tool(
     name="skill_view",
-    side_effect=SideEffect.READONLY,
+    effect=Effect.READ_ONLY,
+    policy=ToolPolicy.ALL_TURNS,
     activity_renderer=lambda args: activity("正在读取技能", args.get("skill_id")),
 )
 def skill_view(skill_id: str, file_path: str | None = None, *, skills: SkillService) -> dict:
@@ -106,7 +108,8 @@ def _manage_notice(result: dict) -> str:
 
 @tool(
     name="skill_manage",
-    side_effect=SideEffect.LOCAL_WRITE_USER_TURN,
+    effect=Effect.LOCAL_WRITE,
+    policy=ToolPolicy.USER_TURN_ONLY,
     notice_renderer=_manage_notice,
     activity_renderer=lambda args: activity(
         "正在保存技能", (args.get("payload") or {}).get("skill_id")

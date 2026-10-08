@@ -5,7 +5,6 @@ import subprocess
 import pytest
 
 from server.agent.toolset import (
-    ALLOWED_EFFECTS,
     ToolDeps,
     TurnKind,
     build_tools,
@@ -328,7 +327,7 @@ def test_kb_tools_are_registered_with_correct_schema_and_turn_exposure(settings)
     visible = {
         kind: {
             t.name
-            for t in exposed_tools(tools, allowed=ALLOWED_EFFECTS[kind])
+            for t in exposed_tools(tools, kind=kind)
             if t.name.startswith("kb_")
         }
         for kind in TurnKind

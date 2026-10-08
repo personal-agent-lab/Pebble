@@ -43,7 +43,6 @@ from server.agent.materials import SessionMaterials
 from server.agent.mcp import LOOPBACK_HOST, TOOL_ERROR_MESSAGE, TOOL_SERVER_NAME, ToolServer
 from server.agent.prompt import TITLE_PROMPT
 from server.agent.toolset import (
-    ALLOWED_EFFECTS,
     ToolDeps,
     TurnKind,
     build_tools,
@@ -59,7 +58,7 @@ from server.sessions.observations import TurnObserver
 from server.sessions.tool_trace import begin_tool_call, finish_tool_call
 from server.tools.memory.tools import judge_registry, review_registry
 from server.tools.personal_kb.catalog import CATALOG_TITLE
-from server.tools.registry import SideEffect, ToolDefinition, ToolRegistry, activity
+from server.tools.registry import Effect, ToolDefinition, ToolPolicy, ToolRegistry, activity
 
 logger = logging.getLogger(__name__)
 
@@ -308,18 +307,27 @@ class QoderGateway:
 
         返回按调用顺序记录的工具调用与结果，整理提示由调用方按这些真实记录生成。
         """
-        return await self._memory_session(self.review_tools, task_id, instructions, transcript)
+        return await self._memory_session(
+            self.review_tools, task_id, instructions, transcript, session_scope="memory_review"
+        )
 
     async def judge_memory(self, task_id: str, instructions: str, message: str) -> list[dict]:
         """一次性记忆判断：带判断工具集，不接续会话；返回按调用顺序记录的工具调用与结果。
 
         判断对用户可见的提示由调用方按这些真实记录生成，不使用模型的文本回复。
         """
-        return await self._memory_session(self.judge_tools, task_id, instructions, message)
+        return await self._memory_session(
+            self.judge_tools, task_id, instructions, message, session_scope="memory_judge"
+        )
 
     async def review_skills(
-        self, review_id: str, anchor_task_id: str, instructions: str, material: str,
-        model: str, evidence_refs: dict[str, str],
+        self,
+        review_id: str,
+        anchor_task_id: str,
+        instructions: str,
+        material: str,
+        model: str,
+        evidence_refs: dict[str, str],
     ) -> list[dict]:
         """一次性 Skill 复盘：只收集候选，模型正常结束后由调度器落库并应用。"""
         from server.skills.review import resolve_evidence_refs, validate_review_reason
@@ -371,22 +379,24 @@ class QoderGateway:
             invalid_candidate_since_last_candidate = False
             return {"status": "staged", "ordinal": len(candidates) - 1}
 
-        registry = ToolRegistry()
+        registry = ToolRegistry(session_scope="skill_review")
         registry.register(
             skill_list.func,
             name="skill_list",
             description=skill_list.description,
-            side_effect=SideEffect.READONLY,
+            effect=Effect.READ_ONLY,
+            policy=ToolPolicy.DEDICATED_SESSION_ONLY,
         )
         registry.register(
             view,
             name="skill_view",
             description=skill_view.description,
-            side_effect=SideEffect.READONLY,
+            effect=Effect.READ_ONLY,
+            policy=ToolPolicy.DEDICATED_SESSION_ONLY,
         )
         registry.register(
             propose,
-            name="skill_manage",
+            name="skill_propose_change",
             description=(
                 "仅提出后台复盘候选，不立即写入。action 为 create/patch/write_file/remove_file。"
                 "create 的 payload 含 skill_id、name、description、body；"
@@ -396,7 +406,8 @@ class QoderGateway:
                 "用自然语言说明纠正、验证结果和可复用做法，不写 E1 等内部编号或 ID。"
                 "evidence_refs_to_use 单独填写轨迹条目前的短编号（如 E1），不要填写长 ID。"
             ),
-            side_effect=SideEffect.LOCAL_WRITE,
+            effect=Effect.LOCAL_WRITE,
+            policy=ToolPolicy.DEDICATED_SESSION_ONLY,
         )
         tools = [
             replace(definition, func=partial(definition.func, skills=self.skills_store))
@@ -404,6 +415,7 @@ class QoderGateway:
             else definition
             for definition in registry.list_tools()
         ]
+        tools = exposed_tools(tools, session_scope="skill_review")
         queued: asyncio.Queue = asyncio.Queue()
         async with self.tool_server.serve(tools, task_id=anchor_task_id, queued=queued) as path:
             options = self._oneshot_options(
@@ -423,10 +435,17 @@ class QoderGateway:
         raise AgentProtocolError(NO_TERMINAL_MESSAGE)
 
     async def _memory_session(
-        self, definitions: list[ToolDefinition], task_id: str, instructions: str, message: str
+        self,
+        definitions: list[ToolDefinition],
+        task_id: str,
+        instructions: str,
+        message: str,
+        *,
+        session_scope: str,
     ) -> list[dict]:
         records: list[dict] = []
-        tools = [_recording(definition, records) for definition in definitions]
+        visible = exposed_tools(definitions, session_scope=session_scope)
+        tools = [_recording(definition, records) for definition in visible]
         # 记忆工具不发草稿事件，队列恒为空，仅为满足端点签名传入。
         queued: asyncio.Queue = asyncio.Queue()
         async with self.tool_server.serve(tools, task_id=task_id, queued=queued) as path:
@@ -461,7 +480,7 @@ class QoderGateway:
 
     async def _scoped_stream(self, turn: Turn) -> AsyncIterator[AgentEvent]:
         queued: asyncio.Queue[AgentEvent] = asyncio.Queue()
-        visible = exposed_tools(self.tools, allowed=ALLOWED_EFFECTS[turn.kind])
+        visible = exposed_tools(self.tools, kind=turn.kind)
         announced: str | None = None
         streamed = False
         terminal: AgentEvent | None = None
@@ -805,8 +824,7 @@ class QoderGateway:
                     web_enabled=bool(web_tools),
                     read_enabled=read_enabled,
                     allowed_mcp_tools=frozenset(
-                        f"mcp__{TOOL_SERVER_NAME}__{definition.name}"
-                        for definition in visible
+                        f"mcp__{TOOL_SERVER_NAME}__{definition.name}" for definition in visible
                     ),
                     on_timeline_change=turn.on_timeline_change,
                 )

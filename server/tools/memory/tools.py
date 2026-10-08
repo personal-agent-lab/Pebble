@@ -6,7 +6,7 @@
 """
 
 from server.memory.service import MemoryStore
-from server.tools.registry import SideEffect, ToolRegistry
+from server.tools.registry import Effect, ToolPolicy, ToolRegistry
 
 
 def edit_memory(operations: list[dict], *, memory_store: MemoryStore) -> dict:
@@ -73,14 +73,15 @@ OPERATIONS_SCHEMA = {
     },
 }
 
-review_registry = ToolRegistry()
-judge_registry = ToolRegistry()
+review_registry = ToolRegistry(session_scope="memory_review")
+judge_registry = ToolRegistry(session_scope="memory_judge")
 
 for registry in (judge_registry, review_registry):
     registry.register(
         edit_memory,
         name="memory_edit",
         description=EDIT_DESCRIPTION,
-        side_effect=SideEffect.LOCAL_WRITE,
+        effect=Effect.LOCAL_WRITE,
+        policy=ToolPolicy.DEDICATED_SESSION_ONLY,
         param_schemas={"operations": OPERATIONS_SCHEMA},
     )

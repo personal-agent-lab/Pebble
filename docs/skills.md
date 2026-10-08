@@ -65,11 +65,13 @@
 
 ## 6. 工具面
 
-| 工具 | 副作用 | 语义 |
-| --- | --- | --- |
-| `skill_list` | `READONLY` | 列技能（尊重排除与状态）。 |
-| `skill_view` | `READONLY` | 读正文或附件，返回当前 `revision` 与文件清单。 |
-| `skill_manage` | `LOCAL_WRITE_USER_TURN` | 修改技能。仅当**用户本轮明确要求**时使用；description 内置学习策略：沉淀可复用方法，不存对话记录。 |
+| 工具 | Effect | Policy | 语义 |
+| --- | --- | --- | --- |
+| `skill_list` | `READ_ONLY` | `ALL_TURNS` | 列技能（尊重排除与状态）。 |
+| `skill_view` | `READ_ONLY` | `ALL_TURNS` | 读正文或附件，返回当前 `revision` 与文件清单。 |
+| `skill_manage` | `LOCAL_WRITE` | `USER_TURN_ONLY` | 修改技能。仅当**用户本轮明确要求**时使用；description 内置学习策略：沉淀可复用方法，不存对话记录。 |
+
+后台复盘使用独立专用工具集：`skill_list`、`skill_view` 为只读，`skill_propose_change` 收集本地候选变更，三者均采用 `DEDICATED_SESSION_ONLY`，仅在技能复盘会话开放。
 
 ## 7. 存储与持久化
 

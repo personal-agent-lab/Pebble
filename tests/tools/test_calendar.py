@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from icalendar import Calendar, Event
 
-from server.agent.toolset import ALLOWED_EFFECTS, ToolDeps, TurnKind, build_tools, exposed_tools
+from server.agent.toolset import ToolDeps, TurnKind, build_tools, exposed_tools
 from server.approval.service import ConfirmationService
 from server.config import get_settings
 from server.db import init_db, session
@@ -279,7 +279,7 @@ def test_calendar_tools_follow_turn_visibility(calendar_settings):
     confirmations = ConfirmationService(None, create_event=lambda **_: {})
     tools = build_tools(_deps(confirmations=confirmations))
     visible = {
-        kind: {tool.name for tool in exposed_tools(tools, allowed=ALLOWED_EFFECTS[kind])}
+        kind: {tool.name for tool in exposed_tools(tools, kind=kind)}
         for kind in TurnKind
     }
     assert {

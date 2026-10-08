@@ -32,7 +32,7 @@
 
 **外部写与凭证**
 
-- 外部写的唯一闸门是 Confirmation（`server/approval/`）：`EXTERNAL_WRITE` 级函数（邮件发送与核实）永不注册给模型；`DIRECT_EXTERNAL_WRITE` 与 `LOCAL_WRITE_USER_TURN` 只在用户亲自发起的轮暴露。暴露矩阵在 `server/agent/toolset.py` 的 `ALLOWED_EFFECTS`，改工具副作用前先对照 `docs/spec.md` §4.1。
+- 外部写的唯一闸门是 Confirmation（`server/approval/`）：邮件发送与核实函数永不注册给模型；工具必须显式声明 `Effect` 与 `ToolPolicy`，模型外部写工具仅允许 `EXTERNAL_WRITE + USER_TURN_ONLY`。暴露矩阵在 `server/agent/toolset.py` 的 `ALLOWED_POLICIES`，改权限前先对照 `docs/spec.md` §4.1；后台专用工具按会话范围隔离。
 - 模型与外部服务凭证仅存服务端，不进入聊天上下文、前端或 Git。
 
 **持久化**
@@ -55,7 +55,7 @@ server/
   agent/      # SDK 网关、轮次工具集、上下文组装、MCP 工具服务、模型目录
   gateway/    # 运行时调度、事件流、轮次契约
   approval/   # Confirmation：外部写唯一闸门
-  tools/      # 各域工具（gmail/ calendar/ memory/ personal_kb/）+ registry（SideEffect）
+  tools/      # 各域工具（gmail/ calendar/ memory/ personal_kb/）+ registry（Effect / ToolPolicy）
   skills/     # 技能服务、复盘、运行时装配
   memory/     # 记忆服务、判断、回顾
   sessions/   # 时间线、观测、历史检索

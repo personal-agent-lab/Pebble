@@ -51,26 +51,40 @@ Agent 执行层使用 Qoder Agent SDK：推理与工具调用循环、SDK 会话
 
 ### 4.1 外部写授权
 
-外部写（发邮件、建日程）永远不直接交给模型，由两层程序机制保证：
+外部写由 Confirmation 执行。工具的业务副作用与模型开放条件分开声明，均由代码定义，模型不能修改。
 
-**副作用分级。** 每个工具声明一个 `SideEffect`，装配时按轮次过滤，模型无法篡改：
+**业务副作用（Effect）。** 每个工具必须显式声明，不使用默认只读：
 
-| 级别 | 含义 |
+| Effect | 含义 |
 | --- | --- |
-| `READONLY` | 只读查询。 |
-| `LOCAL_WRITE` | 本地写入（如邮件草稿），用户轮与执行结果回报轮可见。 |
-| `LOCAL_WRITE_ALL_TURNS` | 本地写入但触发轮也可见；前提是写入有提示、有版本、可恢复（如资料的新建与修改）。 |
-| `LOCAL_WRITE_USER_TURN` | 本地写入，仅用户亲自发起的轮可见（如资料的删除、移动、恢复）。 |
-| `DIRECT_EXTERNAL_WRITE` | 外部写入，仅用户亲自发起的轮可见（当前仅日程创建）。 |
-| `EXTERNAL_WRITE` | 外部写入，**严禁暴露给模型**；只由 Confirmation 在用户确认后由程序调用（当前仅邮件发送与核实）。 |
+| `READ_ONLY` | 查询信息，不修改业务内容；内部观测、加载记录与缓存不改变分类。 |
+| `LOCAL_WRITE` | 修改本地内容或状态。 |
+| `EXTERNAL_WRITE` | 在外部服务产生写入；当前模型工具仅日程创建使用此类别。 |
+
+**开放策略（ToolPolicy）。** 每个工具必须显式声明：
+
+| Policy | 含义 |
+| --- | --- |
+| `ALL_TURNS` | 前台三类轮次均可用，不包含后台专用会话。 |
+| `USER_OR_RESULT_TURN` | 用户消息轮与执行结果回报轮可用。 |
+| `USER_TURN_ONLY` | 仅用户亲自发起的消息轮可用。 |
+| `DEDICATED_SESSION_ONLY` | 仅所属工具注册表绑定的专用会话可用，前台永不开放。 |
+
+只读工具采用 `ALL_TURNS` 或专用会话策略；本地写入可采用上述四类策略；模型外部写工具仅允许 `USER_TURN_ONLY`。注册时拒绝非法组合，专用工具必须绑定非空会话范围，前台工具不得绑定专用范围。
 
 **按轮次的暴露矩阵。** 触发轮与结果回报轮的输入来自系统而非用户，外部内容中的指令不得驱动外部写入或删除：
 
-| 轮次 | 允许的副作用 |
+| 轮次 | 允许的策略 |
 | --- | --- |
-| `new_mail` | `READONLY`、`LOCAL_WRITE_ALL_TURNS` |
-| `message` | 全部本地写入 + `DIRECT_EXTERNAL_WRITE`（`EXTERNAL_WRITE` 永不出现） |
-| `execution_result` | `READONLY`、`LOCAL_WRITE`、`LOCAL_WRITE_ALL_TURNS` |
+| `new_mail` | `ALL_TURNS` |
+| `message` | `ALL_TURNS`、`USER_OR_RESULT_TURN`、`USER_TURN_ONLY` |
+| `execution_result` | `ALL_TURNS`、`USER_OR_RESULT_TURN` |
+
+资料的新建与修改采用 `LOCAL_WRITE + ALL_TURNS`，必须有提示、有版本、可恢复；草稿与任务归档采用 `LOCAL_WRITE + USER_OR_RESULT_TURN`；资料删除、移动、恢复与前台技能修改采用 `LOCAL_WRITE + USER_TURN_ONLY`。
+
+每个专用会话只能获得其专用工具集，记忆判断、记忆回顾、技能复盘相互隔离。前台与专用会话共用同一筛选入口；筛选结果同时用于 MCP 服务注册与 SDK 工具允许列表。
+
+开放策略只决定工具是否可用，不等于用户已经授权具体操作。日程创建仅在用户轮开放，内部经 Confirmation 执行，无需用户再次确认，仍须遵守日历域的必填项与冲突规则。邮件发送与核实函数不注册为模型工具，只注入 Confirmation；发送必须基于用户确认的最终不可变版本，核实沿用该执行记录，不重新取得模型授权。
 
 ### 4.2 领域中立
 

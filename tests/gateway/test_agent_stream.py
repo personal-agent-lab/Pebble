@@ -26,7 +26,7 @@ from server.agent.context import Material, assemble
 from server.agent.materials import FULL_NOTE
 from server.agent.mcp import MCP_MOUNT_PATH, TOOL_SERVER_NAME, ToolServer
 from server.agent.prompt import BASE_PROMPT
-from server.agent.toolset import ALLOWED_EFFECTS, ToolDeps, TurnKind, exposed_tools
+from server.agent.toolset import ToolDeps, TurnKind, exposed_tools
 from server.config import Settings
 from server.db import init_db
 from server.errors import DependencyUnavailableError
@@ -37,7 +37,7 @@ from server.skills.service import SkillService
 from server.tools.gmail.service import MailDraftStore
 from server.tools.gmail.trigger import new_mail_content
 from server.tools.personal_kb.service import KbStore
-from server.tools.registry import SideEffect, ToolDefinition
+from server.tools.registry import Effect, ToolDefinition, ToolPolicy
 from tests.support import seed_memory
 from tests.support.gmail_double import MockGmailClient
 from tests.support.mcp_http import mcp_session, tool_payload
@@ -85,7 +85,7 @@ def options_for(gateway: QoderGateway, kind: TurnKind, **turn_fields):
 
 
 def options_for_turn(gateway: QoderGateway, turn: Turn):
-    visible = exposed_tools(gateway.tools, allowed=ALLOWED_EFFECTS[turn.kind])
+    visible = exposed_tools(gateway.tools, kind=turn.kind)
     return gateway._options(turn, visible=visible, path=f"{MCP_MOUNT_PATH}/{TURN_TOKEN}")
 
 
@@ -118,7 +118,7 @@ def test_new_mail_turn_sees_only_readonly_tools(settings):
     gateway = make_gateway(settings)
     options = options_for(gateway, TurnKind.NEW_MAIL)
 
-    readonly = exposed_tools(gateway.tools, allowed=ALLOWED_EFFECTS[TurnKind.NEW_MAIL])
+    readonly = exposed_tools(gateway.tools, kind=TurnKind.NEW_MAIL)
     assert options.allowed_tools == [f"mcp__pebble__{tool.name}" for tool in readonly]
     visible = {name.rsplit("__", 1)[-1] for name in options.allowed_tools}
     assert not {"gmail_prepare_reply", "gmail_update_draft"} & visible
@@ -261,8 +261,10 @@ def test_image_attachment_uses_text_input_and_workspace_read(settings):
 
 @pytest.mark.parametrize("kind", list(TurnKind))
 def test_memory_tools_are_never_visible_in_foreground_turns(settings, kind):
+    gateway = make_gateway(settings)
+    gateway.tools.extend([*gateway.judge_tools, *gateway.review_tools])
     names = {
-        name.rsplit("__", 1)[-1] for name in options_for(make_gateway(settings), kind).allowed_tools
+        name.rsplit("__", 1)[-1] for name in options_for(gateway, kind).allowed_tools
     }
 
     # 记忆写入只发生在判断与回顾的一次性会话，前台任何轮次都看不到记忆工具。
@@ -315,21 +317,12 @@ def test_judge_options_expose_judgment_tools_in_fresh_session(settings):
     assert options.include_partial_messages is False
 
 
-@pytest.mark.parametrize("kind", list(TurnKind))
-def test_external_write_tools_are_never_visible_to_the_model(settings, kind):
-    gateway = make_gateway(settings)
-    send_now = ToolDefinition(
-        name="gmail_send_message",
-        description="真实发送邮件；只由 Confirmation 调用。",
-        func=lambda **_: None,
-        side_effect=SideEffect.EXTERNAL_WRITE,
-    )
-    gateway.tools = [*gateway.tools, send_now]
-
-    options = options_for(gateway, kind)
-
-    assert exposed_tools([send_now], allowed=ALLOWED_EFFECTS[kind]) == []
-    assert not any("send" in name for name in options.allowed_tools)
+def test_external_write_requires_user_turn_policy():
+    with pytest.raises(ValueError, match="不允许的工具权限组合"):
+        ToolDefinition(
+            name="send_now", description="", func=lambda: None,
+            effect=Effect.EXTERNAL_WRITE, policy=ToolPolicy.ALL_TURNS,
+        )
 
 
 def test_execution_result_enters_system_prompt(settings):
@@ -816,7 +809,7 @@ def test_skill_review_uses_only_staged_skill_tools(settings, monkeypatch):
         gateway,
         [
             ToolCall(
-                "skill_manage",
+                "skill_propose_change",
                 {
                     "action": "create",
                     "payload": {
@@ -841,7 +834,7 @@ def test_skill_review_uses_only_staged_skill_tools(settings, monkeypatch):
     assert {name.rsplit("__", 1)[-1] for name in captured["options"].allowed_tools} == {
         "skill_list",
         "skill_view",
-        "skill_manage",
+        "skill_propose_change",
     }
     assert len(candidates) == 1
     assert candidates[0]["evidence_item_ids"] == ["item-1"]
@@ -870,8 +863,8 @@ def test_skill_review_rejects_bad_ref_then_accepts_corrected_ref(settings, monke
     captured = install_sdk(
         monkeypatch, gateway,
         [
-            ToolCall("skill_manage", {**base, "evidence_refs_to_use": ["E99"]}),
-            ToolCall("skill_manage", {**base, "evidence_refs_to_use": ["E1"]}),
+            ToolCall("skill_propose_change", {**base, "evidence_refs_to_use": ["E99"]}),
+            ToolCall("skill_propose_change", {**base, "evidence_refs_to_use": ["E1"]}),
             result(),
         ],
     )
@@ -896,7 +889,7 @@ def test_skill_review_bad_ref_without_retry_fails_window(settings, monkeypatch):
     )
     task_id = gateway.tasks_store.create_task("复盘")["task_id"]
     install_sdk(monkeypatch, gateway, [
-        ToolCall("skill_manage", {
+        ToolCall("skill_propose_change", {
             "action": "create",
             "payload": {
                 "skill_id": "learned", "name": "方法", "description": "可复用方法", "body": "步骤",
@@ -922,6 +915,8 @@ def test_judge_memory_records_real_tool_results(settings, monkeypatch):
     gateway = make_gateway(settings)
     task_id = gateway.tasks_store.create_task("判断记忆")["task_id"]
 
+    # 即使误混入前台与另一个后台会话的工具，也只注册判断会话的工具。
+    gateway.judge_tools.extend([*gateway.tools, *gateway.review_tools])
     records = run_judge(
         gateway,
         monkeypatch,

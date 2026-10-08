@@ -2,7 +2,7 @@
 
 import pytest
 
-from server.agent.toolset import ALLOWED_EFFECTS, TurnKind
+from server.agent.toolset import ALLOWED_POLICIES, TurnKind
 from server.db import init_db
 from server.errors import SkillUnknownError
 from server.skills.models import ChangeAction, ChangeActor, SkillState
@@ -14,7 +14,7 @@ from server.skills.runtime import (
 )
 from server.skills.service import CATALOG_LIMIT, ChangeRequest, SkillService
 from server.skills.tools import skill_list, skill_manage, skill_view
-from server.tools.registry import SideEffect, default_registry
+from server.tools.registry import Effect, default_registry
 
 
 @pytest.fixture
@@ -261,14 +261,14 @@ def test_skill_manage_records_foreground_change(service: SkillService) -> None:
 def test_skill_tool_visibility_per_turn_kind() -> None:
     definitions = {definition.name: definition for definition in default_registry.list_tools()}
     assert {"skill_list", "skill_view", "skill_manage"} <= set(definitions)
-    assert definitions["skill_manage"].side_effect is SideEffect.LOCAL_WRITE_USER_TURN
-    assert definitions["skill_view"].side_effect is SideEffect.READONLY
+    assert definitions["skill_manage"].effect is Effect.LOCAL_WRITE
+    assert definitions["skill_view"].effect is Effect.READ_ONLY
 
     for kind in TurnKind:
         visible = {
             definition.name
             for definition in definitions.values()
-            if definition.side_effect in ALLOWED_EFFECTS[kind]
+            if definition.policy in ALLOWED_POLICIES[kind]
         }
         assert {"skill_list", "skill_view"} <= visible
         if kind is TurnKind.MESSAGE:

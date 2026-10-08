@@ -8,7 +8,7 @@ from server.agent.context import Material
 NEW_MAIL_GOAL = "处理新收到的邮件"
 NEW_MAIL_MESSAGE = (
     "收到新邮件，邮件与线程标识见系统提示。"
-    "请阅读后用一段连续的文字向用户说明这封邮件，按邮件的价值决定详略；"
+    "请你阅读后首先向用户总结这封邮件的内容。如果你认为这封邮件需要用户进一步处理，请你给出建议，否则就只需总结。"
     "用户没有明确要求之前不要起草回复。"
 )
 NEW_MAIL_MATERIAL_TITLE = "本轮触发：新邮件"

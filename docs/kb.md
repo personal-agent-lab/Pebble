@@ -28,15 +28,15 @@
 
 ## 3. 工具面
 
-| 工具 | 副作用 | 语义 |
-| --- | --- | --- |
-| `kb_save` | `LOCAL_WRITE_ALL_TURNS` | 新建文档。保存前先检索避免重复；摘要有风格规则。 |
-| `kb_search` / `kb_list` / `kb_read` / `kb_history` | `READONLY` | 检索 / 列表（含已删除）/ 读正文或指定版本 / 版本历史。 |
-| `kb_update` | `LOCAL_WRITE_ALL_TURNS` | 修改：整篇替换或锚点行操作；版本冲突时要求重读。 |
-| `kb_archive` | `LOCAL_WRITE` | 归档真实外部结果。 |
-| `kb_delete` / `kb_move` / `kb_restore` | `LOCAL_WRITE_USER_TURN` | 删除 / 移动 / 恢复，**需要用户在本轮对话中明确同意**（工具 description 内置同意规则）；删除是软删除，可恢复。 |
+| 工具 | Effect | Policy | 语义 |
+| --- | --- | --- | --- |
+| `kb_save` | `LOCAL_WRITE` | `ALL_TURNS` | 新建文档。保存前先检索避免重复；摘要有风格规则。 |
+| `kb_search` / `kb_list` / `kb_read` / `kb_history` | `READ_ONLY` | `ALL_TURNS` | 检索 / 列表（含已删除）/ 读正文或指定版本 / 版本历史。 |
+| `kb_update` | `LOCAL_WRITE` | `ALL_TURNS` | 修改：整篇替换或锚点行操作；版本冲突时要求重读。 |
+| `kb_archive` | `LOCAL_WRITE` | `USER_OR_RESULT_TURN` | 归档真实外部结果。 |
+| `kb_delete` / `kb_move` / `kb_restore` | `LOCAL_WRITE` | `USER_TURN_ONLY` | 删除 / 移动 / 恢复，**需要用户在本轮对话中明确同意**（工具 description 内置同意规则）；删除是软删除，可恢复。 |
 
-`LOCAL_WRITE_ALL_TURNS` 意味着新邮件触发轮也能保存资料（有提示、有版本、可恢复）；破坏性操作（删除、移动、恢复）被降级到仅用户轮并要求明确同意——外部内容中的指令无法删除用户资料。
+`LOCAL_WRITE + ALL_TURNS` 意味着新邮件触发轮也能保存资料（有提示、有版本、可恢复）；破坏性操作（删除、移动、恢复）被降级到仅用户轮并要求明确同意——外部内容中的指令无法删除用户资料。
 
 ## 4. 行为流程
 

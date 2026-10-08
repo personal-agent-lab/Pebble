@@ -4,7 +4,7 @@
 
 - 装配：工具函数上的仅关键字参数按名字绑定到 `ToolDeps` 的字段，绑定在装配期完成，
   缺依赖或名字对不上直接报错，不推迟到模型调用时；
-- 范围：按本轮允许的副作用筛选。新邮件轮除只读外只开放声明为各轮可用的本地写，
+- 范围：按本轮允许的策略筛选。新邮件轮除只读外只开放声明为各轮可用的本地写，
   其余写工具只出现在后续轮次。
 
 接入新服务（日历、知识库等）时只需在 `ToolDeps` 加字段，工具函数声明同名仅关键字参数，
@@ -29,7 +29,7 @@ from server.tools.calendar.tools import CalendarReader
 from server.tools.gmail.client import BaseGmailClient
 from server.tools.gmail.service import MailDraftStore
 from server.tools.personal_kb.service import KbStore
-from server.tools.registry import SideEffect, ToolDefinition, ToolRegistry, default_registry
+from server.tools.registry import ToolDefinition, ToolPolicy, ToolRegistry, default_registry
 
 
 class TurnKind(StrEnum):
@@ -40,23 +40,21 @@ class TurnKind(StrEnum):
     EXECUTION_RESULT = "execution_result"
 
 
-# 每类轮次允许模型看到并调用的副作用集合。EXTERNAL_WRITE 永不出现，由 Confirmation 在用户
-# 确认最终版本后调用。DIRECT_EXTERNAL_WRITE 与 LOCAL_WRITE_USER_TURN 只出现在用户亲自发起的
-# 轮次：触发轮与结果回传轮的输入都来自系统而非用户，外部内容中的指令无法驱动外部写入或删除。
-# 触发轮只额外开放 LOCAL_WRITE_ALL_TURNS，其写入有提示、有版本、可恢复。
-ALLOWED_EFFECTS: dict[TurnKind, frozenset[SideEffect]] = {
-    TurnKind.NEW_MAIL: frozenset({SideEffect.READONLY, SideEffect.LOCAL_WRITE_ALL_TURNS}),
+# 轮次只决定开放策略；业务副作用不再隐含轮次权限。
+ALLOWED_POLICIES: dict[TurnKind, frozenset[ToolPolicy]] = {
+    TurnKind.NEW_MAIL: frozenset({ToolPolicy.ALL_TURNS}),
     TurnKind.MESSAGE: frozenset(
         {
-            SideEffect.READONLY,
-            SideEffect.LOCAL_WRITE,
-            SideEffect.LOCAL_WRITE_ALL_TURNS,
-            SideEffect.LOCAL_WRITE_USER_TURN,
-            SideEffect.DIRECT_EXTERNAL_WRITE,
+            ToolPolicy.ALL_TURNS,
+            ToolPolicy.USER_OR_RESULT_TURN,
+            ToolPolicy.USER_TURN_ONLY,
         }
     ),
     TurnKind.EXECUTION_RESULT: frozenset(
-        {SideEffect.READONLY, SideEffect.LOCAL_WRITE, SideEffect.LOCAL_WRITE_ALL_TURNS}
+        {
+            ToolPolicy.ALL_TURNS,
+            ToolPolicy.USER_OR_RESULT_TURN,
+        }
     ),
 }
 
@@ -104,7 +102,18 @@ def build_tools(
 
 
 def exposed_tools(
-    tools: Iterable[ToolDefinition], *, allowed: frozenset[SideEffect]
+    tools: Iterable[ToolDefinition],
+    *,
+    kind: TurnKind | None = None,
+    session_scope: str | None = None,
 ) -> list[ToolDefinition]:
-    """本轮模型可见的工具：副作用落在允许集合内的才出现，其余不进入 SDK。"""
-    return [tool for tool in tools if tool.side_effect in allowed]
+    """统一筛选前台轮次与专用会话工具；调用方必须指定且只能指定一种上下文。"""
+    if (kind is None) == (session_scope is None) or session_scope == "":
+        raise ValueError("必须指定一种工具执行上下文：轮次或专用会话范围")
+    if kind is not None:
+        return [tool for tool in tools if tool.policy in ALLOWED_POLICIES[kind]]
+    return [
+        tool
+        for tool in tools
+        if tool.policy is ToolPolicy.DEDICATED_SESSION_ONLY and tool.session_scope == session_scope
+    ]
