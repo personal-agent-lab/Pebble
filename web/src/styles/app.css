@@ -568,7 +568,6 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   font: inherit; font-size: var(--text-xs); color: var(--color-muted);
   background: none; border: none; cursor: pointer; text-align: left;
 }
-.tool-call-row:hover .tool-call-name { text-decoration: underline; }
 .tool-call-name { flex: none; font-family: var(--font-mono); }
 .tool-call-name.readable { font-family: inherit; }
 .tool-call-args {
@@ -1662,7 +1661,6 @@ textarea.input { resize: vertical; min-height: 108px; font-family: var(--font-bo
   font: inherit; font-size: var(--text-xs); color: var(--color-muted);
   background: none; border: none; cursor: pointer; text-align: left;
 }
-.run-details-header:hover .run-details-title { text-decoration: underline; }
 .run-details-title { flex: none; }
 /* 分组头：一行「已思考 …」加下方通栏分隔线，把过程区和结果隔开。
    分隔线与下面的过程区贴得近一些：线是这块内容的开始，不是独立条目。 */
