@@ -9,7 +9,7 @@ from pathlib import Path
 
 from server.config import default_model, get_settings
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 SCHEMA_V1 = (
     "CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
@@ -462,6 +462,15 @@ SCHEMA_V26 = (
     "ALTER TABLE skill_reviews ADD COLUMN failure TEXT",
 )
 
+# 程序询问与简短状态通知分开呈现；旧记忆候选询问保持内容与关联不变。
+SCHEMA_V27 = (
+    "ALTER TABLE task_timeline_items ADD COLUMN presentation TEXT "
+    "CHECK(presentation IS NULL OR presentation = 'message')",
+    "UPDATE task_timeline_items SET presentation = 'message' "
+    "WHERE kind = 'notice' AND task_id IN (SELECT task_id FROM memory_proposals) "
+    "AND text LIKE '我回顾了近期对话，建议调整以下长期记忆。%'",
+)
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
     2: SCHEMA_V2,
@@ -489,6 +498,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     24: SCHEMA_V24,
     25: SCHEMA_V25,
     26: SCHEMA_V26,
+    27: SCHEMA_V27,
 }
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000

@@ -113,7 +113,9 @@ class MemoryProposals:
                 )
                 runs.claim(conn, run_id, now)
                 runs.finish(conn, run_id, "done", None, now)
-                timeline.insert_notice(conn, conversation_id, run_id, self.question(content))
+                timeline.insert_notice(
+                    conn, conversation_id, run_id, self.question(content), conversation=True
+                )
                 conn.execute(
                     "INSERT INTO memory_proposals "
                     "(proposal_id,task_id,fingerprint,status,created_at) "
@@ -192,7 +194,9 @@ class MemoryProposals:
                 )
                 self._save(proposal_id, payload)
                 question = self.question(payload)
-                timeline.insert_notice(conn, task_id, active["run_id"], question)
+                timeline.insert_notice(
+                    conn, task_id, active["run_id"], question, conversation=True
+                )
                 return {"changed": False, "staged": True, "question": question}
             elif decision == "apply":
                 if (

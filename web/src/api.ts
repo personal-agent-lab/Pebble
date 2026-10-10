@@ -104,6 +104,7 @@ export type TimelineItem =
   | {
       item_id: string;
       kind: "notice";
+      presentation?: "message";
       run_id: string;
       text: string;
       created_at: string;

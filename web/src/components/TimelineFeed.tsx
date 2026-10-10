@@ -244,6 +244,14 @@ export default function TimelineFeed({
       </div>
       {item.failure && <FailureDetails failure={item.failure} />}
     </div>;
+    if (item.kind === "notice" && item.presentation === "message") return <div key={item.item_id} {...mark(item.item_id)}>
+      <div className="msg agent">
+        <div className="msg-body"><span className="sr-only">Pebble 说：</span>
+          <div className="bubble"><Markdown text={item.text} /></div>
+          <MessageActions text={item.text} createdAt={item.created_at} pinned={index === items.length - 1} />
+        </div>
+      </div>
+    </div>;
     if (item.kind === "notice") return <div key={item.item_id}>
       <div className="sys-row" {...mark(item.item_id)}>
         <span>{item.text}</span>

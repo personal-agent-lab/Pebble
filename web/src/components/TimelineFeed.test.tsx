@@ -502,3 +502,21 @@ test("没有观测数据的轮次仍折叠过程，折叠头只显示「已思�
   await userEvent.click(screen.getByRole("button", { name: "已思考 未记录" }));
   expect(screen.getByText("我先查一下")).toBeTruthy();
 });
+
+
+test("程序询问使用普通回答排版并渲染段落与列表，用户可以继续回复", () => {
+  const items: TimelineItem[] = [
+    { item_id: "question", kind: "notice", presentation: "message", run_id: "proposal",
+      text: "我建议调整记忆。\n\n**原内容**\n\n- 旧偏好\n\n**建议内容**\n\n- 新偏好\n\n你同意吗？", created_at: "2026-10-10T00:00:00Z" },
+    { item_id: "reply", kind: "text", role: "user", run_id: "reply-run", text: "同意", created_at: "2026-10-10T00:01:00Z" },
+  ];
+  const { container } = render(<MemoryRouter><TimelineFeed taskId="task-1" items={items} running={false}
+    sendMessage={vi.fn()} onChanged={vi.fn()} /></MemoryRouter>);
+  const question = container.querySelector("#item-question")!;
+  expect(question.querySelector(".msg.agent .bubble")).toBeTruthy();
+  expect(question.querySelectorAll("li")).toHaveLength(2);
+  expect(question.querySelector("strong")?.textContent).toBe("原内容");
+  expect(question.querySelector(".sys-row")).toBeNull();
+  expect(within(question as HTMLElement).getByRole("button", { name: "复制回答" })).toBeTruthy();
+  expect(container.querySelector("#item-reply .msg.user")?.textContent).toContain("同意");
+});

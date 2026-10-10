@@ -114,14 +114,19 @@ def insert_error(
     return item_id
 
 
-def insert_notice(conn: sqlite3.Connection, task_id: str, run_id: str, text: str) -> str:
+def insert_notice(
+    conn: sqlite3.Connection, task_id: str, run_id: str, text: str, *, conversation: bool = False
+) -> str:
     """程序生成的提示（如记忆变更结果）：不是模型输出，role 为空。"""
     item_id = str(uuid4())
     conn.execute(
         "INSERT INTO task_timeline_items "
-        "(item_id, task_id, run_id, sequence, kind, role, text, operation_id, created_at) "
-        "VALUES (?, ?, ?, ?, 'notice', NULL, ?, NULL, ?)",
-        (item_id, task_id, run_id, next_sequence(conn, task_id), text, timestamp()),
+        "(item_id, task_id, run_id, sequence, kind, role, text, operation_id, created_at, "
+        "presentation) VALUES (?, ?, ?, ?, 'notice', NULL, ?, NULL, ?, ?)",
+        (
+            item_id, task_id, run_id, next_sequence(conn, task_id), text, timestamp(),
+            "message" if conversation else None,
+        ),
     )
     return item_id
 
@@ -267,6 +272,10 @@ class TimelineStore:
                             **base,
                             "text": item["text"],
                             **({"failure": json.loads(item["failure"])} if item["failure"] else {}),
+                            **(
+                                {"presentation": item["presentation"]}
+                                if item["presentation"] else {}
+                            ),
                         }
                     )
                 elif item["kind"] == "tool":

@@ -118,6 +118,8 @@ def test_expired_version_requires_refresh_then_another_user_reply(env):
         candidate["task_id"], candidate["proposal_id"], "refresh", operations
     )
     assert "更新过的偏好" in result["question"]
+    question_item = timeline.TimelineStore(tasks.path).list_items(candidate["task_id"])["items"][-1]
+    assert question_item["presentation"] == "message"
     with pytest.raises(MemoryValidationError):
         proposals.resolve(candidate["task_id"], candidate["proposal_id"], "apply")
     finish_turn(run_id)
@@ -176,3 +178,32 @@ def test_user_can_adjust_candidate_in_foreground(env):
     assert store.snapshot()["user"]["content"] == "调整后的偏好"
     assert store.snapshot()["memory"]["content"] == ""
     assert proposals.for_task(candidate["task_id"])["status"] == "applied"
+
+
+def test_proposal_question_uses_conversation_presentation(env):
+    _, tasks, _, _, _, candidate = env
+    item = timeline.TimelineStore(tasks.path).list_items(candidate["task_id"])["items"][0]
+    assert item["kind"] == "notice"
+    assert item["presentation"] == "message"
+    assert "你同意" in item["text"]
+
+
+def test_upgrade_formats_existing_questions_only(env):
+    _, tasks, _, _, _, candidate = env
+    with session(tasks.path) as conn, write(conn):
+        conn.execute("ALTER TABLE task_timeline_items DROP COLUMN presentation")
+        conn.execute("UPDATE schema_meta SET version = 26")
+        # 同一询问对话中的简短状态提示仍按系统提示显示。
+        run_id = conn.execute(
+            "SELECT run_id FROM agent_runs WHERE task_id = ?", (candidate["task_id"],)
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO task_timeline_items "
+            "(item_id,task_id,run_id,sequence,kind,text,created_at) "
+            "VALUES (?, ?, ?, 1, 'notice', '已整理记忆', ?)",
+            (str(uuid4()), candidate["task_id"], run_id, timestamp()),
+        )
+    init_db(tasks.path)
+    items = timeline.TimelineStore(tasks.path).list_items(candidate["task_id"])["items"]
+    assert items[0]["presentation"] == "message"
+    assert "presentation" not in items[1]
