@@ -34,7 +34,8 @@ from server.failures import FailureError
 from server.gateway.agent_contract import AgentProtocolError, Turn, TurnAttachment
 from server.gateway.runtime import execution_result_content
 from server.sessions.service import SessionStore
-from server.skills.service import SkillService
+from server.skills.models import ChangeAction, ChangeActor
+from server.skills.service import ChangeRequest, SkillService
 from server.tools.gmail.service import MailDraftStore
 from server.tools.gmail.trigger import new_mail_content
 from server.tools.personal_kb.service import KbStore
@@ -742,6 +743,63 @@ def test_failed_stream_does_not_commit_material_checkpoint(settings, monkeypatch
     install_sdk(monkeypatch, gateway, [result(error=True, text="失败")])
     asyncio.run(collect(gateway.stream_turn(message_turn("你好"))))
     assert not (gateway.workspaces / "task-1" / ".context-materials.json").exists()
+
+
+def test_skill_delta_and_loaded_revision_survive_mcp_and_gateway_restart(settings, monkeypatch):
+    init_db()
+    skills = SkillService(settings.data_dir, settings.db_path)
+
+    def create(skill_id):
+        skills.record_change(ChangeRequest(
+            action=ChangeAction.CREATE, actor=ChangeActor.USER, reason="测试",
+            payload={"skill_id": skill_id, "name": skill_id,
+                     "description": f"描述-{skill_id}", "body": "旧正文"},
+        ))
+
+    def gateway():
+        return QoderGateway(
+            ToolDeps(drafts=MailDraftStore(), tasks=SessionStore(),
+                     gmail=MockGmailClient(), skills=skills),
+            ToolServer(), settings=configured(settings),
+        )
+
+    create("first")
+    first = gateway()
+    captured = install_sdk(
+        monkeypatch, first, [ToolCall("skill_view", {"skill_id": "first"}), result()]
+    )
+    asyncio.run(collect(first.stream_turn(message_turn("开始"))))
+    assert not captured["results"][0].isError
+    checkpoint = json.loads((first.workspaces / "task-1" / ".context-materials.json").read_text())
+    assert checkpoint["reads"]["first"]["version"] == skills.get("first").revision
+
+    create("second")
+    restarted = gateway()
+    captured = install_sdk(monkeypatch, restarted, [result()])
+    turn = replace(message_turn("继续"), sdk_session_id="session-1")
+    asyncio.run(collect(restarted.stream_turn(turn)))
+    text = "\n".join(captured["contexts"])
+    assert "技能目录更新" in text and "描述-second" in text and "描述-first" not in text
+
+    skills.record_change(ChangeRequest(
+        action=ChangeAction.PATCH, actor=ChangeActor.USER, reason="测试更新",
+        skill_id="first", base_revision=skills.get("first").revision,
+        payload={"body": "最新正文"},
+    ))
+    captured = install_sdk(
+        monkeypatch, restarted, [ToolCall("skill_view", {"skill_id": "first"}), result()]
+    )
+    asyncio.run(collect(restarted.stream_turn(turn)))
+    text = "\n".join(captured["contexts"])
+    assert "已读取技能更新" in text and "重新读取" in text
+    assert tool_payload(captured["results"][0])["body"] == "最新正文"
+    captured = install_sdk(monkeypatch, restarted, [result()])
+    asyncio.run(collect(restarted.stream_turn(turn)))
+    assert captured["contexts"] == []
+
+    captured = install_sdk(monkeypatch, restarted, [result()])
+    asyncio.run(collect(restarted.stream_turn(replace(turn, excluded_skill_ids=("first",)))))
+    assert "停止使用此前读取" in "\n".join(captured["contexts"])
 
 
 def test_content_filtered_after_partial_answer_is_a_structured_failure(settings, monkeypatch):

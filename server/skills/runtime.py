@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -40,6 +41,7 @@ class Scope:
     excluded_skill_ids: frozenset[str] = frozenset()
     auto_match: bool = True
     manual_skill_ids: tuple[str, ...] = ()
+    on_load: Callable[[str, str, str], None] | None = None
 
 
 _current: ContextVar[Scope | None] = ContextVar("pebble_skill_scope", default=None)
@@ -60,7 +62,7 @@ def reset_scope(token: Token[Scope | None]) -> None:
 
 
 @contextmanager
-def turn_scope(*, task_id, run_id, skills=(), excluded_skill_ids=(), auto_match=True):
+def turn_scope(*, task_id, run_id, skills=(), excluded_skill_ids=(), auto_match=True, on_load=None):
     """把本轮的技能选择设为当前范围；轮次结束恢复。"""
 
     scope = Scope(
@@ -69,6 +71,7 @@ def turn_scope(*, task_id, run_id, skills=(), excluded_skill_ids=(), auto_match=
         excluded_skill_ids=frozenset(excluded_skill_ids),
         auto_match=auto_match,
         manual_skill_ids=tuple(skills),
+        on_load=on_load,
     )
     token = _current.set(scope)
     try:
@@ -111,6 +114,7 @@ def catalog_material(
                 "skill_id": entry["skill_id"],
                 "name": entry["name"],
                 "description": entry["description"][:DESCRIPTION_LIMIT],
+                "revision": entry["revision"],
             }
             for entry in shown
         ],
@@ -118,7 +122,84 @@ def catalog_material(
     omitted = len(entries) - len(shown)
     if omitted > 0:
         content["省略"] = f"还有 {omitted} 个较久未使用的技能未列出"
-    return Material(title=CATALOG_TITLE, content=content)
+    snapshot = {
+        entry["skill_id"]: json.dumps(entry, ensure_ascii=False, sort_keys=True)
+        for entry in content["skills"]
+    }
+    snapshot["省略"] = content.get("省略", "")
+
+    def delta(previous: dict[str, str]) -> Material | None:
+        added = [entry for entry in content["skills"] if entry["skill_id"] not in previous]
+        updated = [
+            entry
+            for entry in content["skills"]
+            if entry["skill_id"] in previous
+            and previous[entry["skill_id"]] != snapshot[entry["skill_id"]]
+        ]
+        removed = [key for key in previous if key != "省略" and key not in snapshot]
+        if (
+            not added
+            and not updated
+            and not removed
+            and previous.get("省略", "") == snapshot["省略"]
+        ):
+            return None
+        return Material(
+            "技能目录更新",
+            {
+                "说明": (
+                    "以下变更追加到此前目录；未提及条目继续有效。"
+                    "更新条目替代同一 skill_id 的旧条目。"
+                    "移出目录只表示不再展示，不等于停用。"
+                    "正文版本变化时，继续使用前须用 skill_view 重读；用户本轮要求优先。"
+                ),
+                "新增": added,
+                "更新": updated,
+                "移出目录": removed,
+                "省略": snapshot["省略"],
+            },
+        )
+
+    return Material(title=CATALOG_TITLE, content=content, snapshot=snapshot, delta=delta)
+
+
+def refresh_loaded(
+    service: SkillService,
+    reads: dict[str, dict[str, str]],
+    *,
+    excluded_skill_ids=(),
+    auto_match=True,
+    manual_skill_ids=(),
+) -> list[Material]:
+    """会话中工具读取过的正文/附件：变化或不可用时撤销旧版本，通知后不重复提醒。"""
+    notices = []
+    for skill_id, previous in list(reads.items()):
+        unavailable = skill_id in excluded_skill_ids or (
+            not auto_match and skill_id not in manual_skill_ids
+        )
+        skill = None
+        if not unavailable:
+            try:
+                skill = service.loadable(skill_id)
+            except Exception:
+                unavailable = True
+        if unavailable or skill.revision != previous["version"]:
+            notices.append(
+                Material(
+                    f"已读取技能更新：{previous['title']}",
+                    {
+                        "skill_id": skill_id,
+                        "说明": (
+                            "该技能已不可用或本轮不允许使用，停止使用此前读取的正文与附件。"
+                            if unavailable
+                            else "该技能内容已更新，此前读取的正文与附件不再适用；"
+                            "若当前任务仍需使用，请通过 skill_view 重新读取。"
+                        ),
+                    },
+                )
+            )
+            del reads[skill_id]
+    return notices
 
 
 def _skip_skill(observer, skill_id: str, reason: str) -> None:

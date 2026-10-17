@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from server.agent.prompt import BASE_PROMPT
@@ -21,6 +21,9 @@ class Material:
     content: dict | str
     # 可选的稳定身份，用于同名材料的会话去重；不进入模型正文。
     key: str | None = None
+    # 领域提供可删除的元数据快照与增量渲染器；通用层不解释其内容。
+    snapshot: dict[str, str] | None = None
+    delta: Callable[[dict[str, str]], Material | None] | None = None
 
 
 @dataclass(frozen=True)

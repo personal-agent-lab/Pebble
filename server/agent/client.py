@@ -450,22 +450,28 @@ class QoderGateway:
     async def _stream(self, turn: Turn) -> AsyncIterator[AgentEvent]:
         from server.skills.runtime import turn_scope
 
+        materials = SessionMaterials(
+            self._task_workspace(turn.task_id) / ".context-materials.json", turn.sdk_session_id
+        )
         with turn_scope(
             task_id=turn.task_id,
             run_id=turn.run_id,
             skills=turn.skills,
             excluded_skill_ids=turn.excluded_skill_ids,
             auto_match=turn.auto_match,
+            on_load=materials.remember_read,
         ):
             try:
-                async for event in self._scoped_stream(turn):
+                async for event in self._scoped_stream(turn, materials):
                     yield event
             except Exception as error:
                 failure = sdk_exception(error)
                 log_failure(logger, failure, error)
                 raise FailureError(failure) from error
 
-    async def _scoped_stream(self, turn: Turn) -> AsyncIterator[AgentEvent]:
+    async def _scoped_stream(
+        self, turn: Turn, materials: SessionMaterials
+    ) -> AsyncIterator[AgentEvent]:
         queued: asyncio.Queue[AgentEvent] = asyncio.Queue()
         visible = exposed_tools(self.tools, kind=turn.kind)
         announced: str | None = None
@@ -473,9 +479,6 @@ class QoderGateway:
         terminal: AgentEvent | None = None
         failure: Failure | None = None
         observer = TurnObserver(turn.run_id)
-        materials = SessionMaterials(
-            self._task_workspace(turn.task_id) / ".context-materials.json", turn.sdk_session_id
-        )
         materials.begin()
         async with self.tool_server.serve(
             visible,
@@ -816,10 +819,19 @@ class QoderGateway:
         session_materials = session_materials or SessionMaterials(
             workspace / ".context-materials.json", turn.sdk_session_id
         )
+        updates = []
+        if self.skills_store is not None:
+            updates = skills_runtime.refresh_loaded(
+                self.skills_store,
+                session_materials.reads,
+                excluded_skill_ids=turn.excluded_skill_ids,
+                auto_match=turn.auto_match,
+                manual_skill_ids=turn.skills,
+            )
         session_materials.configure(
             background=background,
             selected=selected_materials,
-            events=turn.materials,
+            events=(*updates, *turn.materials),
             observe=observer.record_materials if observer is not None else None,
         )
         hooks = session_materials.hooks()

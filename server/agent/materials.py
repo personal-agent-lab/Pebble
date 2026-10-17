@@ -27,6 +27,7 @@ class SessionMaterials:
     def __init__(self, path: Path, session_id: str | None):
         self.path = path
         self.session_id = session_id
+        self.reads: dict[str, dict[str, str]] = {}
         self.previous = self._read()
         self.pending = dict(self.previous)
         self.background: tuple[Material, ...] = ()
@@ -54,7 +55,28 @@ class SessionMaterials:
                     and isinstance(v.get("title"), str)
                     for k, v in hashes.items()
                 )
+                and all(
+                    "snapshot" not in v
+                    or (
+                        isinstance(v["snapshot"], dict)
+                        and all(
+                            isinstance(k, str) and isinstance(s, str)
+                            for k, s in v["snapshot"].items()
+                        )
+                    )
+                    for v in hashes.values()
+                )
             ):
+                reads = state.get("reads", {})
+                if not isinstance(reads, dict) or not all(
+                    isinstance(k, str)
+                    and isinstance(v, dict)
+                    and isinstance(v.get("title"), str)
+                    and isinstance(v.get("version"), str)
+                    for k, v in reads.items()
+                ):
+                    return {}
+                self.reads = reads
                 return hashes
         except (OSError, ValueError, KeyError, TypeError):
             pass
@@ -63,6 +85,9 @@ class SessionMaterials:
     def begin(self) -> None:
         # 先撤销持久化检查点：进程被杀或调用失败时，不能复用可能不完整的注入状态。
         self.path.unlink(missing_ok=True)
+
+    def remember_read(self, key: str, version: str, title: str) -> None:
+        self.reads[key] = {"version": version, "title": title}
 
     def configure(self, *, background, selected=(), events=(), observe=None) -> None:
         self.background = tuple(background)
@@ -84,13 +109,24 @@ class SessionMaterials:
     def _refresh(self, *, full: bool) -> str:
         current = (*self.background, *self.selected)
         hashes = {
-            item.key or item.title: {"title": item.title, "hash": self._hash(item)}
+            item.key or item.title: {
+                "title": item.title,
+                "hash": self._hash(item),
+                **({"snapshot": item.snapshot} if item.snapshot is not None else {}),
+            }
             for item in current
         }
-        changed = [
-            item for item in current
-            if full or self.pending.get(item.key or item.title) != hashes[item.key or item.title]
-        ]
+        changed = []
+        for item in current:
+            old = self.pending.get(item.key or item.title)
+            if full or old is None:
+                changed.append(item)
+            elif item.delta is not None and "snapshot" in old:
+                update = item.delta(old["snapshot"])
+                if update is not None:
+                    changed.append(update)
+            elif old != hashes[item.key or item.title]:
+                changed.append(item)
         removed = [
             Material(value["title"], "该材料已清空或停用，不再按此前内容执行。")
             for key, value in self.pending.items() if key not in hashes
@@ -155,7 +191,7 @@ class SessionMaterials:
     def commit(self, session_id: str | None) -> None:
         if not session_id or not self.injected or not self.prompt_seen:
             return
-        state = {"schema": 1, "session_id": session_id, "hashes": self.pending}
+        state = {"schema": 1, "session_id": session_id, "hashes": self.pending, "reads": self.reads}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary = tempfile.mkstemp(dir=self.path.parent, prefix=".materials-")
         try:

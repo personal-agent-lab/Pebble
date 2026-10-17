@@ -80,6 +80,8 @@ def skill_view(skill_id: str, file_path: str | None = None, *, skills: SkillServ
         content = skills.repository.read_attachment(skill_id, file_path).decode("utf-8")
     else:
         content = skill.body
+    if scope is not None and scope.on_load is not None:
+        scope.on_load(skill_id, skill.revision, skill.name)
     if scope is not None and scope.task_id is not None and scope.run_id is not None:
         try:
             skills.record_load(scope.task_id, scope.run_id, skill, "auto")

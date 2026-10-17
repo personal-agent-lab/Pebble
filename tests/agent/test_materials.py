@@ -27,7 +27,9 @@ def saved(path, *, background, selected=()):
     return state
 
 
-def test_unchanged_background_survives_new_controller_without_duplicate_injection(tmp_path):
+def test_unchanged_background_survives_new_controller_without_duplicate_injection(
+    tmp_path,
+):
     path = tmp_path / "state.json"
     background = [Material("关于你", "住在南京"), Material("目录", {"a": "资料"})]
     saved(path, background=background)
@@ -141,12 +143,18 @@ def test_same_title_materials_are_tracked_by_stable_identity(tmp_path):
     saved(
         path,
         background=[],
-        selected=[Material("流程", "内容A", key="a"), Material("流程", "内容B", key="b")],
+        selected=[
+            Material("流程", "内容A", key="a"),
+            Material("流程", "内容B", key="b"),
+        ],
     )
     state = SessionMaterials(path, "session-1")
     state.configure(
         background=[],
-        selected=[Material("流程", "新版A", key="a"), Material("流程", "内容B", key="b")],
+        selected=[
+            Material("流程", "新版A", key="a"),
+            Material("流程", "内容B", key="b"),
+        ],
     )
     text = hook(state, "UserPromptSubmit", prompt="继续")
     assert "新版A" in text and "内容B" not in text
@@ -165,3 +173,48 @@ def test_observations_only_count_submitted_materials(tmp_path):
     hook(state, "SessionStart", source="resume")
     hook(state, "UserPromptSubmit", prompt="继续")
     assert records[-1] == [{"title": "事件", "chars": len("## 事件\n新结果")}]
+
+
+def test_incremental_collection_resume_and_compaction(tmp_path):
+    path = tmp_path / "state.json"
+
+    def collection(entries):
+        def delta(old):
+            changed = {
+                key: value for key, value in entries.items() if old.get(key) != value
+            }
+            removed = [key for key in old if key not in entries]
+            if not changed and not removed:
+                return None
+            return Material("目录更新", {"追加": changed, "移除": removed})
+
+        return Material("目录", entries, snapshot=entries, delta=delta)
+
+    saved(path, background=[collection({"a": "条目A"})])
+    state = SessionMaterials(path, "session-1")
+    state.begin()
+    state.configure(background=[collection({"a": "条目A", "b": "条目B"})])
+    text = hook(state, "UserPromptSubmit", prompt="继续")
+    assert "条目B" in text and "条目A" not in text
+    state.remember_read("item:b", "revision-1", "条目B")
+    state.commit("session-1")
+    state = SessionMaterials(path, "session-1")
+    assert state.reads["item:b"]["version"] == "revision-1"
+    state.configure(background=[collection({"a": "条目A", "b": "条目B"})])
+    assert hook(state, "UserPromptSubmit", prompt="继续") == ""
+    hook(state, "PostCompact")
+    text = hook(state, "SessionStart", source="compact")
+    assert "条目A" in text and "条目B" in text and FULL_NOTE in text
+    assert SessionMaterials(path, "new-session").reads == {}
+
+
+def test_legacy_checkpoint_without_collection_snapshot_is_rebuilt(tmp_path):
+    path = tmp_path / "state.json"
+    saved(path, background=[Material("目录", {"a": "条目A"})])
+    state = SessionMaterials(path, "session-1")
+    state.configure(
+        background=[
+            Material("目录", {"a": "条目A"}, snapshot={"a": "1"}, delta=lambda _: None)
+        ]
+    )
+    assert "条目A" in hook(state, "UserPromptSubmit", prompt="继续")

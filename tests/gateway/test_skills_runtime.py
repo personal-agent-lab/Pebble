@@ -10,11 +10,76 @@ from server.skills.runtime import (
     SKIPPED_TITLE,
     catalog_material,
     manual_materials,
+    refresh_loaded,
     turn_scope,
 )
 from server.skills.service import CATALOG_LIMIT, ChangeRequest, SkillService
 from server.skills.tools import skill_list, skill_manage, skill_view
 from server.tools.registry import Effect, default_registry
+
+
+def change_body(service, skill_id, body):
+    service.record_change(
+        ChangeRequest(
+            action=ChangeAction.PATCH,
+            actor=ChangeActor.USER,
+            reason="测试更新",
+            skill_id=skill_id,
+            base_revision=service.get(skill_id).revision,
+            payload={"old_string": service.get(skill_id).body, "new_string": body},
+        )
+    )
+
+
+def test_catalog_delta_add_update_remove_and_reorder(service):
+    add_skill(service, "first")
+    add_skill(service, "second")
+    original = catalog_material(service)
+    add_skill(service, "new")
+    added = catalog_material(service).delta(original.snapshot)
+    assert [entry["skill_id"] for entry in added.content["新增"]] == ["new"]
+    assert added.content["更新"] == []
+    before = catalog_material(service)
+    change_body(service, "first", "新正文")
+    changed = catalog_material(service).delta(before.snapshot)
+    assert [entry["skill_id"] for entry in changed.content["更新"]] == ["first"]
+    assert "重读" in changed.content["说明"]
+    before = catalog_material(service)
+    service.archive("second")
+    assert catalog_material(service).delta(before.snapshot).content["移出目录"] == [
+        "second"
+    ]
+    before = catalog_material(service)
+    service.record_load("t", "r", service.get("first"), "auto")
+    assert catalog_material(service).delta(before.snapshot) is None
+
+
+def test_loaded_version_changes_and_access_revocation(service):
+    add_skill(service, "read")
+    reads = {}
+
+    def remember(skill_id, revision, name):
+        reads[skill_id] = {"version": revision, "title": name}
+
+    with turn_scope(task_id="t", run_id="r", on_load=remember):
+        skill_view("read", skills=service)
+    assert refresh_loaded(service, reads) == []
+    change_body(service, "read", "更新后的正文")
+    updates = refresh_loaded(service, reads)
+    assert len(updates) == 1 and "重新读取" in updates[0].content["说明"]
+    assert reads == {}  # 通知一次；重新读取后才登记新版本。
+    assert refresh_loaded(service, reads) == []
+    with turn_scope(task_id="t", run_id="r", on_load=remember):
+        skill_view("read", skills=service)
+    assert refresh_loaded(service, reads) == []
+    assert (
+        "停止使用"
+        in refresh_loaded(service, reads, auto_match=False)[0].content["说明"]
+    )
+    with turn_scope(task_id="t", run_id="r", on_load=remember):
+        skill_view("read", skills=service)
+    service.archive("read")
+    assert "停止使用" in refresh_loaded(service, reads)[0].content["说明"]
 
 
 @pytest.fixture
@@ -33,7 +98,10 @@ def add_skill(service: SkillService, skill_id: str, **payload) -> None:
     body.update(payload)
     service.record_change(
         ChangeRequest(
-            action=ChangeAction.CREATE, payload=body, actor=ChangeActor.USER, reason="测试创建"
+            action=ChangeAction.CREATE,
+            payload=body,
+            actor=ChangeActor.USER,
+            reason="测试创建",
         )
     )
 
@@ -49,7 +117,10 @@ def test_catalog_material_shape_and_limits(service: SkillService) -> None:
     assert material is not None and material.title == "技能目录"
     entries = material.content["skills"]
     assert len(entries) == CATALOG_LIMIT
-    assert all({"skill_id", "name", "description"} == set(entry) for entry in entries)
+    assert all(
+        {"skill_id", "name", "description", "revision"} == set(entry)
+        for entry in entries
+    )
     assert "省略" in material.content
     assert material.content["省略"] == "还有 5 个较久未使用的技能未列出"
 
@@ -73,7 +144,11 @@ def test_manual_materials_bind_revision_and_record_load(service: SkillService) -
     assert materials[0].content == "被选中的正文\n"
     assert materials[1].title == SKIPPED_TITLE
     assert materials[1].content["skills"] == [
-        {"skill_id": "missing", "名称": "missing", "原因": "文件有未收编的直接修改或已不可加载"}
+        {
+            "skill_id": "missing",
+            "名称": "missing",
+            "原因": "文件有未收编的直接修改或已不可加载",
+        }
     ]
     usage = service.task_skill_usage("task-1")
     assert [(row["skill_id"], row["source"], row["revision"]) for row in usage] == [
@@ -117,7 +192,9 @@ def test_skill_view_enforces_exclusion_and_auto_match(service: SkillService) -> 
     )
 
 
-def test_skill_view_records_auto_load_and_reads_attachment(service: SkillService) -> None:
+def test_skill_view_records_auto_load_and_reads_attachment(
+    service: SkillService,
+) -> None:
     add_skill(service, "with-file")
     service.record_change(
         ChangeRequest(
@@ -172,9 +249,16 @@ def test_manual_materials_enforce_selection_limits(service: SkillService) -> Non
 
     add_skill(service, "huge", body="长" * 30000)
     add_skill(service, "huge-2", body="长" * 20000)
-    capped = manual_materials(service, ["huge", "huge-2"], task_id="task-2", run_id="run-2")
-    assert [material.title for material in capped] == ["用户选择的技能：技能 huge", SKIPPED_TITLE]
-    assert capped[-1].content["skills"][0]["原因"] == "正文合计超出 40000 字符的装配预算"
+    capped = manual_materials(
+        service, ["huge", "huge-2"], task_id="task-2", run_id="run-2"
+    )
+    assert [material.title for material in capped] == [
+        "用户选择的技能：技能 huge",
+        SKIPPED_TITLE,
+    ]
+    assert (
+        capped[-1].content["skills"][0]["原因"] == "正文合计超出 40000 字符的装配预算"
+    )
 
 
 def test_manual_materials_skip_notifies_user(service: SkillService) -> None:
@@ -183,7 +267,8 @@ def test_manual_materials_skip_notifies_user(service: SkillService) -> None:
     add_skill(service, "hand-touched")
     path = service.repository.skills_root / "hand-touched" / "SKILL.md"
     path.write_text(
-        path.read_text(encoding="utf-8").replace("正文内容", "手改的正文"), encoding="utf-8"
+        path.read_text(encoding="utf-8").replace("正文内容", "手改的正文"),
+        encoding="utf-8",
     )
     notices: list[str] = []
     materials = manual_materials(
